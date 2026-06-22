@@ -35,6 +35,10 @@ pub fn run() {
         .manage(irc::state::StateStore::new())
         .setup(|app| {
             let engine = app.state::<ScriptEngine>();
+            // Install the real socket backend so /socklisten/$sock(...) work.
+            engine.set_sockets(std::sync::Arc::new(script::socket::EngineSockets::new(
+                app.handle().clone(),
+            )));
             script::load_persisted(app.handle(), &engine);
             Ok(())
         })

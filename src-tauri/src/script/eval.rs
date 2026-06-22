@@ -32,6 +32,9 @@ pub enum Action {
     SockWrite { name: String, data: Vec<u8> },
     /// Close a socket (`/sockclose`).
     SockClose { name: String },
+    /// Start the accept loop for a listener bound by `/socklisten` (carries the
+    /// owning connection's context to apply-time so events route correctly).
+    SockListen { name: String },
     /// Open a custom dialog (`/dialog`).
     DialogOpen {
         name: String,
@@ -84,8 +87,9 @@ const STATUS: &str = "(status)";
 pub trait ScriptSockets: Send + Sync {
     /// Binds a listening socket; returns the bound port (`port == 0` → OS-assigned).
     fn listen(&self, name: &str, port: u16) -> Option<u16>;
-    /// Accepts the pending incoming connection into a socket named `name`.
-    fn accept(&self, name: &str) -> bool;
+    /// Accepts the pending incoming connection of listener `listener` into a
+    /// socket named `name`.
+    fn accept(&self, name: &str, listener: &str) -> bool;
     fn set_mark(&self, name: &str, mark: &str);
     fn mark(&self, name: &str) -> String;
     fn port(&self, name: &str) -> Option<u16>;
@@ -101,7 +105,7 @@ impl ScriptSockets for NoSockets {
     fn listen(&self, _: &str, _: u16) -> Option<u16> {
         None
     }
-    fn accept(&self, _: &str) -> bool {
+    fn accept(&self, _: &str, _: &str) -> bool {
         false
     }
     fn set_mark(&self, _: &str, _: &str) {}
@@ -319,7 +323,9 @@ impl<'a> Runtime<'a> {
             "sockaccept" => {
                 let name = self.expand(raw_args.trim());
                 if !name.is_empty() {
-                    self.sockets.accept(&name);
+                    // $sockname (the listener) identifies whose pending connection.
+                    let listener = self.event.chan.clone();
+                    self.sockets.accept(&name, &listener);
                 }
             }
             "sockmark" => self.cmd_sockmark(raw_args),
@@ -624,8 +630,12 @@ impl<'a> Runtime<'a> {
         let expanded = self.expand(raw);
         let mut toks = expanded.split_whitespace().filter(|t| !t.starts_with('-'));
         if let Some(name) = toks.next() {
+            let name = name.to_string();
             let port = toks.next().and_then(|p| p.parse::<u16>().ok()).unwrap_or(0);
-            self.sockets.listen(name, port);
+            // Bind now (so $sock(name).port is readable inline); the accept loop
+            // is started at apply-time with the owning connection's context.
+            self.sockets.listen(&name, port);
+            self.actions.push(Action::SockListen { name });
         }
     }
 

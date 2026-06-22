@@ -730,6 +730,17 @@ pub fn apply_actions(
                     m.close(&name);
                 }
             }
+            Action::SockListen { name } => {
+                if let Some(m) = app.try_state::<socket::SocketManager>() {
+                    m.start_listener(
+                        app.clone(),
+                        server_id.to_string(),
+                        network.to_string(),
+                        my_nick.to_string(),
+                        name,
+                    );
+                }
+            }
             Action::DialogOpen { name, title, controls } => {
                 let _ = app.emit(
                     IRC_EVENT,
@@ -1711,7 +1722,7 @@ mod tests {
             self.listened.lock().unwrap().push((name.into(), port));
             Some(p)
         }
-        fn accept(&self, name: &str) -> bool {
+        fn accept(&self, name: &str, _listener: &str) -> bool {
             self.accepted.lock().unwrap().push(name.into());
             true
         }
@@ -1748,13 +1759,18 @@ mod tests {
             "alias t { socklisten relay | sockmark relay hi there | sockaccept conn | /echo port=$sock(relay).port mark=$sock(relay).mark st=$sock(relay).status ex=$sock(relay) no=$sock(nope) }",
         );
         let actions = engine.run_alias(&ctx(), "#c", "t", "");
-        assert_eq!(
-            actions,
-            vec![Action::Echo {
-                target: "#c".into(),
-                text: "port=54321 mark=hi there st=listening ex=relay no=".into(),
-            }]
-        );
+        let echoed: Vec<&str> = actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::Echo { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(echoed, vec!["port=54321 mark=hi there st=listening ex=relay no="]);
+        // /socklisten binds (recorded) and queues the accept-loop start.
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, Action::SockListen { name } if name == "relay")));
         assert_eq!(*fake.listened.lock().unwrap(), vec![("relay".to_string(), 0u16)]);
         assert_eq!(*fake.accepted.lock().unwrap(), vec!["conn".to_string()]);
     }
