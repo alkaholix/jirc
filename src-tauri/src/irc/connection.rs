@@ -411,22 +411,23 @@ pub fn process_message(ctx: &mut Context, raw: &str, msg: Message) -> Effects {
             fx.outgoing.extend(auth::on_authenticate(ctx.profile, data));
         }
         Command::PRIVMSG(ref target, ref text) => {
-            // IRCX/MSN-Chat clients prepend a font descriptor ("S Tahoma;0 …"),
-            // often behind a leading \x01 that would otherwise look like a CTCP
-            // named "S". On IRCX connections, strip it and show the plain
-            // message before any CTCP handling.
-            if ctx.profile.ircx {
-                if let Some(body) = strip_ircx_font(text) {
-                    fx.events.push(UiEvent::Message {
-                        server_id,
-                        kind: MessageKind::Privmsg,
-                        from: source,
-                        target: target.clone(),
-                        text: body.to_string(),
-                        time: server_time,
-                    });
-                    return fx;
-                }
+            // IRCX/MSN-Chat clients prepend a font descriptor ("\x01S Tahoma;0 …")
+            // that otherwise reads as a CTCP named "S". Detect it by its
+            // distinctive shape and show the plain message before CTCP handling.
+            // This is intentionally independent of the profile's IRCX flag: the
+            // font tag is self-identifying (leading \x01 + `<effect> <font>;<n> `),
+            // and some IRCX servers (e.g. Buzzen / MSN-Chat) aren't flagged as
+            // IRCX at connect time, which left these showing as "[CTCP S]".
+            if let Some(body) = strip_ircx_font(text) {
+                fx.events.push(UiEvent::Message {
+                    server_id,
+                    kind: MessageKind::Privmsg,
+                    from: source,
+                    target: target.clone(),
+                    text: body.to_string(),
+                    time: server_time,
+                });
+                return fx;
             }
             // CTCP requests (\x01CMD args\x01), excluding ACTION, get auto-replies.
             if let Some(ctcp) = text.strip_prefix('\u{1}').map(|s| s.trim_end_matches('\u{1}')) {
@@ -1235,6 +1236,12 @@ mod tests {
         assert_eq!(strip_ircx_font("\u{1}S Times New Roman;0 hi there"), Some("hi there"));
         assert_eq!(strip_ircx_font("\u{1}S Tahoma;0 (B)"), Some("(B)"));
         assert_eq!(strip_ircx_font("\u{1}S Tahoma;0 hi\u{1}"), Some("hi"));
+        // Real MSN-Chat messages: emoji, punctuation, multiple words.
+        assert_eq!(strip_ircx_font("\u{1}S Tahoma;0 🦋: Sup"), Some("🦋: Sup"));
+        assert_eq!(
+            strip_ircx_font("\u{1}S Tahoma;0 Nice work, you jerk."),
+            Some("Nice work, you jerk.")
+        );
         // Without the \x01 marker we don't touch the text, so a normal line that
         // happens to contain "word;digits " is never eaten.
         assert_eq!(strip_ircx_font("S Tahoma;0 hkjhkh"), None);
@@ -1299,6 +1306,39 @@ mod tests {
             _ => None,
         });
         assert_eq!(text.as_deref(), Some("hkjhkh"));
+    }
+
+    #[test]
+    fn privmsg_strips_font_without_ircx_flag() {
+        // Buzzen/MSN-Chat font tags must be stripped even when the profile is
+        // NOT flagged IRCX (the font tag is self-identifying) — otherwise they
+        // showed up as "[CTCP S]" in the status window instead of the channel.
+        let p = profile(); // ircx defaults to false
+        assert!(!p.ircx);
+        let mut state = SessionState { nick: "me".into(), ..Default::default() };
+        let mut names: HashMap<String, Vec<String>> = HashMap::new();
+        let mut whois: HashMap<String, Vec<String>> = HashMap::new();
+        let mut auth = AuthState::default();
+        let line = ":JD!h@MicrosoftPassport PRIVMSG %#Lobby :\u{1}S Tahoma;0 🦋: Sup";
+        let mut ctx = Context {
+            server_id: "s1",
+            profile: &p,
+            state: &mut state,
+            names_accum: &mut names,
+            whois_accum: &mut whois,
+            auth: &mut auth,
+        };
+        let fx = process_message(&mut ctx, line, line.parse::<Message>().unwrap());
+        let text = fx.events.iter().find_map(|e| match e {
+            UiEvent::Message { text, target, .. } => Some((text.clone(), target.clone())),
+            _ => None,
+        });
+        assert_eq!(text, Some(("🦋: Sup".into(), "%#Lobby".into())));
+        // ...and it must NOT be surfaced as a CTCP in the status window.
+        assert!(!fx
+            .events
+            .iter()
+            .any(|e| matches!(e, UiEvent::Echo { text, .. } if text.contains("CTCP"))));
     }
 
     #[test]
