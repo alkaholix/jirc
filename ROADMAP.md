@@ -3,6 +3,9 @@
 A high-level view of where jIRC stands against mIRC's feature set.
 Status: ✅ done · 🟡 partial · ❌ missing · ⭐ jIRC-only (modern extra)
 
+> For the **granular, tickable checklist** of every mIRC identifier / operator /
+> command / event (work through it one by one), see **[PARITY.md](./PARITY.md)**.
+
 > Snapshot as of the current build. jIRC already covers the **daily-driver core**
 > (connect, chat, channels, auth) and a **substantial mSL scripting engine**
 > (aliases, ~14 events, regex, file I/O, custom identifiers — see

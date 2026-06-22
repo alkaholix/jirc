@@ -1,0 +1,783 @@
+# jIRC — mIRC Parity Checklist
+
+A tickable backlog of the **complete mIRC reference index** (identifiers, operators,
+commands, events) plus the major client subsystems. Work through the `- [ ]` items
+and check them off as they land.
+
+**Legend:** `- [x]` implemented · `- [ ]` not yet · `*(partial)*` works but incomplete ·
+`*(stub)*` recognized by the parser but currently a no-op · `*(skip)*` intentionally
+out of scope.
+
+> The checkmarks are a **first-pass** from a code audit (see [ROADMAP.md](./ROADMAP.md)
+> for the strategic feature matrix). Correct any you find wrong as you go. Identifier
+> vs. operator overlaps (`isnum`, `islower`, …) are listed once where mIRC lists them.
+> Pure keyboard-shortcut / menu entries from the index are folded into the **Client
+> subsystems** section rather than enumerated one-by-one.
+
+---
+
+## Operators & special tokens
+
+- [x] `!` (negation)  ·  [x] `!=`  ·  [x] `==`  ·  [x] `===`  ·  [x] `<`  ·  [x] `<=`  ·  [x] `>`  ·  [x] `>=`
+- [x] `//` (is-multiple)  ·  [x] `\\` (not-multiple)  ·  [x] `&` (bitwise-and test)  ·  [x] `&&`  ·  [x] `||`
+- [x] `#` (bare = current channel)  ·  [x] `$+` (concatenate)  ·  [x] `$$` (require prefix)
+- [x] `$0` (param count)  ·  [x] `$1-` (params, incl. `$N`, `$N-`, `$N-M`)
+- [ ] `$!` (last typed line)  ·  [ ] `$&` (line continuation)  ·  [ ] `$(...)` (delayed eval)  ·  [ ] `$?` (input prompt)
+- [ ] `[ ]` evaluation brackets  ·  [ ] `^` (ctrl-code escape in some contexts)  ·  [ ] `=$nick` (sorted-list compare)
+- [ ] `%` var math beyond simple assignment (`/var %x = 1 + 2` etc. — verify coverage)
+- **String comparison operators (done):** [x] `isin` · [x] `isincs` · [x] `iswm` · [x] `iswmcs` · [x] `isnum` (incl. range) · [x] `isalpha` · [x] `isalnum` · [x] `isletter` · [x] `islower` · [x] `isupper`
+- **List/state operators (done):** [x] `ison` · [x] `isop` · [x] `ishop` · [x] `isvoice` · [x] `isreg` · [x] `ischan` · [x] `isban` *(+`isowner`/`isadmin`)*
+- **List operators (skipped — no client subsystem):** [ ] `isaop` *(skip)* · [ ] `isavoice` *(skip)* · [ ] `isprotect` *(skip)* · [ ] `isnotify` *(skip)* · [ ] `isignore` *(skip)*
+
+---
+
+## Identifiers (`$`)
+
+- [ ] `$abook`
+- [x] `$abs`
+- [ ] `$acos`
+- [ ] `$active`
+- [ ] `$activecid`
+- [ ] `$activewid`
+- [x] `$address`
+- [x] `$addtok`
+- [ ] `$agent`
+- [ ] `$agentname`
+- [ ] `$agentstat`
+- [ ] `$agentver`
+- [ ] `$alias`
+- [ ] `$and`
+- [ ] `$anick`
+- [ ] `$ansi2mirc`
+- [ ] `$aop`
+- [ ] `$appactive`
+- [ ] `$appstate`
+- [ ] `$argon2`
+- [x] `$asc`
+- [ ] `$asctime`
+- [ ] `$asin`
+- [ ] `$atan`
+- [ ] `$atan2`
+- [ ] `$avoice`
+- [ ] `$away`
+- [ ] `$awaymsg`
+- [ ] `$awaytime`
+- [ ] `$banmask`
+- [x] `$base`
+- [ ] `$bfind`
+- [ ] `$bigfloat`
+- [ ] `$bindip`
+- [ ] `$bitoff`
+- [ ] `$biton`
+- [x] `$bnick`
+- [ ] `$bvar`
+- [ ] `$bytes`
+- [x] `$calc`
+- [ ] `$caller`
+- [ ] `$cb`
+- [ ] `$cbrt`
+- [ ] `$cd`
+- [x] `$ceil`
+- [x] `$chan`
+- [ ] `$chanmodes`
+- [ ] `$chantypes` *(parsed internally from ISUPPORT, not exposed as identifier)*
+- [ ] `$chat`
+- [x] `$chr`
+- [ ] `$cid`
+- [ ] `$clevel`
+- [ ] `$click`
+- [ ] `$cmdbox`
+- [ ] `$cmdline`
+- [ ] `$cnick`
+- [ ] `$codepage`
+- [ ] `$color`
+- [ ] `$com`
+- [ ] `$comcall`
+- [x] `$comchan`
+- [ ] `$comchar`
+- [ ] `$comerr`
+- [ ] `$compact`
+- [ ] `$compress`
+- [ ] `$comval`
+- [ ] `$cos`
+- [ ] `$cosh`
+- [x] `$count`
+- [x] `$cr`
+- [ ] `$crc`
+- [ ] `$crc64`
+- [ ] `$creq`
+- [x] `$crlf`
+- [x] `$ctime`
+- [ ] `$ctimer`
+- [ ] `$ctrlenter`
+- [ ] `$darkmode`
+- [x] `$date`
+- [ ] `$day`
+- [ ] `$daylight`
+- [ ] `$dbuh`
+- [ ] `$dbuw`
+- [ ] `$dccignore`
+- [ ] `$dccport`
+- [ ] `$dde`
+- [ ] `$ddename`
+- [ ] `$debug`
+- [ ] `$decode`
+- [ ] `$decompress`
+- [x] `$deltok`
+- [ ] `$devent`
+- [ ] `$dialog`
+- [x] `$did` *(dialog control value)*
+- [ ] `$didreg`
+- [ ] `$didtok`
+- [ ] `$didwm`
+- [ ] `$disk`
+- [ ] `$dlevel`
+- [ ] `$dll`
+- [ ] `$dllcall`
+- [ ] `$dname`
+- [ ] `$dns`
+- [ ] `$donotdisturb`
+- [ ] `$dqwindow`
+- [x] `$duration`
+- [ ] `$ebeeps`
+- [ ] `$editbox`
+- [ ] `$emailaddr`
+- [ ] `$encode`
+- [ ] `$envvar`
+- [ ] `$error`
+- [ ] `$eval`
+- [x] `$event`
+- [ ] `$eventid`
+- [ ] `$eventparms`
+- [x] `$exists`
+- [ ] `$exiting`
+- [ ] `$feof`
+- [ ] `$ferr`
+- [ ] `$fgetc`
+- [ ] `$file`
+- [ ] `$filename`
+- [ ] `$filtered`
+- [ ] `$finddir`
+- [ ] `$finddirn`
+- [ ] `$findfile`
+- [ ] `$findfilen`
+- [x] `$findtok`
+- [ ] `$fline`
+- [ ] `$flinen`
+- [x] `$floor`
+- [ ] `$font`
+- [ ] `$fopen`
+- [ ] `$fread`
+- [ ] `$fromeditbox`
+- [ ] `$fserve`
+- [x] `$fulladdress`
+- [ ] `$fulldate`
+- [ ] `$fullname`
+- [ ] `$fullscreen`
+- [ ] `$gcd`
+- [ ] `$get`
+- [ ] `$getdir`
+- [ ] `$getdot`
+- [x] `$gettok` *(incl. ranges)*
+- [ ] `$gmt`
+- [ ] `$group`
+- [ ] `$halted`
+- [ ] `$hash`
+- [ ] `$height`
+- [x] `$hfind`
+- [x] `$hget`
+- [ ] `$highlight`
+- [ ] `$hmac`
+- [x] `$hnick`
+- [ ] `$host`
+- [ ] `$hotline`
+- [ ] `$hotlinepos`
+- [ ] `$hotp`
+- [ ] `$hypot`
+- [x] `$ial`
+- [ ] `$ialchan`
+- [ ] `$ialmark`
+- [ ] `$ibl`
+- [ ] `$idle`
+- [ ] `$iel`
+- [ ] `$ifmatch`
+- [ ] `$ignore`
+- [x] `$iif`
+- [ ] `$iil`
+- [ ] `$inellipse`
+- [ ] `$ini`
+- [ ] `$inmidi`
+- [ ] `$inpaste`
+- [ ] `$inpoly`
+- [ ] `$input`
+- [ ] `$inrect`
+- [ ] `$inroundrect`
+- [ ] `$insong`
+- [ ] `$instok`
+- [x] `$int`
+- [ ] `$intersect`
+- [ ] `$inwave`
+- [ ] `$ip`
+- [ ] `$iptype`
+- [ ] `$isadmin` *(client-admin check; distinct from the `isadmin` operator)*
+- [ ] `$isalias`
+- [ ] `$isbit`
+- [ ] `$isdde`
+- [x] `$isdir`
+- [x] `$isfile`
+- [ ] `$isid`
+- [x] `$islower`
+- [x] `$isnum`
+- [x] `$isupper`
+- [x] `$istok`
+- [ ] `$keychar`
+- [ ] `$keyrpt`
+- [ ] `$keyval`
+- [x] `$knick`
+- [ ] `$lactive`
+- [ ] `$lactivecid`
+- [ ] `$lactivewid`
+- [ ] `$lcm`
+- [x] `$left`
+- [ ] `$leftwin`
+- [ ] `$leftwincid`
+- [ ] `$leftwinwid`
+- [x] `$len`
+- [ ] `$level`
+- [x] `$lf`
+- [ ] `$line`
+- [x] `$lines`
+- [ ] `$link`
+- [ ] `$lock`
+- [ ] `$locked`
+- [ ] `$log`
+- [ ] `$log10`
+- [ ] `$log2`
+- [ ] `$logdir`
+- [ ] `$logstamp`
+- [ ] `$logstampfmt`
+- [ ] `$longfn`
+- [ ] `$longip`
+- [x] `$lower`
+- [ ] `$ltimer`
+- [ ] `$maddress` *(skip — not a standard mIRC identifier)*
+- [ ] `$markasread`
+- [x] `$mask`
+- [ ] `$matchkey`
+- [x] `$matchtok`
+- [x] `$max`
+- [ ] `$maxlenl`
+- [ ] `$maxlenm`
+- [ ] `$maxlens`
+- [ ] `$md5`
+- [x] `$me`
+- [ ] `$menu`
+- [ ] `$menubar`
+- [ ] `$menucontext`
+- [ ] `$menutype`
+- [x] `$mid`
+- [ ] `$mididir`
+- [x] `$min`
+- [x] `$mircdir`
+- [ ] `$mircexe`
+- [ ] `$mircini`
+- [ ] `$mircpid`
+- [ ] `$mkfn`
+- [ ] `$mklogfn`
+- [ ] `$mknickfn`
+- [ ] `$mnick`
+- [x] `$mode` *(verify — exposed in MODE events)*
+- [ ] `$modefirst`
+- [ ] `$modelast`
+- [ ] `$modespl`
+- [ ] `$modinv`
+- [ ] `$mouse`
+- [ ] `$msfile`
+- [ ] `$msgstamp`
+- [ ] `$msgtags`
+- [x] `$network`
+- [x] `$newnick`
+- [x] `$nick`
+- [ ] `$nickmode`
+- [ ] `$nofile`
+- [ ] `$nopath`
+- [ ] `$noqt`
+- [ ] `$not`
+- [ ] `$notags`
+- [ ] `$notify`
+- [x] `$null`
+- [x] `$numeric`
+- [x] `$numtok`
+- [ ] `$online`
+- [ ] `$onlineserver`
+- [ ] `$onlinetotal`
+- [ ] `$onpoly`
+- [x] `$opnick`
+- [ ] `$or`
+- [ ] `$ord`
+- [ ] `$os`
+- [ ] `$parms`
+- [ ] `$parseem`
+- [ ] `$parseline`
+- [ ] `$parsetype`
+- [ ] `$parseutf`
+- [ ] `$passivedcc`
+- [ ] `$pbkdf2`
+- [ ] `$pi`
+- [ ] `$pic`
+- [ ] `$play`
+- [ ] `$pnick`
+- [ ] `$port`
+- [ ] `$portable`
+- [ ] `$portfree`
+- [x] `$pos`
+- [ ] `$powmod`
+- [ ] `$prefix`
+- [ ] `$prop`
+- [ ] `$protect`
+- [x] `$puttok`
+- [x] `$qt`
+- [ ] `$query`
+- [x] `$rand` *(+`$r`)*
+- [ ] `$rands`
+- [ ] `$rawbytes`
+- [ ] `$rawmsg`
+- [x] `$read`
+- [ ] `$readini`
+- [ ] `$readn`
+- [ ] `$regerrstr`
+- [x] `$regex`
+- [x] `$regml`
+- [ ] `$regmlex`
+- [x] `$regsub`
+- [ ] `$regsubex`
+- [ ] `$remote`
+- [x] `$remove`
+- [x] `$remtok`
+- [x] `$replace`
+- [ ] `$replacex`
+- [x] `$reptok` *(verify; close to `$puttok`/`$remtok`)*
+- [ ] `$result`
+- [ ] `$rgb`
+- [x] `$right`
+- [x] `$round`
+- [ ] `$samepath`
+- [ ] `$scid`
+- [ ] `$scon`
+- [ ] `$script`
+- [x] `$scriptdir`
+- [ ] `$scriptline`
+- [ ] `$sdir`
+- [ ] `$send`
+- [x] `$server`
+- [ ] `$serverip`
+- [ ] `$servertarget`
+- [ ] `$sfile`
+- [ ] `$sha1`
+- [ ] `$sha256`
+- [ ] `$sha384`
+- [ ] `$sha512`
+- [ ] `$shortfn`
+- [ ] `$show`
+- [ ] `$signal`
+- [ ] `$sin`
+- [x] `$site`
+- [ ] `$sline`
+- [ ] `$snick`
+- [ ] `$snicks`
+- [ ] `$snotify`
+- [ ] `$sock` *(only `$sockname`/`$sockbr`/`$sockerr` exist; `$sock(name).property` not yet)*
+- [x] `$sockbr`
+- [x] `$sockerr` *(verify semantics)*
+- [x] `$sockname`
+- [x] `$sorttok`
+- [ ] `$sound`
+- [ ] `$speak`
+- [ ] `$sqrt`
+- [ ] `$sreq`
+- [ ] `$ssl`
+- [ ] `$sslcertvalid`
+- [ ] `$ssldll`
+- [ ] `$sslhash`
+- [ ] `$ssllibdll`
+- [ ] `$sslready`
+- [ ] `$sslversion`
+- [ ] `$starting`
+- [ ] `$status`
+- [x] `$str`
+- [x] `$strip`
+- [ ] `$stripped`
+- [ ] `$style`
+- [ ] `$submenu`
+- [ ] `$switchbar`
+- [ ] `$sysdir`
+- [ ] `$tan`
+- [ ] `$tanh`
+- [x] `$target`
+- [ ] `$tempfn`
+- [ ] `$ticks`
+- [ ] `$ticksqpc`
+- [x] `$time`
+- [ ] `$timer`
+- [ ] `$timestamp`
+- [ ] `$timestampfmt`
+- [ ] `$timezone`
+- [ ] `$tip`
+- [ ] `$tips`
+- [ ] `$titlebar`
+- [ ] `$toolbar`
+- [ ] `$totp`
+- [ ] `$treebar`
+- [ ] `$trust`
+- [ ] `$ulevel`
+- [ ] `$ulist`
+- [ ] `$unsafe`
+- [x] `$upper`
+- [ ] `$uptime`
+- [ ] `$url`
+- [ ] `$urlget`
+- [ ] `$usermode`
+- [ ] `$utfdecode`
+- [ ] `$utfencode`
+- [ ] `$v1`
+- [ ] `$v2`
+- [ ] `$var`
+- [ ] `$vcmd`
+- [ ] `$vcmdstat`
+- [ ] `$vcmdver`
+- [ ] `$version`
+- [x] `$vnick`
+- [ ] `$vol`
+- [ ] `$wid`
+- [ ] `$width`
+- [x] `$wildsite`
+- [x] `$wildtok`
+- [ ] `$window`
+- [ ] `$wrap`
+- [ ] `$xor`
+- [ ] `$zip`
+
+---
+
+## Commands (`/`)
+
+- [ ] `/abook`
+- [ ] `/ajinvite`
+- [ ] `/alias` *(runtime alias define; aliases are loaded from scripts)*
+- [ ] `/aline` *(stub)*
+- [x] `/ame`
+- [x] `/amsg`
+- [ ] `/anick`
+- [ ] `/aop`
+- [ ] `/auser`
+- [ ] `/autojoin`
+- [ ] `/avoice`
+- [ ] `/away`
+- [ ] `/background` *(stub)*
+- [x] `/ban`
+- [ ] `/bcopy`
+- [ ] `/beep` *(stub)*
+- [ ] `/bigfloat`
+- [ ] `/bindip`
+- [ ] `/bread`
+- [ ] `/break`
+- [ ] `/breplace`
+- [ ] `/bset`
+- [ ] `/btrunc`
+- [ ] `/bunset`
+- [ ] `/bwrite`
+- [x] `/channel` *(Channel Central UI)*
+- [ ] `/clear` *(stub)*
+- [ ] `/clearall` *(stub)*
+- [ ] `/cline` *(stub)*
+- [ ] `/clipboard` *(stub)*
+- [ ] `/close` *(stub)*
+- [ ] `/cnick`
+- [ ] `/color` *(stub)*
+- [ ] `/comclose` · [ ] `/comlist` · [ ] `/comopen` · [ ] `/comreg`
+- [ ] `/continue`
+- [ ] `/copy`
+- [ ] `/creq` *(stub)*
+- [ ] `/ctcpreply`
+- [ ] `/ctcps`
+- [ ] `/dcc *` *(entire DCC family)*
+- [ ] `/dccserver`
+- [ ] `/dde` · [ ] `/ddeserver`
+- [ ] `/debug` *(stub)*
+- [x] `/dec`
+- [x] `/describe`
+- [x] `/dialog` *(custom dialogs — partial control set)*
+- [x] `/did` *(+`/didtok`)*
+- [ ] `/disable`
+- [x] `/disconnect`
+- [ ] `/dlevel`
+- [ ] `/dline` *(stub)*
+- [ ] `/dll`
+- [x] `/dns`
+- [ ] `/donotdisturb` *(stub)*
+- [ ] `/dqwindow`
+- [ ] `/draw*` *(drawing on picture windows — entire family)*
+- [ ] `/ebeeps` *(stub)*
+- [x] `/echo`
+- [ ] `/editbox` *(stub)*
+- [ ] `/emailaddr`
+- [ ] `/enable`
+- [ ] `/events`
+- [x] `/exit`
+- [ ] `/fclose` · [ ] `/fopen` · [ ] `/fseek` · [ ] `/fwrite` *(file-handle I/O family)*
+- [x] `/filter` *(verify coverage of switches)*
+- [ ] `/findtext`
+- [ ] `/firewall`
+- [ ] `/flash` *(stub)*
+- [ ] `/flist`
+- [ ] `/flood`
+- [ ] `/flush`
+- [ ] `/flushini` *(stub)*
+- [ ] `/font` *(stub)*
+- [ ] `/fserve`
+- [ ] `/fullname`
+- [ ] `/ghide` · [ ] `/gload` · [ ] `/gmove` · [ ] `/gopts` · [ ] `/gplay` · [ ] `/gpoint` · [ ] `/gqreq` · [ ] `/gshow` · [ ] `/gsize` · [ ] `/gstop` · [ ] `/gtalk` · [ ] `/gunload` *(agent/animation family)*
+- [x] `/goto`
+- [ ] `/groups`
+- [ ] `/guser`
+- [x] `/hadd`
+- [x] `/halt` · [x] `/haltdef`
+- [x] `/hdec` · [x] `/hdel`
+- [ ] `/help`
+- [x] `/hfree`
+- [x] `/hinc`
+- [x] `/hload`
+- [x] `/hmake`
+- [ ] `/hop`
+- [x] `/hsave`
+- [ ] `/ial` *(stub)* · [ ] `/ialclear` · [ ] `/ialfill` · [ ] `/ialmark`
+- [ ] `/identd`
+- [x] `/if`
+- [ ] `/ignore` *(client ignore list exists in UI; verify `/ignore` command)*
+- [ ] `/iline` *(stub)*
+- [x] `/inc`
+- [ ] `/invite`
+- [ ] `/iuser`
+- [x] `/join`
+- [ ] `/kick`
+- [ ] `/linesep` *(stub)*
+- [ ] `/links`
+- [x] `/list` *(+ IRCX `/listx`)*
+- [ ] `/load`
+- [ ] `/loadbuf` *(stub)*
+- [ ] `/localinfo`
+- [ ] `/log` *(stub)*
+- [ ] `/logview`
+- [ ] `/markasread`
+- [ ] `/mdi` *(stub)*
+- [x] `/me`
+- [ ] `/menubar` *(stub)*
+- [ ] `/mkdir`
+- [ ] `/mnick`
+- [x] `/mode`
+- [x] `/msg`
+- [ ] `/nick`  ← *verify: `/nick` change works via client; mark when confirmed*
+- [ ] `/nickserv`
+- [x] `/noop`
+- [x] `/notice`
+- [ ] `/notify`
+- [ ] `/omsg` · [ ] `/onotice`
+- [ ] `/parseline`
+- [x] `/part`
+- [x] `/partall`
+- [ ] `/pdcc`
+- [ ] `/perform`
+- [ ] `/play` *(stub)* · [ ] `/playctrl`
+- [ ] `/pop`
+- [x] `/privmsg` *(= `/msg`)*
+- [ ] `/protect`
+- [ ] `/proxy`
+- [ ] `/pvoice`
+- [ ] `/qme` · [ ] `/qmsg`
+- [x] `/query`
+- [ ] `/queryrn`
+- [x] `/quit`
+- [x] `/quote` *(= `/raw`)*
+- [x] `/raw`
+- [ ] `/reload`
+- [x] `/remini` *(verify)*
+- [ ] `/remote`
+- [x] `/remove` *(verify — file remove vs token)*
+- [ ] `/rename`
+- [ ] `/reseterror`
+- [ ] `/resetidle` *(stub)*
+- [x] `/return`
+- [ ] `/rlevel`
+- [ ] `/rline` *(stub)*
+- [ ] `/rmdir`
+- [x] `/run`
+- [ ] `/ruser`
+- [ ] `/save` *(stub)*
+- [ ] `/savebuf` *(stub)*
+- [ ] `/saveini` *(stub)*
+- [x] `/say`
+- [ ] `/scid` · [ ] `/scon` *(multi-server scoping)*
+- [x] `/server`
+- [ ] `/setlayer`
+- [ ] `/showmirc` *(stub)*
+- [ ] `/signal`
+- [ ] `/sline` *(stub)*
+- [ ] `/sockaccept`  ← *needed for listening sockets*
+- [x] `/sockclose` *(incl. wildcard)*
+- [ ] `/socklist`
+- [ ] `/socklisten`  ← *listening sockets (the BV2 sockbot needs this)*
+- [ ] `/sockmark`
+- [x] `/sockopen` *(plain + TLS)*
+- [ ] `/sockpause`
+- [x] `/sockread`
+- [ ] `/sockrename`
+- [ ] `/sockudp`
+- [x] `/sockwrite` *(incl. wildcard)*
+- [ ] `/sound` *(stub)*
+- [ ] `/speak` *(stub)*
+- [ ] `/splay` *(stub)*
+- [ ] `/sreq` *(stub)*
+- [ ] `/strip`
+- [ ] `/switchbar` *(stub)*
+- [x] `/timer` *(named, stoppable)* · [x] `/timers`
+- [ ] `/timestamp` *(stub)*
+- [ ] `/tip` · [ ] `/tips`
+- [ ] `/titlebar` *(stub)*
+- [ ] `/tnick`
+- [x] `/tokenize`
+- [ ] `/toolbar` *(stub)*
+- [x] `/topic`
+- [ ] `/tray`
+- [ ] `/treebar` *(stub)*
+- [ ] `/ulist`
+- [ ] `/unload`
+- [x] `/unset` · [ ] `/unsetall`
+- [ ] `/updatenl`
+- [x] `/url`
+- [ ] `/uwho`
+- [x] `/var`
+- [ ] `/vcadd` · [ ] `/vcmd` · [ ] `/vcrem` *(voice-control)*
+- [ ] `/vol`
+- [x] `/while`
+- [x] `/whois`
+- [ ] `/window` *(stub — custom `@windows`)*
+- [ ] `/winhelp`
+- [x] `/write` · [x] `/writeini` *(verify ini)*
+
+---
+
+## Events (`on`)
+
+- [x] `on ACTION`
+- [ ] `on ACTIVE`
+- [ ] `on AGENT`
+- [ ] `on APPACTIVE`
+- [x] `on BAN`
+- [ ] `on CHAR`
+- [ ] `on CHAT` *(DCC chat)*
+- [ ] `on CLOSE`
+- [x] `on CONNECT`
+- [ ] `on CONNECTFAIL`
+- [ ] `on CTCPREPLY`
+- [ ] `on DCCSERVER`
+- [ ] `on DEHELP`  *(per-mode events fire; verify DEHELP specifically)*
+- [x] `on DEOP`
+- [x] `on DEVOICE`
+- [x] `on DIALOG`
+- [x] `on DISCONNECT`
+- [ ] `on DNS`
+- [ ] `on ERROR`
+- [ ] `on EXIT`
+- [ ] `on FILERCVD` · [ ] `on FILESENT` · [ ] `on GETFAIL` · [ ] `on SENDFAIL` *(DCC transfer)*
+- [ ] `on HELP`
+- [ ] `on HOTLINK`
+- [x] `on INPUT` *(can `/halt`)*
+- [x] `on INVITE`
+- [x] `on JOIN`
+- [ ] `on KEYDOWN` · [ ] `on KEYUP`
+- [x] `on KICK`
+- [ ] `on LOAD` · [ ] `on START` · [ ] `on UNLOAD`
+- [ ] `on LOGON`
+- [ ] `on MIDIEND` · [ ] `on MP3END` · [ ] `on WAVEEND` · [ ] `on PLAYEND` · [ ] `on NOSOUND`
+- [x] `on MODE`
+- [x] `on NICK`
+- [x] `on NOTICE`
+- [ ] `on NOTIFY` · [ ] `on UNOTIFY`
+- [x] `on OP`
+- [ ] `on OPEN`
+- [ ] `on PARSELINE`
+- [x] `on PART`
+- [ ] `on PING` · [ ] `on PONG`
+- [x] `on QUIT`
+- [x] `on RAW` *(numeric/command, `$numeric`)*
+- [ ] `on RAWMODE`
+- [ ] `on SERV` · [ ] `on SERVERMODE` · [ ] `on SERVEROP`
+- [ ] `on SIGNAL`
+- [ ] `on SNOTICE`
+- [x] `on SOCKCLOSE`
+- [ ] `on SOCKLISTEN`  ← *listening sockets*
+- [x] `on SOCKOPEN`
+- [x] `on SOCKREAD`
+- [ ] `on SOCKWRITE`
+- [ ] `on TABCOMP`
+- [x] `on TEXT`
+- [x] `on TOPIC`
+- [ ] `on UDPREAD`
+- [x] `on UNBAN`
+- [ ] `on USERMODE`
+- [ ] `on VCMD`
+- [x] `on VOICE`
+- [ ] `on WALLOPS`
+- **CTCP events:** [x] `on CTCP` *(matchtext = command or full text)*
+- **Numeric events:** [x] handled via `on RAW`
+
+---
+
+## Client subsystems & GUI features
+
+*(Higher-level areas from the index's A–W section; see [ROADMAP.md](./ROADMAP.md) for
+the full strategic matrix. Keyboard shortcuts / individual menu items are not listed
+individually.)*
+
+### Connectivity / protocol
+- [x] Multi-server · [x] TLS/SSL · [x] IRCv3 caps (no echo-message) · [x] auto-reconnect · [x] ISUPPORT
+- [x] SASL PLAIN · [ ] SASL EXTERNAL · [ ] SASL SCRAM-SHA-256 · [ ] ECDSA-NIST256P
+- [x] SOCKS5 · [ ] SOCKS4 · [ ] identd server · [ ] firewall/proxy UI
+- [x] IRCX (handshake/ACCESS/PROP/LISTX/WHISPER) · [ ] IRCX AUTH packages (GateKeeper/NTLM)
+- [ ] UPnP · [ ] DCC port range / passive DCC settings · [ ] local-info / bind-to-adapter UI
+
+### Windows / UI
+- [x] status/channel/query windows · [x] server tree + switchbar · [x] nicklist · [x] topic bar
+- [x] mIRC colour/format rendering · [x] timestamps/logging · [x] clickable URLs · [x] scrollback search
+- [ ] custom `@windows` / picture windows · [ ] MDI window management (`/window`, tile/cascade)
+- [ ] toolbar · [ ] treebar customization · [ ] line marker / line separator · [ ] menubar editing
+- [ ] color/format input toolbar · [ ] font picker · [ ] transparency · [x] dark mode
+
+### Scripting UI
+- [x] popups (`menu nicklist { }`, submenus) · [x] custom dialogs (`dialog`/`/did`/`$did`/`on DIALOG`, partial controls)
+- [ ] script-driven toolbar/panel buttons · [ ] `$input`/`$?` prompt dialogs · [ ] `@window` drawing surface
+
+### DCC & file transfer  *(entire bucket missing)*
+- [ ] DCC Chat · [ ] DCC Send · [ ] DCC Get · [ ] DCC Resume · [ ] passive/reverse DCC · [ ] DCC Server · [ ] Fileserver
+
+### Tools / lists
+- [x] server list/favorites (profiles) · [x] notify/watch list · [x] ignore list · [x] URL grabber
+- [ ] address book / notes · [ ] auto-op / auto-voice / protect lists · [ ] flood protection · [ ] user list & access levels
+
+### Media / misc
+- [ ] sounds / `/splay` · [ ] speech (`/speak`) · [ ] MIDI/MP3/WAV playback · [ ] agents
+- [ ] COM/ActiveX · [ ] DLL support · [ ] DDE · [ ] hash/crypto identifiers · [ ] binary vars / `$bvar`
+- [ ] `.ini` file family (`$readini`/`/writeini`/`/remini` — verify) · [ ] file-handle I/O (`/fopen` family)
+
+### Customization (jIRC's cross-platform answer to DCX)
+- [x] themes · [x] self-nick colour · [x] `:emoji:` + custom packs · [x] nicklist icons · [x] custom CSS
+- [ ] notification sounds · [ ] plugin API (JS/Lua)
+
+---
+
+### Recently completed (this parity pass)
+Whitespace + address identifiers, `$event`/`$numeric`; list operators
+(`isop`/`ison`/`ishop`/`isvoice`/`isowner`/`isadmin`/`isreg`/`ischan`/`isban` + `&` + ban
+tracking); `$N-M`/bare-`#`/`$$` params; braceless one-liner `on`; `on CTCP`/`on RAW`;
+wildcard `/sockwrite`; no-space + mixed-paren `if` conditions. **Next big item:**
+listening sockets (`/socklisten`, `on SOCKLISTEN`, `/sockaccept`, `$sock().port`).
