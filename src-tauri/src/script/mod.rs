@@ -1413,6 +1413,32 @@ mod tests {
     }
 
     #[test]
+    fn file_commands_mkdir_copy_rename_remove() {
+        let dir = std::env::temp_dir().join(format!("jirc-fc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: dir.clone(),
+            state: std::sync::Arc::new(Default::default()),
+        };
+        let engine = ScriptEngine::new();
+        engine.run_command(&rctx, "#c", "/write a.txt hello", &[]);
+        engine.run_command(&rctx, "#c", "/copy a.txt b.txt", &[]);
+        engine.run_command(&rctx, "#c", "/rename b.txt c.txt", &[]);
+        engine.run_command(&rctx, "#c", "/remove a.txt", &[]);
+        assert!(!dir.join("a.txt").exists());
+        assert!(!dir.join("b.txt").exists()); // renamed away
+        assert!(dir.join("c.txt").is_file());
+        engine.run_command(&rctx, "#c", "/mkdir sub", &[]);
+        assert!(dir.join("sub").is_dir());
+        engine.run_command(&rctx, "#c", "/rmdir sub", &[]);
+        assert!(!dir.join("sub").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn socket_commands_produce_actions() {
         let engine = ScriptEngine::new();
         engine.load(

@@ -400,6 +400,47 @@ impl<'a> Runtime<'a> {
             "fwrite" => self.cmd_fwrite(raw_args),
             "fclose" => self.cmd_fclose(raw_args),
             "fseek" => self.cmd_fseek(raw_args),
+            "mkdir" => {
+                let dir = self.expand(raw_args);
+                if !dir.trim().is_empty() {
+                    let _ = std::fs::create_dir_all(sandbox_path(&self.data_dir, dir.trim()));
+                }
+            }
+            "rmdir" => {
+                let dir = self.expand(raw_args);
+                if !dir.trim().is_empty() {
+                    let _ = std::fs::remove_dir(sandbox_path(&self.data_dir, dir.trim()));
+                }
+            }
+            "remove" => {
+                let f = self.expand(raw_args);
+                if !f.trim().is_empty() {
+                    let _ = std::fs::remove_file(sandbox_path(&self.data_dir, f.trim()));
+                }
+            }
+            "rename" => {
+                let s = self.expand(raw_args);
+                if let Some((old, new)) = s.trim().split_once(char::is_whitespace) {
+                    let _ = std::fs::rename(
+                        sandbox_path(&self.data_dir, old.trim()),
+                        sandbox_path(&self.data_dir, new.trim()),
+                    );
+                }
+            }
+            "copy" => {
+                // /copy [-switches] <source> <target>
+                let s = self.expand(raw_args);
+                let mut rest = s.trim();
+                while rest.starts_with('-') {
+                    rest = rest.split_once(char::is_whitespace).map(|(_, r)| r).unwrap_or("").trim();
+                }
+                if let Some((src, dst)) = rest.split_once(char::is_whitespace) {
+                    let _ = std::fs::copy(
+                        sandbox_path(&self.data_dir, src.trim()),
+                        sandbox_path(&self.data_dir, dst.trim()),
+                    );
+                }
+            }
             "sockopen" => self.cmd_sockopen(raw_args),
             "sockwrite" => self.cmd_sockwrite(raw_args),
             "sockclose" => {
