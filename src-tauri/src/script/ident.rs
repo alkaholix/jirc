@@ -412,6 +412,18 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         }
         // $os — OS family. mIRC returns a Windows version; we are cross-platform.
         "os" => std::env::consts::OS.to_string(),
+        // ISUPPORT-derived: $prefix "(modes)chars", $chanmodes "A,B,C,D".
+        "prefix" => {
+            let is = &rt.state.isupport;
+            let modes: String = is.prefix_modes.iter().map(|&(m, _)| m).collect();
+            let chars: String = is.prefix_modes.iter().map(|&(_, p)| p).collect();
+            format!("({modes}){chars}")
+        }
+        "chanmodes" => {
+            let is = &rt.state.isupport;
+            format!("{},{},{},{}", is.chanmodes_a, is.chanmodes_b, is.chanmodes_c, is.chanmodes_d)
+        }
+        "chantypes" => rt.state.isupport.chan_types.clone(),
         "gettok" => {
             let sep = sep_code(&a(2));
             let text = a(0);
@@ -1545,6 +1557,10 @@ mod tests {
         assert_eq!(id("longip", &["3232235521"]), "192.168.0.1");
         assert!(!id("day", &[]).is_empty());
         assert!(!id("os", &[]).is_empty());
+        // ISUPPORT-derived (default Isupport values)
+        assert_eq!(id("prefix", &[]), "(qaohv)~&@%+");
+        assert_eq!(id("chantypes", &[]), "#&!+");
+        assert_eq!(id("chanmodes", &[]), "beI,k,l,imnpstrS");
         // `.deg` needs the property, so call eval_ident directly — this is after
         // the `id` closure's final use, so its borrow of `rt` has ended.
         assert_eq!(eval_ident(&mut rt, "sin", &["90".into()], "deg"), "1");

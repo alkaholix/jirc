@@ -258,6 +258,8 @@ pub struct StateSnapshot {
     pub channels: Vec<ChannelView>,
     /// (lowercase nick, full `nick!user@host`) pairs for `$address`/`$ial`.
     pub ial: Vec<(String, String)>,
+    /// ISUPPORT tokens for `$prefix` / `$chanmodes` / `$chantypes`.
+    pub isupport: Isupport,
 }
 
 impl SessionState {
@@ -276,6 +278,7 @@ impl SessionState {
                 })
                 .collect(),
             ial: self.ial.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            isupport: self.isupport.clone(),
         }
     }
 }

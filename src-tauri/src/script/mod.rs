@@ -1540,6 +1540,7 @@ mod tests {
         use crate::irc::state::StateSnapshot;
         let snap = StateSnapshot {
             nick: "me".into(),
+            isupport: Default::default(),
             channels: vec![],
             ial: vec![
                 ("bob".into(), "bob!~bob@host.example.com".into()),
@@ -1572,6 +1573,7 @@ mod tests {
         use crate::irc::state::StateSnapshot;
         let snap = StateSnapshot {
             nick: "me".into(),
+            isupport: Default::default(),
             channels: vec![],
             ial: vec![("bob".into(), "bob!~bob@host.example.com".into())],
         };
@@ -1611,6 +1613,7 @@ mod tests {
         use crate::irc::state::{ChannelView, StateSnapshot};
         let snap = StateSnapshot {
             nick: "me".into(),
+            isupport: Default::default(),
             channels: vec![ChannelView {
                 name: "#a".into(),
                 nicks: vec!["op".into(), "voiced".into(), "plain".into()],
@@ -1670,6 +1673,7 @@ mod tests {
         use crate::irc::state::{ChannelView, StateSnapshot};
         let snap = StateSnapshot {
             nick: "me".into(),
+            isupport: Default::default(),
             channels: vec![ChannelView {
                 name: "#a".into(),
                 bans: vec!["*!*@evil.example".into(), "baddie!*@*".into()],
