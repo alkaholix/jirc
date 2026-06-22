@@ -341,6 +341,43 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             }
         }
         "crc" => format!("{:08x}", crc32fast::hash(&hash_input(rt, &a(0), &a(1)))),
+        // Bitwise (binary) operators on integers.
+        "and" => (uint(&a(0)) & uint(&a(1))).to_string(),
+        "or" => (uint(&a(0)) | uint(&a(1))).to_string(),
+        "xor" => (uint(&a(0)) ^ uint(&a(1))).to_string(),
+        // $not is a 32-bit complement, matching classic mIRC.
+        "not" => (!(uint(&a(0)) as u32) as u64).to_string(),
+        // Bit test/set — bit positions are 1-based (bit 1 = least significant).
+        "biton" | "bitoff" | "isbit" => {
+            let v = uint(&a(0));
+            let b = uint(&a(1));
+            if !(1..=64).contains(&b) {
+                return if name == "isbit" { "0".into() } else { v.to_string() };
+            }
+            let mask = 1u64 << (b - 1);
+            match name {
+                "biton" => (v | mask).to_string(),
+                "bitoff" => (v & !mask).to_string(),
+                _ => {
+                    if v & mask != 0 {
+                        "1".into()
+                    } else {
+                        "0".into()
+                    }
+                }
+            }
+        }
+        // $gcd/$lcm are variadic.
+        "gcd" => fold_ints(args, gcd2).to_string(),
+        "lcm" => fold_ints(args, |a, b| {
+            let g = gcd2(a, b);
+            if g == 0 {
+                0
+            } else {
+                (a / g * b).abs()
+            }
+        })
+        .to_string(),
         "gettok" => {
             let sep = sep_code(&a(2));
             let text = a(0);
@@ -1242,6 +1279,29 @@ fn hex_of(bytes: impl AsRef<[u8]>) -> String {
     bytes.as_ref().iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Parse an integer for the bitwise identifiers (non-numeric -> 0).
+fn uint(s: &str) -> u64 {
+    s.trim().parse::<i64>().map(|n| n as u64).unwrap_or(0)
+}
+
+fn gcd2(a: i64, b: i64) -> i64 {
+    let (mut a, mut b) = (a.abs(), b.abs());
+    while b != 0 {
+        let t = b;
+        b = a % b;
+        a = t;
+    }
+    a
+}
+
+/// Reduce all args (parsed as integers) with `f`, for $gcd / $lcm.
+fn fold_ints(args: &[String], f: impl Fn(i64, i64) -> i64) -> i64 {
+    args.iter()
+        .map(|s| s.trim().parse::<i64>().unwrap_or(0))
+        .reduce(f)
+        .unwrap_or(0)
+}
+
 /// Evaluates a simple arithmetic expression (+ - * / %, parens).
 fn calc(expr: &str) -> Option<f64> {
     let toks: Vec<char> = expr.chars().filter(|c| !c.is_whitespace()).collect();
@@ -1431,6 +1491,17 @@ mod tests {
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
         assert_eq!(id("crc", &["123456789"]), "cbf43926");
+        // bitwise / integer math
+        assert_eq!(id("and", &["12", "10"]), "8");
+        assert_eq!(id("or", &["12", "10"]), "14");
+        assert_eq!(id("xor", &["12", "10"]), "6");
+        assert_eq!(id("not", &["0"]), "4294967295");
+        assert_eq!(id("biton", &["0", "3"]), "4");
+        assert_eq!(id("bitoff", &["7", "1"]), "6");
+        assert_eq!(id("isbit", &["5", "3"]), "1");
+        assert_eq!(id("isbit", &["5", "2"]), "0");
+        assert_eq!(id("gcd", &["12", "18", "24"]), "6");
+        assert_eq!(id("lcm", &["4", "6", "8"]), "24");
         // `.deg` needs the property, so call eval_ident directly — this is after
         // the `id` closure's final use, so its borrow of `rt` has ended.
         assert_eq!(eval_ident(&mut rt, "sin", &["90".into()], "deg"), "1");
