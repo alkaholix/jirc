@@ -472,7 +472,7 @@ out of scope.
 - [ ] `/auser`
 - [ ] `/autojoin`
 - [ ] `/avoice`
-- [ ] `/away`
+- [x] `/away`
 - [ ] `/background` *(stub)*
 - [x] `/ban`
 - [ ] `/bcopy`
@@ -498,7 +498,7 @@ out of scope.
 - [ ] `/continue`
 - [ ] `/copy`
 - [ ] `/creq` *(stub)*
-- [ ] `/ctcpreply`
+- [x] `/ctcpreply`
 - [ ] `/ctcps`
 - [ ] `/dcc *` *(entire DCC family)*
 - [ ] `/dccserver`
@@ -548,7 +548,7 @@ out of scope.
 - [x] `/hinc`
 - [x] `/hload`
 - [x] `/hmake`
-- [ ] `/hop`
+- [x] `/hop`
 - [x] `/hsave`
 - [ ] `/ial` *(stub)* · [ ] `/ialclear` · [ ] `/ialfill` · [ ] `/ialmark`
 - [ ] `/identd`
@@ -556,10 +556,10 @@ out of scope.
 - [ ] `/ignore` *(client ignore list exists in UI; verify `/ignore` command)*
 - [ ] `/iline` *(stub)*
 - [x] `/inc`
-- [ ] `/invite`
+- [x] `/invite`
 - [ ] `/iuser`
 - [x] `/join`
-- [ ] `/kick`
+- [x] `/kick`
 - [ ] `/linesep` *(stub)*
 - [ ] `/links`
 - [x] `/list` *(+ IRCX `/listx`)*
@@ -577,11 +577,11 @@ out of scope.
 - [x] `/mode`
 - [x] `/msg`
 - [ ] `/nick`  ← *verify: `/nick` change works via client; mark when confirmed*
-- [ ] `/nickserv`
+- [x] `/nickserv`
 - [x] `/noop`
 - [x] `/notice`
 - [ ] `/notify`
-- [ ] `/omsg` · [ ] `/onotice`
+- [x] `/omsg` · [x] `/onotice`
 - [ ] `/parseline`
 - [x] `/part`
 - [x] `/partall`
