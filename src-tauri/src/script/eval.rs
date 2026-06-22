@@ -150,6 +150,8 @@ pub struct Runtime<'a> {
     pub state: std::sync::Arc<crate::irc::state::StateSnapshot>,
     /// Synchronous socket backend for `/socklisten`/`/sockaccept`/`$sock(...)`.
     pub sockets: std::sync::Arc<dyn ScriptSockets>,
+    /// Open file handles for `/fopen`/`/fwrite`/`$fread`/`$fopen(...)`.
+    pub files: &'a mut crate::script::files::FileStore,
 }
 
 impl<'a> Runtime<'a> {
@@ -316,6 +318,10 @@ impl<'a> Runtime<'a> {
             "write" => self.cmd_write(raw_args),
             "writeini" => self.cmd_writeini(raw_args),
             "remini" => self.cmd_remini(raw_args),
+            "fopen" => self.cmd_fopen(raw_args),
+            "fwrite" => self.cmd_fwrite(raw_args),
+            "fclose" => self.cmd_fclose(raw_args),
+            "fseek" => self.cmd_fseek(raw_args),
             "sockopen" => self.cmd_sockopen(raw_args),
             "sockwrite" => self.cmd_sockwrite(raw_args),
             "sockclose" => {
@@ -629,6 +635,90 @@ impl<'a> Runtime<'a> {
             let text = std::fs::read_to_string(&path).unwrap_or_default();
             let _ = std::fs::write(&path, super::ini::remove(&text, section, item));
         }
+    }
+
+    /// `/fopen [-nox] <name> <filename>` — open a file with a named handle.
+    fn cmd_fopen(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        let mut rest = expanded.trim();
+        let (mut create_new, mut overwrite) = (false, false);
+        while let Some(stripped) = rest.strip_prefix('-') {
+            let (sw, more) = stripped.split_once(char::is_whitespace).unwrap_or((stripped, ""));
+            if sw.contains('n') {
+                create_new = true;
+            }
+            if sw.contains('o') {
+                overwrite = true;
+            }
+            // -x (exclusive) is accepted but a no-op: we re-open per operation.
+            rest = more.trim();
+        }
+        let mut parts = rest.splitn(2, char::is_whitespace);
+        if let (Some(name), Some(file)) = (parts.next(), parts.next()) {
+            let path = sandbox_path(&self.data_dir, file.trim());
+            self.files.open(name, path, create_new, overwrite);
+        }
+    }
+
+    /// `/fwrite [-bn] <name> <text>` — write at the pointer; `-n` appends a `$crlf`.
+    fn cmd_fwrite(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        let mut rest = expanded.trim();
+        let mut newline = false;
+        while let Some(stripped) = rest.strip_prefix('-') {
+            let (sw, more) = stripped.split_once(char::is_whitespace).unwrap_or((stripped, ""));
+            if sw.contains('n') {
+                newline = true;
+            }
+            // -b (binary variable) is accepted but treated as text.
+            rest = more.trim();
+        }
+        let mut parts = rest.splitn(2, char::is_whitespace);
+        if let Some(name) = parts.next() {
+            let text = parts.next().unwrap_or("");
+            self.files.write(name, text.as_bytes(), newline);
+        }
+    }
+
+    /// `/fclose <name | wildcard>` — close one or more file handles.
+    fn cmd_fclose(&mut self, raw: &str) {
+        let name = self.expand(raw);
+        let name = name.trim();
+        if !name.is_empty() {
+            self.files.close(name);
+        }
+    }
+
+    /// `/fseek [-lnpwr] <name> [position]` — move the file pointer.
+    fn cmd_fseek(&mut self, raw: &str) {
+        use super::files::SeekMode;
+        let expanded = self.expand(raw);
+        let mut rest = expanded.trim();
+        let mut sw = "";
+        if let Some(stripped) = rest.strip_prefix('-') {
+            let (flags, more) = stripped.split_once(char::is_whitespace).unwrap_or((stripped, ""));
+            sw = flags;
+            rest = more.trim();
+        }
+        let mut parts = rest.splitn(2, char::is_whitespace);
+        let Some(name) = parts.next() else {
+            return;
+        };
+        let arg = parts.next().unwrap_or("").trim();
+        let mode = if sw.contains('l') {
+            SeekMode::Line(arg.parse().unwrap_or(0))
+        } else if sw.contains('n') {
+            SeekMode::Next
+        } else if sw.contains('p') {
+            SeekMode::Prev
+        } else if sw.contains('w') {
+            SeekMode::Wild(arg.to_string())
+        } else if sw.contains('r') {
+            SeekMode::Regex(arg.to_string())
+        } else {
+            SeekMode::Byte(arg.parse().unwrap_or(0))
+        };
+        self.files.seek(name, mode);
     }
 
     /// `/sockopen [-e] <name> <host> <port>` — open a TCP socket; `-e` uses TLS.

@@ -708,6 +708,38 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             let path = super::eval::sandbox_path(&rt.data_dir, &a(0));
             std::fs::read_to_string(&path).map(|c| c.lines().count()).unwrap_or(0).to_string()
         }
+        "feof" => bool_str(rt.files.feof),
+        "ferr" => bool_str(rt.files.ferr),
+        "fread" => rt.files.read_line(&a(0)),
+        "fgetc" => rt.files.read_char(&a(0)),
+        "fopen" => {
+            // $fopen(N) -> Nth open handle (0 = count); $fopen(name) -> the name if
+            // open; properties .fname/.pos/.eof/.err.
+            let key = a(0);
+            let name = match key.parse::<usize>() {
+                Ok(0) => return rt.files.count().to_string(),
+                Ok(n) => rt.files.names().get(n - 1).cloned().unwrap_or_default(),
+                Err(_) => key,
+            };
+            match prop {
+                "" => {
+                    if rt.files.handle(&name).is_some() {
+                        name
+                    } else {
+                        String::new()
+                    }
+                }
+                "fname" => rt
+                    .files
+                    .handle(&name)
+                    .map(|h| h.path.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                "pos" => rt.files.handle(&name).map(|h| h.pos.to_string()).unwrap_or_default(),
+                "eof" => bool_str(rt.files.handle(&name).map(|h| h.eof).unwrap_or(false)),
+                "err" => bool_str(rt.files.handle(&name).map(|h| h.err).unwrap_or(false)),
+                _ => String::new(),
+            }
+        }
         "readini" => {
             // $readini(file, [n], section, item) -> an item's value. The optional
             // `n` switch (no evaluation) is accepted but a no-op for us.
@@ -1227,6 +1259,7 @@ mod tests {
         let script = Script::default();
         let mut vars = HashMap::new();
         let mut hashes = HashMap::new();
+        let mut files = crate::script::files::FileStore::default();
         let mut rt = Runtime {
             script: &script,
             my_nick: "me",
@@ -1234,6 +1267,7 @@ mod tests {
             server: "s",
             vars: &mut vars,
             hashes: &mut hashes,
+            files: &mut files,
             event: EventVars::default(),
             actions: vec![],
             halted: false,
@@ -1304,6 +1338,7 @@ mod tests {
         script: &'a crate::script::ast::Script,
         vars: &'a mut std::collections::HashMap<String, String>,
         hashes: &'a mut std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+        files: &'a mut crate::script::files::FileStore,
     ) -> Runtime<'a> {
         use crate::script::eval::EventVars;
         Runtime {
@@ -1313,6 +1348,7 @@ mod tests {
             server: "s",
             vars,
             hashes,
+            files,
             event: EventVars::default(),
             actions: vec![],
             halted: false,
@@ -1333,7 +1369,8 @@ mod tests {
         let script = Script::default();
         let mut vars = HashMap::new();
         let mut hashes = HashMap::new();
-        let mut rt = rt_for(&script, &mut vars, &mut hashes);
+        let mut files = crate::script::files::FileStore::default();
+        let mut rt = rt_for(&script, &mut vars, &mut hashes, &mut files);
         let mut e = |n: &str, args: &[&str]| {
             eval_ident(&mut rt, n, &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "")
         };
@@ -1389,7 +1426,8 @@ mod tests {
         let script = Script::default();
         let mut vars = HashMap::new();
         let mut hashes = HashMap::new();
-        let mut rt = rt_for(&script, &mut vars, &mut hashes);
+        let mut files = crate::script::files::FileStore::default();
+        let mut rt = rt_for(&script, &mut vars, &mut hashes, &mut files);
         let mut e = |n: &str, args: &[&str]| {
             eval_ident(&mut rt, n, &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "")
         };

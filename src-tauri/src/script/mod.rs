@@ -7,6 +7,7 @@
 
 pub mod ast;
 pub mod eval;
+pub mod files;
 pub mod ident;
 pub mod ini;
 pub mod parser;
@@ -34,6 +35,7 @@ struct Inner {
     script: Script,
     vars: HashMap<String, String>,
     hashes: HashMap<String, HashMap<String, String>>,
+    files: files::FileStore,
     sockets: std::sync::Arc<dyn ScriptSockets>,
 }
 
@@ -43,6 +45,7 @@ impl Inner {
             script: Script::default(),
             vars: HashMap::new(),
             hashes: HashMap::new(),
+            files: files::FileStore::default(),
             sockets: std::sync::Arc::new(NoSockets),
         }
     }
@@ -116,6 +119,7 @@ impl ScriptEngine {
             server: ctx.server,
             vars: &mut g.vars,
             hashes: &mut g.hashes,
+            files: &mut g.files,
             event,
             actions: Vec::new(),
             halted: false,
@@ -154,6 +158,7 @@ impl ScriptEngine {
             server: ctx.server,
             vars: &mut g.vars,
             hashes: &mut g.hashes,
+            files: &mut g.files,
             event,
             actions: Vec::new(),
             halted: false,
@@ -201,6 +206,7 @@ impl ScriptEngine {
             server: ctx.server,
             vars: &mut g.vars,
             hashes: &mut g.hashes,
+            files: &mut g.files,
             event,
             actions: Vec::new(),
             halted: false,
@@ -237,6 +243,7 @@ impl ScriptEngine {
         let g = &mut *g;
         let vars = &mut g.vars;
         let hashes = &mut g.hashes;
+        let files = &mut g.files;
         let mut actions = Vec::new();
         let mut halted = false;
         for ev in script.events_of(kind) {
@@ -250,6 +257,7 @@ impl ScriptEngine {
                 server: ctx.server,
                 vars: &mut *vars,
                 hashes: &mut *hashes,
+                files: &mut *files,
                 event: event.clone(),
                 actions: Vec::new(),
                 halted: false,
@@ -1374,6 +1382,33 @@ mod tests {
         engine.load("alias r2 { /msg #c [ $+ $readini(cfg.ini, User, host) $+ ] }");
         let actions = engine.run_alias(&rctx, "#c", "r2", "");
         assert_eq!(actions, vec![Action::Send("PRIVMSG #c :[]".into())]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_handle_io_round_trip() {
+        let dir = std::env::temp_dir().join(format!("jirc-fio-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: dir.clone(),
+            state: std::sync::Arc::new(Default::default()),
+        };
+        let engine = ScriptEngine::new();
+        // Write two lines through a handle; the handle persists across the
+        // separate run_command calls (it lives in the engine's global state).
+        engine.run_command(&rctx, "#c", "/fopen -o w notes.txt", &[]);
+        engine.run_command(&rctx, "#c", "/fwrite -n w alpha", &[]);
+        engine.run_command(&rctx, "#c", "/fwrite -n w beta", &[]);
+        engine.run_command(&rctx, "#c", "/fclose w", &[]);
+        // Read them back via a fresh handle; $fread advances the pointer.
+        engine.run_command(&rctx, "#c", "/fopen r notes.txt", &[]);
+        engine.load("alias r { /msg #c $fread(r) $+ - $+ $fread(r) }");
+        let actions = engine.run_alias(&rctx, "#c", "r", "");
+        assert_eq!(actions, vec![Action::Send("PRIVMSG #c :alpha-beta".into())]);
+        engine.run_command(&rctx, "#c", "/fclose r", &[]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
