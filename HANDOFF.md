@@ -28,11 +28,29 @@ Full rationale: `C:\Users\John\.claude\plans\reactive-kindling-lemon.md`.
   `npm run tauri build -- --no-bundle` → `src-tauri/target/release/jirc.exe`.
 
 ## Verified green
-- 106 backend tests, 29 frontend tests pass; `cargo check` + full debug build clean.
+- 109 backend tests, 29 frontend tests pass; `cargo check` + full debug + release build clean.
 - Build gotcha learned: a `SocketManager::rename` self-deadlock (re-locking a Mutex through an
   `if let` guard) hung `cargo test` — looked like an "environment hang". If a test hangs, suspect
   a double-lock, and check `Get-Process cargo,rustc` CPU (idle = deadlocked, not compiling).
 - Listening-socket async accept/connect I/O still needs a **live-network** test (relay sockbot).
+
+## Done 2026-06-22 (mirc.com docs audit — parity round, 109 tests green)
+Read the official per-topic mirc.com help pages first, then implemented/fixed against them. All committed.
+Granular tracking lives in **`PARITY.md`** (items checked off as completed).
+- **Sockets — finished the listening subsystem:** `/socklisten` (synchronous bind so inline `$sock().port` works),
+  `/sockaccept`, `/sockmark`, `/socklist`, `/sockrename`, `/sockpause`, `on SOCKLISTEN`, `$sock()` props, wildcard
+  `/sockwrite`. (Async accept/connect I/O still wants a live-net test — see TODO 2.)
+- **Local time via `chrono`:** mIRC uses LOCAL time; ours was UTC. `$time`, `$date` (dd/mm/yyyy), `$fulldate`,
+  `$asctime([N,]fmt)` (mIRC→chrono format translator), `$timezone`; `$daylight`=0. Added `chrono` as a **direct**
+  dep — it was already transitive (clock feature on), so nothing new compiles.
+- **INI is real now:** `/writeini` + `/remini` were no-op stubs → backed by `script/ini.rs` (ordered
+  `[section]`/`item=value` parser, case-insensitive). `$readini(file,[n],section,item)`, `$ini` enumeration.
+  Sandbox-confined like `/write`/`$read`.
+- **String/file/number identifiers:** multi-arg `$pos`/`$lastpos`/`$mid`(N=0=to-end)/`$count`/`$replace`/`$remove`/
+  `$instok`/`$reptok`; `$regex`/`$regsub` `/pattern/flags`; `$nopath`/`$nofile`/`$longfn`/`$shortfn`/`$noqt`/
+  `$envvar`/`$bytes`/`$gmt`/`$ticks`.
+- **Skipped (architecture):** `$eval` / `$regsub %var` (identifier args are pre-expanded), `$v1`/`$v2`, `$hash`
+  (algorithm unknown).
 
 ## Done this session — ported onto jIRC-OLD (all green)
 - **Local console** — `App.tsx` (`openLocalConsole` + welcome "Open a local console"). Run scripts/sockbots with no connection.
@@ -69,6 +87,10 @@ Full rationale: `C:\Users\John\.claude\plans\reactive-kindling-lemon.md`.
    `/sockmark` on a *bound-but-not-yet-started* listener is a no-op; `$sock().wsmsg`/`$sockerr` detail is minimal.
 3. **Optional UI follow-ups**: a Channel Central "bans" view (ban data now in the state snapshot); more Settings
    sections (sounds, address book); Toolbar.
+4. **Next mSL-parity subsystem:** file-handle I/O — the `/fopen`/`/fwrite`/`/fread`/`/fclose`/`/fseek` + `$fopen`/
+   `$feof`/`$ferr` family (stateful handles surviving across runs, like the socket manager). It's the next unchecked
+   block in `PARITY.md`. Most other remaining parity items need GUI/DCC subsystems or are architecture-blocked
+   (`$eval`/`$v1`/`$hash`).
 
 ### Done this session (mSL-parity punch-list — all committed + tested, 102 backend tests)
 - **Identifiers:** `$crlf $cr $lf $tab`; event address `$address` (bare) `/$site/$fulladdress/$wildsite`;
