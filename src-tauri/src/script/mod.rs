@@ -1185,6 +1185,28 @@ mod tests {
     }
 
     #[test]
+    fn braceless_one_liner_on_events() {
+        let engine = ScriptEngine::new();
+        engine.load("on *:TEXT:!ping:#:/msg $chan pong $nick\non *:TEXT:!hi:#:/msg $chan yo");
+        let mk = |t: &str| EventVars {
+            nick: "bob".into(),
+            chan: "#c".into(),
+            target: "#c".into(),
+            text: t.into(),
+            params: words(t),
+            ..Default::default()
+        };
+        assert_eq!(
+            engine.dispatch_event(&ctx(), "TEXT", mk("!ping")),
+            vec![Action::Send("PRIVMSG #c :pong bob".into())]
+        );
+        assert_eq!(
+            engine.dispatch_event(&ctx(), "TEXT", mk("!hi")),
+            vec![Action::Send("PRIVMSG #c :yo".into())]
+        );
+    }
+
+    #[test]
     fn custom_identifier_alias_returns_value() {
         let engine = ScriptEngine::new();
         engine.load(

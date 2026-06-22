@@ -185,19 +185,46 @@ pub fn parse(src: &str) -> Script {
                 }
             }
             "on" => {
-                // Read the header up to the opening brace.
+                // Read the header up to the opening brace or end of line.
+                let start = cur.pos;
                 let mut header = String::new();
+                let mut hit_brace = false;
                 while let Some(c) = cur.peek() {
                     if c == '{' {
+                        hit_brace = true;
+                        break;
+                    }
+                    if c == '\n' {
                         break;
                     }
                     header.push(c);
                     cur.pos += 1;
                 }
-                if cur.peek() == Some('{') {
+                if hit_brace {
                     let body = cur.read_block();
                     if let Some(ev) = parse_event_header(&header, parse_stmts(&body)) {
                         script.events.push(ev);
+                    }
+                } else if let Some(ev) = parse_braceless_event(&header) {
+                    // A one-liner: `on *:TEXT:!cmd:#:/msg $chan hi`.
+                    script.events.push(ev);
+                } else {
+                    // No command tail and no brace on this line: the body's `{`
+                    // is on a following line — rescan past the newline for it.
+                    cur.pos = start;
+                    let mut header = String::new();
+                    while let Some(c) = cur.peek() {
+                        if c == '{' {
+                            break;
+                        }
+                        header.push(c);
+                        cur.pos += 1;
+                    }
+                    if cur.peek() == Some('{') {
+                        let body = cur.read_block();
+                        if let Some(ev) = parse_event_header(&header, parse_stmts(&body)) {
+                            script.events.push(ev);
+                        }
                     }
                 }
             }
@@ -297,6 +324,44 @@ fn parse_event_header(header: &str, body: Vec<Stmt>) -> Option<Event> {
         pattern,
         target,
         body,
+    })
+}
+
+/// Parses a one-liner `on` event whose body is the trailing command on the same
+/// line (no braces), e.g. `*:TEXT:!ping:#:/msg $chan pong`. Returns None when
+/// there is no command tail, so the caller can fall back to a `{` on a later
+/// line. `splitn` is used so colons inside the command (timestamps, URLs) are
+/// preserved.
+fn parse_braceless_event(header: &str) -> Option<Event> {
+    let mut top = header.trim().splitn(2, ':');
+    let _level = top.next()?;
+    let after_level = top.next()?;
+    let mut ev = after_level.splitn(2, ':');
+    let kind = ev.next()?.trim().to_ascii_uppercase();
+    if kind.is_empty() {
+        return None;
+    }
+    let rest = ev.next().unwrap_or("");
+    let (pattern, target, command) = if MATCHTEXT_EVENTS.contains(&kind.as_str()) {
+        let mut p = rest.splitn(3, ':');
+        let matchtext = p.next().unwrap_or("").trim().to_string();
+        let target = p.next().unwrap_or("").trim().to_string();
+        let command = p.next().unwrap_or("").trim().to_string();
+        (matchtext, target, command)
+    } else {
+        let mut p = rest.splitn(2, ':');
+        let target = p.next().unwrap_or("").trim().to_string();
+        let command = p.next().unwrap_or("").trim().to_string();
+        (String::new(), target, command)
+    };
+    if command.is_empty() {
+        return None;
+    }
+    Some(Event {
+        kind,
+        pattern,
+        target,
+        body: parse_body(&command),
     })
 }
 
