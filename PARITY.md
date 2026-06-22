@@ -386,7 +386,7 @@ out of scope.
 - [ ] `$snick`
 - [ ] `$snicks`
 - [ ] `$snotify`
-- [ ] `$sock` *(only `$sockname`/`$sockbr`/`$sockerr` exist; `$sock(name).property` not yet)*
+- [x] `$sock` *(existence + `.port`/`.mark`/`.status`; `.property` suffix parsing landed)*
 - [x] `$sockbr`
 - [x] `$sockerr` *(verify semantics)*
 - [x] `$sockname`
@@ -622,11 +622,11 @@ out of scope.
 - [ ] `/showmirc` *(stub)*
 - [ ] `/signal`
 - [ ] `/sline` *(stub)*
-- [ ] `/sockaccept`  ← *needed for listening sockets*
+- [x] `/sockaccept`
 - [x] `/sockclose` *(incl. wildcard)*
 - [ ] `/socklist`
-- [ ] `/socklisten`  ← *listening sockets (the BV2 sockbot needs this)*
-- [ ] `/sockmark`
+- [x] `/socklisten` *(binds synchronously; `$sock(name).port` inline)*
+- [x] `/sockmark`
 - [x] `/sockopen` *(plain + TLS)*
 - [ ] `/sockpause`
 - [x] `/sockread`
@@ -715,7 +715,7 @@ out of scope.
 - [ ] `on SIGNAL`
 - [ ] `on SNOTICE`
 - [x] `on SOCKCLOSE`
-- [ ] `on SOCKLISTEN`  ← *listening sockets*
+- [x] `on SOCKLISTEN`
 - [x] `on SOCKOPEN`
 - [x] `on SOCKREAD`
 - [ ] `on SOCKWRITE`
@@ -779,5 +779,7 @@ individually.)*
 Whitespace + address identifiers, `$event`/`$numeric`; list operators
 (`isop`/`ison`/`ishop`/`isvoice`/`isowner`/`isadmin`/`isreg`/`ischan`/`isban` + `&` + ban
 tracking); `$N-M`/bare-`#`/`$$` params; braceless one-liner `on`; `on CTCP`/`on RAW`;
-wildcard `/sockwrite`; no-space + mixed-paren `if` conditions. **Next big item:**
-listening sockets (`/socklisten`, `on SOCKLISTEN`, `/sockaccept`, `$sock().port`).
+wildcard `/sockwrite`; no-space + mixed-paren `if` conditions; **`.property` suffix
+parsing** (`$hget(t,N).item/.data`, `$sock().port`); **listening sockets**
+(`/socklisten`, `on SOCKLISTEN`, `/sockaccept`, `/sockmark`, `$sock(name).port/.mark/.status`)
+— the async accept/connect I/O is pending live-network verification.

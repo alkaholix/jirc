@@ -59,12 +59,12 @@ Full rationale: `C:\Users\John\.claude\plans\reactive-kindling-lemon.md`.
 ## TODO — next
 1. **Push when ready:** the fresh history isn't on GitHub yet — `git push -f origin main` (remote re-added,
    not pushed). Optional: re-run the release build with the app closed (`npm run tauri build -- --no-bundle`).
-2. **Listening sockets** — the one open mSL-parity item (engine work): `/socklisten <name>` (bind a local
-   port), `on SOCKLISTEN`, `/sockaccept <name>`, `$sock(name).port`, plus `$sock(name)` existence,
-   `sockmark`/`$sock().mark`, and `$sockerr`/`$sock().wsmsg`. The **BV2 v0.31 sockbot** (`test-scripts/`) is the
-   driving use case (listens locally, points the client at `localhost $sock(BV2.start).port`, accepts, bridges to
-   Buzzen). Substantial async work in `script/socket.rs` (currently connect-only) + commands in `eval.rs` +
-   identifiers in `ident.rs`.
+2. **Live-test listening sockets** — implemented this session (`/socklisten`/`/sockaccept`/`/sockmark`,
+   `on SOCKLISTEN`, `$sock(name).port/.mark/.status`); the *synchronous* bind/port/query path is unit-tested, but
+   the **async accept/connect I/O needs verifying on a live network** (e.g. the BV2 v0.31 relay sockbot). Design:
+   `/socklisten` binds synchronously via the `ScriptSockets` handle on the engine (so `$sock().port` reads inline);
+   `Action::SockListen` starts the accept loop at apply-time with the owning connection's `server_id`. Known gaps:
+   `/sockmark` on a *bound-but-not-yet-started* listener is a no-op; `$sock().wsmsg`/`$sockerr` detail is minimal.
 3. **Optional UI follow-ups**: a Channel Central "bans" view (ban data now in the state snapshot); more Settings
    sections (sounds, address book); Toolbar.
 
