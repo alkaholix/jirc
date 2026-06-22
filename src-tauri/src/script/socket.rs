@@ -111,9 +111,20 @@ impl SocketManager {
         self.socks.lock().unwrap().insert(key, SockHandle { outgoing: tx, task });
     }
 
+    /// Writes `data` to the socket named `name`, or to every socket matching it
+    /// when `name` is a wildcard (e.g. `bot.*`).
     pub fn write(&self, name: &str, data: Vec<u8>) {
-        if let Some(h) = self.socks.lock().unwrap().get(name) {
+        let socks = self.socks.lock().unwrap();
+        if let Some(h) = socks.get(name) {
             let _ = h.outgoing.send(data);
+            return;
+        }
+        if name.contains(['*', '?']) {
+            for (k, h) in socks.iter() {
+                if wildcard_match(name, k) {
+                    let _ = h.outgoing.send(data.clone());
+                }
+            }
         }
     }
 
