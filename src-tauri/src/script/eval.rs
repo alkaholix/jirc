@@ -91,12 +91,16 @@ pub trait ScriptSockets: Send + Sync {
     /// socket named `name`.
     fn accept(&self, name: &str, listener: &str) -> bool;
     fn set_mark(&self, name: &str, mark: &str);
-    fn mark(&self, name: &str) -> String;
-    fn port(&self, name: &str) -> Option<u16>;
-    /// "listening" / "active" / "" — for `$sock(name).status`.
-    fn status(&self, name: &str) -> String;
+    /// `/sockrename <name> <newname>`.
+    fn rename(&self, name: &str, newname: &str);
+    /// `/sockpause [-r]` — pause (or, with `resume`, restart) reading.
+    fn pause(&self, name: &str, resume: bool);
     /// Whether a socket matching `name` (possibly a wildcard) exists.
     fn exists(&self, name: &str) -> bool;
+    /// `$sock(name).property` value (empty for unknown name/property).
+    fn prop(&self, name: &str, property: &str) -> String;
+    /// `/socklist` — formatted lines for sockets matching `filter`.
+    fn list(&self, filter: &str) -> Vec<String>;
 }
 
 /// A no-op socket backend (used in tests and before a real one is installed).
@@ -109,17 +113,16 @@ impl ScriptSockets for NoSockets {
         false
     }
     fn set_mark(&self, _: &str, _: &str) {}
-    fn mark(&self, _: &str) -> String {
-        String::new()
-    }
-    fn port(&self, _: &str) -> Option<u16> {
-        None
-    }
-    fn status(&self, _: &str) -> String {
-        String::new()
-    }
+    fn rename(&self, _: &str, _: &str) {}
+    fn pause(&self, _: &str, _: bool) {}
     fn exists(&self, _: &str) -> bool {
         false
+    }
+    fn prop(&self, _: &str, _: &str) -> String {
+        String::new()
+    }
+    fn list(&self, _: &str) -> Vec<String> {
+        Vec::new()
     }
 }
 
@@ -329,6 +332,24 @@ impl<'a> Runtime<'a> {
                 }
             }
             "sockmark" => self.cmd_sockmark(raw_args),
+            "socklist" => self.cmd_socklist(raw_args),
+            "sockrename" => {
+                let expanded = self.expand(raw_args);
+                let mut toks = expanded.split_whitespace();
+                if let (Some(name), Some(newname)) = (toks.next(), toks.next()) {
+                    self.sockets.rename(name, newname);
+                }
+            }
+            "sockpause" => {
+                let expanded = self.expand(raw_args);
+                let resume = expanded
+                    .split_whitespace()
+                    .take_while(|t| t.starts_with('-'))
+                    .any(|t| t.contains('r'));
+                if let Some(name) = expanded.split_whitespace().find(|t| !t.starts_with('-')) {
+                    self.sockets.pause(name, resume);
+                }
+            }
             "sockread" => self.cmd_sockread(raw_args),
             "dialog" => self.cmd_dialog(raw_args),
             "did" => self.cmd_did(raw_args),
@@ -647,6 +668,20 @@ impl<'a> Runtime<'a> {
         let (name, mark) = trimmed.split_once(char::is_whitespace).unwrap_or((trimmed, ""));
         if !name.is_empty() {
             self.sockets.set_mark(name, mark.trim());
+        }
+    }
+
+    /// `/socklist [-tul] [name]` — echoes the list of open sockets.
+    fn cmd_socklist(&mut self, raw: &str) {
+        let filter = self.expand(raw);
+        let target = self.reply_target();
+        let lines = self.sockets.list(filter.trim());
+        self.actions.push(Action::Echo {
+            target: target.clone(),
+            text: format!("Sock List - {} socket(s)", lines.len()),
+        });
+        for line in lines {
+            self.actions.push(Action::Echo { target: target.clone(), text: line });
         }
     }
 

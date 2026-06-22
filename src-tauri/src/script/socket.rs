@@ -2,20 +2,21 @@
 //! SOCKREAD`, …).
 //!
 //! Each connected socket runs as an async task that reads newline-delimited
-//! lines (firing `on SOCKREAD` per line) and accepts outgoing writes. A
-//! listening socket (`/socklisten`) is bound synchronously — so its port is
-//! immediately readable via `$sock(name).port` — and its accept loop is started
-//! separately ([`start_listener`]) with the owning connection's context, so an
-//! incoming connection fires `on SOCKLISTEN`; the handler's `/sockaccept <name>`
-//! then turns the pending connection into a named connected socket.
+//! lines (firing `on SOCKREAD` per line), forwards outgoing writes (firing `on
+//! SOCKWRITE` when the send buffer drains), and tracks per-socket stats for
+//! `$sock(name).property`. A listening socket (`/socklisten`) is bound
+//! synchronously — so its port is immediately readable via `$sock(name).port` —
+//! and its accept loop is started separately ([`start_listener`]) with the
+//! owning connection's context, so an incoming connection fires `on SOCKLISTEN`;
+//! the handler's `/sockaccept <name>` then turns the pending connection into a
+//! named connected socket.
 //!
 //! Stored as Tauri managed state, mirroring [`crate::irc::ConnectionManager`].
-//! Sockets belong to the connection that created them: their script events are
-//! applied with that server's id, so `/msg #chan` from a socket handler routes
-//! to the right network. Plain TCP (TLS for `/sockopen -e`).
+//! Sockets belong to the connection that created them. Plain TCP (TLS for `-e`).
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::time::Instant;
 
 use tauri::{AppHandle, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -30,11 +31,75 @@ struct SockHandle {
     /// Outgoing channel — `None` for a pure listening socket.
     outgoing: Option<UnboundedSender<Vec<u8>>>,
     task: tauri::async_runtime::JoinHandle<()>,
-    /// Bound/remote port, for `$sock(name).port`.
     port: u16,
-    /// `/sockmark` text, for `$sock(name).mark`.
     mark: String,
     listening: bool,
+    tls: bool,
+    /// Named address passed to `/sockopen` (`$sock().addr`).
+    addr: String,
+    /// Peer IP (`$sock().ip`).
+    ip: String,
+    sent: u64,
+    rcvd: u64,
+    opened: Instant,
+    last_sent: Instant,
+    last_rcvd: Instant,
+    paused: bool,
+    /// Last error message (`$sock().wsmsg`).
+    wsmsg: String,
+}
+
+impl SockHandle {
+    fn new(outgoing: Option<UnboundedSender<Vec<u8>>>, task: tauri::async_runtime::JoinHandle<()>, port: u16, listening: bool) -> Self {
+        let now = Instant::now();
+        SockHandle {
+            outgoing,
+            task,
+            port,
+            mark: String::new(),
+            listening,
+            tls: false,
+            addr: String::new(),
+            ip: String::new(),
+            sent: 0,
+            rcvd: 0,
+            opened: now,
+            last_sent: now,
+            last_rcvd: now,
+            paused: false,
+            wsmsg: String::new(),
+        }
+    }
+
+    /// Resolves a `$sock(name).property`.
+    fn prop(&self, name: &str, property: &str) -> String {
+        let secs = |i: Instant| i.elapsed().as_secs().to_string();
+        match property.to_ascii_lowercase().as_str() {
+            "name" => name.to_string(),
+            "port" => self.port.to_string(),
+            "ip" => self.ip.clone(),
+            "addr" => self.addr.clone(),
+            "mark" => self.mark.clone(),
+            "status" => if self.listening { "listening" } else { "active" }.to_string(),
+            "type" => "tcp".to_string(),
+            "ssl" => bool_id(self.tls),
+            "pause" => bool_id(self.paused),
+            "sent" => self.sent.to_string(),
+            "rcvd" => self.rcvd.to_string(),
+            "sq" | "rq" => "0".to_string(),
+            "ls" => secs(self.last_sent),
+            "lr" => secs(self.last_rcvd),
+            "to" => secs(self.opened),
+            "wserr" => "0".to_string(),
+            "wsmsg" => self.wsmsg.clone(),
+            "saddr" | "sport" => String::new(), // UDP only
+            _ => String::new(),
+        }
+    }
+}
+
+fn bool_id(b: bool) -> String {
+    if b { "$true" } else { "$false" }.to_string()
 }
 
 #[derive(Default)]
@@ -51,8 +116,7 @@ impl SocketManager {
         Self::default()
     }
 
-    /// Opens a TCP socket named `name` to `host:port`, replacing any existing
-    /// socket with the same name.
+    /// Opens a TCP socket named `name` to `host:port`, replacing any existing one.
     #[allow(clippy::too_many_arguments)]
     pub fn open(
         &self,
@@ -70,19 +134,24 @@ impl SocketManager {
         }
         let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let key = name.clone();
+        let host_for_task = host.clone();
         let task = tauri::async_runtime::spawn(async move {
-            let tcp = match TcpStream::connect((host.as_str(), port)).await {
+            let tcp = match TcpStream::connect((host_for_task.as_str(), port)).await {
                 Ok(s) => s,
                 Err(e) => {
+                    set_wsmsg(&app, &name, &e.to_string());
                     fire(&app, &server_id, &network, &nick, "SOCKCLOSE", &name, &e.to_string());
                     forget(&app, &name);
                     return;
                 }
             };
+            let peer = tcp.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
+            set_ip(&app, &name, &peer);
             let stream = if tls {
-                match crate::irc::stream::tls_client(&host, tcp).await {
+                match crate::irc::stream::tls_client(&host_for_task, tcp).await {
                     Ok(s) => s,
                     Err(e) => {
+                        set_wsmsg(&app, &name, &e.to_string());
                         fire(&app, &server_id, &network, &nick, "SOCKCLOSE", &name, &e.to_string());
                         forget(&app, &name);
                         return;
@@ -94,15 +163,14 @@ impl SocketManager {
             fire(&app, &server_id, &network, &nick, "SOCKOPEN", &name, "");
             run_connected(app, server_id, network, nick, name, stream, rx).await;
         });
-        self.socks.lock().unwrap().insert(
-            key,
-            SockHandle { outgoing: Some(tx), task, port, mark: String::new(), listening: false },
-        );
+        let mut h = SockHandle::new(Some(tx), task, port, false);
+        h.addr = host;
+        h.tls = tls;
+        self.socks.lock().unwrap().insert(key, h);
     }
 
     /// Binds a listening socket synchronously (so `$sock(name).port` is readable
-    /// on the same line, like mIRC). `port == 0` lets the OS assign one. The
-    /// accept loop is started later via [`start_listener`].
+    /// on the same line, like mIRC). `port == 0` lets the OS assign one.
     pub fn listen(&self, name: &str, port: u16) -> Option<u16> {
         let listener = std::net::TcpListener::bind(("0.0.0.0", port)).ok()?;
         let bound_port = listener.local_addr().ok()?.port();
@@ -112,7 +180,7 @@ impl SocketManager {
     }
 
     /// Starts the accept loop for a listener bound by [`listen`], with the owning
-    /// connection's context (so events route correctly). Called from apply-time.
+    /// connection's context. Called from apply-time.
     pub fn start_listener(
         &self,
         app: AppHandle,
@@ -142,7 +210,6 @@ impl SocketManager {
                     Ok(s) => s,
                     Err(_) => break,
                 };
-                // Fire on SOCKLISTEN; the handler's /sockaccept records a name.
                 if let Some(m) = app.try_state::<SocketManager>() {
                     m.accept_names.lock().unwrap().remove(&name);
                 }
@@ -151,6 +218,7 @@ impl SocketManager {
                     .try_state::<SocketManager>()
                     .and_then(|m| m.accept_names.lock().unwrap().remove(&name));
                 if let Some(newname) = accepted {
+                    let peer = stream.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
                     spawn_connected(
                         app.clone(),
                         server_id.clone(),
@@ -158,26 +226,22 @@ impl SocketManager {
                         nick.clone(),
                         newname,
                         NetStream::Plain(stream),
+                        peer,
                     );
                 }
             }
             fire(&app, &server_id, &network, &nick, "SOCKCLOSE", &name, "");
             forget(&app, &name);
         });
-        self.socks.lock().unwrap().insert(
-            key,
-            SockHandle { outgoing: None, task, port, mark: String::new(), listening: true },
-        );
+        self.socks.lock().unwrap().insert(key, SockHandle::new(None, task, port, true));
     }
 
-    /// Records the name a `/sockaccept` assigned to a listener's pending
-    /// connection (read by the accept loop after `on SOCKLISTEN`).
+    /// Records the name a `/sockaccept` assigned to a listener's pending connection.
     pub fn accept(&self, listener: &str, name: &str) {
         self.accept_names.lock().unwrap().insert(listener.to_string(), name.to_string());
     }
 
-    /// Writes `data` to the socket named `name`, or to every socket matching it
-    /// when `name` is a wildcard (e.g. `bot.*`).
+    /// Writes `data` to `name`, or every socket matching it when `name` is a wildcard.
     pub fn write(&self, name: &str, data: Vec<u8>) {
         let socks = self.socks.lock().unwrap();
         if let Some(h) = socks.get(name) {
@@ -197,7 +261,7 @@ impl SocketManager {
         }
     }
 
-    /// Closes sockets whose name matches `pattern` (a plain name or wildcard).
+    /// Closes sockets whose name matches `pattern` (plain name or wildcard).
     pub fn close(&self, pattern: &str) {
         self.bound.lock().unwrap().retain(|k, _| !wildcard_match(pattern, k));
         let mut socks = self.socks.lock().unwrap();
@@ -210,13 +274,26 @@ impl SocketManager {
         }
     }
 
-    /// Names of all open sockets (incl. bound listeners), sorted.
-    pub fn names(&self) -> Vec<String> {
-        let mut names: Vec<String> = self.socks.lock().unwrap().keys().cloned().collect();
-        names.extend(self.bound.lock().unwrap().keys().cloned());
-        names.sort();
-        names.dedup();
-        names
+    /// `/sockrename <name> <newname>`.
+    pub fn rename(&self, name: &str, newname: &str) {
+        // Bind the removed value to a `let` first so the lock guard is dropped
+        // before we re-lock to insert (re-locking the same Mutex would deadlock).
+        let moved = self.socks.lock().unwrap().remove(name);
+        if let Some(h) = moved {
+            self.socks.lock().unwrap().insert(newname.to_string(), h);
+            return;
+        }
+        let moved = self.bound.lock().unwrap().remove(name);
+        if let Some(b) = moved {
+            self.bound.lock().unwrap().insert(newname.to_string(), b);
+        }
+    }
+
+    /// `/sockpause [-r] <name>` — pause or (with `resume`) restart reading.
+    pub fn pause(&self, name: &str, resume: bool) {
+        if let Some(h) = self.socks.lock().unwrap().get_mut(name) {
+            h.paused = !resume;
+        }
     }
 
     pub fn set_mark(&self, name: &str, mark: &str) {
@@ -225,25 +302,49 @@ impl SocketManager {
         }
     }
 
-    pub fn mark(&self, name: &str) -> String {
-        self.socks.lock().unwrap().get(name).map(|h| h.mark.clone()).unwrap_or_default()
-    }
-
-    pub fn port(&self, name: &str) -> Option<u16> {
+    /// `$sock(name).property` value (empty for unknown name/property).
+    pub fn prop(&self, name: &str, property: &str) -> String {
         if let Some(h) = self.socks.lock().unwrap().get(name) {
-            return Some(h.port);
+            return h.prop(name, property);
         }
-        self.bound.lock().unwrap().get(name).map(|(_, p)| *p)
-    }
-
-    pub fn status(&self, name: &str) -> String {
-        if let Some(h) = self.socks.lock().unwrap().get(name) {
-            return if h.listening { "listening" } else { "active" }.to_string();
-        }
-        if self.bound.lock().unwrap().contains_key(name) {
-            return "listening".to_string();
+        // A bound-but-not-yet-started listener.
+        if let Some((_, port)) = self.bound.lock().unwrap().get(name) {
+            return match property.to_ascii_lowercase().as_str() {
+                "name" => name.to_string(),
+                "port" => port.to_string(),
+                "status" => "listening".to_string(),
+                "type" => "tcp".to_string(),
+                _ => String::new(),
+            };
         }
         String::new()
+    }
+
+    /// Names of sockets for `/socklist` — `filter` may carry `-l` (listening only)
+    /// and/or a trailing name/wildcard.
+    pub fn list(&self, filter: &str) -> Vec<String> {
+        let listening_only = filter.split_whitespace().any(|t| t == "-l" || t.starts_with("-l"));
+        let pat = filter
+            .split_whitespace()
+            .find(|t| !t.starts_with('-'))
+            .unwrap_or("*");
+        let mut out: Vec<String> = Vec::new();
+        for (name, h) in self.socks.lock().unwrap().iter() {
+            if listening_only && !h.listening {
+                continue;
+            }
+            if wildcard_match(pat, name) {
+                let status = if h.listening { "listening" } else { "active" };
+                out.push(format!("{name}  {status}  port {}", h.port));
+            }
+        }
+        for (name, (_, port)) in self.bound.lock().unwrap().iter() {
+            if wildcard_match(pat, name) {
+                out.push(format!("{name}  listening  port {port}"));
+            }
+        }
+        out.sort();
+        out
     }
 
     pub fn exists(&self, name: &str) -> bool {
@@ -252,10 +353,51 @@ impl SocketManager {
         }
         self.bound.lock().unwrap().keys().any(|k| wildcard_match(name, k))
     }
+
+    /// All open socket names (incl. bound listeners), sorted — for the frontend
+    /// socket list (`script_sockets`).
+    pub fn names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.socks.lock().unwrap().keys().cloned().collect();
+        names.extend(self.bound.lock().unwrap().keys().cloned());
+        names.sort();
+        names.dedup();
+        names
+    }
 }
 
-/// Spawns a connected-socket read/write task for an already-open stream (used by
-/// `/sockaccept`) and registers it.
+/// Updates a socket's I/O stats (called by the read/write loop).
+fn bump(app: &AppHandle, name: &str, sent: u64, rcvd: u64) {
+    if let Some(m) = app.try_state::<SocketManager>() {
+        if let Some(h) = m.socks.lock().unwrap().get_mut(name) {
+            if sent > 0 {
+                h.sent += sent;
+                h.last_sent = Instant::now();
+            }
+            if rcvd > 0 {
+                h.rcvd += rcvd;
+                h.last_rcvd = Instant::now();
+            }
+        }
+    }
+}
+
+fn set_ip(app: &AppHandle, name: &str, ip: &str) {
+    if let Some(m) = app.try_state::<SocketManager>() {
+        if let Some(h) = m.socks.lock().unwrap().get_mut(name) {
+            h.ip = ip.to_string();
+        }
+    }
+}
+
+fn set_wsmsg(app: &AppHandle, name: &str, msg: &str) {
+    if let Some(m) = app.try_state::<SocketManager>() {
+        if let Some(h) = m.socks.lock().unwrap().get_mut(name) {
+            h.wsmsg = msg.to_string();
+        }
+    }
+}
+
+/// Spawns a connected-socket task for an already-open stream (used by `/sockaccept`).
 fn spawn_connected(
     app: AppHandle,
     server_id: String,
@@ -263,6 +405,7 @@ fn spawn_connected(
     nick: String,
     name: String,
     stream: NetStream,
+    peer_ip: String,
 ) {
     if let Some(m) = app.try_state::<SocketManager>() {
         if let Some(old) = m.socks.lock().unwrap().remove(&name) {
@@ -274,15 +417,13 @@ fn spawn_connected(
     let key = name.clone();
     let task = tauri::async_runtime::spawn(run_connected(app, server_id, network, nick, name, stream, rx));
     if let Some(m) = app2.try_state::<SocketManager>() {
-        m.socks.lock().unwrap().insert(
-            key,
-            SockHandle { outgoing: Some(tx), task, port: 0, mark: String::new(), listening: false },
-        );
+        let mut h = SockHandle::new(Some(tx), task, 0, false);
+        h.ip = peer_ip;
+        m.socks.lock().unwrap().insert(key, h);
     }
 }
 
-/// The read/write loop shared by connect and accepted sockets: fires `on
-/// SOCKREAD` per inbound line, forwards outgoing writes, and `on SOCKCLOSE` at end.
+/// The read/write loop shared by connect and accepted sockets.
 async fn run_connected(
     app: AppHandle,
     server_id: String,
@@ -295,21 +436,32 @@ async fn run_connected(
     let (read_half, mut write_half) = tokio::io::split(stream);
     let mut reader = BufReader::new(read_half);
     let mut buf: Vec<u8> = Vec::new();
-    loop {
+    'outer: loop {
         tokio::select! {
             out = rx.recv() => match out {
-                Some(data) => {
-                    if write_half.write_all(&data).await.is_err() {
-                        break;
+                Some(mut data) => {
+                    // Drain and send everything currently queued, then fire
+                    // on SOCKWRITE once (mIRC: "finished sending all queued data").
+                    loop {
+                        if write_half.write_all(&data).await.is_err() {
+                            break 'outer;
+                        }
+                        bump(&app, &name, data.len() as u64, 0);
+                        match rx.try_recv() {
+                            Ok(more) => data = more,
+                            Err(_) => break,
+                        }
                     }
+                    fire(&app, &server_id, &network, &nick, "SOCKWRITE", &name, "");
                 }
                 None => break,
             },
             res = reader.read_until(b'\n', &mut buf) => match res {
                 Ok(0) => break, // EOF
-                Ok(_) => {
+                Ok(n) => {
                     let line = decode_line(&buf);
                     buf.clear();
+                    bump(&app, &name, 0, n as u64);
                     let line = line.trim_end_matches(['\r', '\n']);
                     fire(&app, &server_id, &network, &nick, "SOCKREAD", &name, line);
                 }
@@ -321,8 +473,6 @@ async fn run_connected(
     forget(&app, &name);
 }
 
-/// Removes a socket entry without aborting (used for self-cleanup when a task
-/// ends on its own).
 fn forget(app: &AppHandle, name: &str) {
     if let Some(m) = app.try_state::<SocketManager>() {
         m.socks.lock().unwrap().remove(name);
@@ -372,7 +522,7 @@ fn fire(
 }
 
 /// Production [`super::eval::ScriptSockets`] backend, backed by the
-/// [`SocketManager`] (Tauri managed state). Installed on the engine at startup.
+/// [`SocketManager`]. Installed on the engine at startup.
 pub struct EngineSockets {
     app: AppHandle,
 }
@@ -404,17 +554,24 @@ impl super::eval::ScriptSockets for EngineSockets {
             m.set_mark(name, mark);
         }
     }
-    fn mark(&self, name: &str) -> String {
-        self.mgr().map(|m| m.mark(name)).unwrap_or_default()
+    fn rename(&self, name: &str, newname: &str) {
+        if let Some(m) = self.mgr() {
+            m.rename(name, newname);
+        }
     }
-    fn port(&self, name: &str) -> Option<u16> {
-        self.mgr()?.port(name)
-    }
-    fn status(&self, name: &str) -> String {
-        self.mgr().map(|m| m.status(name)).unwrap_or_default()
+    fn pause(&self, name: &str, resume: bool) {
+        if let Some(m) = self.mgr() {
+            m.pause(name, resume);
+        }
     }
     fn exists(&self, name: &str) -> bool {
         self.mgr().map(|m| m.exists(name)).unwrap_or(false)
+    }
+    fn prop(&self, name: &str, property: &str) -> String {
+        self.mgr().map(|m| m.prop(name, property)).unwrap_or_default()
+    }
+    fn list(&self, filter: &str) -> Vec<String> {
+        self.mgr().map(|m| m.list(filter)).unwrap_or_default()
     }
 }
 
@@ -423,19 +580,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn listen_binds_and_reports_port() {
+    fn listen_bind_props_rename_close() {
         let m = SocketManager::new();
-        // /socklisten with port 0 binds an OS-assigned port, readable at once.
         let port = m.listen("relay", 0).expect("bind a local listener");
         assert!(port > 0);
-        assert_eq!(m.port("relay"), Some(port));
-        assert!(m.exists("relay"));
-        assert!(m.exists("rel*")); // wildcard existence
-        assert_eq!(m.status("relay"), "listening");
-        assert!(m.names().contains(&"relay".to_string()));
-        // /sockclose drops the bound listener.
-        m.close("relay");
+        assert_eq!(m.prop("relay", "port"), port.to_string());
+        assert_eq!(m.prop("relay", "status"), "listening");
+        assert_eq!(m.prop("relay", "name"), "relay");
+        assert_eq!(m.prop("relay", "type"), "tcp");
+        assert!(m.exists("rel*"));
+        assert!(m.list("*").iter().any(|l| l.contains("relay")));
+        m.rename("relay", "rl2");
         assert!(!m.exists("relay"));
-        assert_eq!(m.port("relay"), None);
+        assert_eq!(m.prop("rl2", "port"), port.to_string());
+        m.close("rl2");
+        assert!(!m.exists("rl2"));
     }
 }

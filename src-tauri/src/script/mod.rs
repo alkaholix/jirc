@@ -1729,22 +1729,30 @@ mod tests {
         fn set_mark(&self, name: &str, mark: &str) {
             self.marks.lock().unwrap().insert(name.into(), mark.into());
         }
-        fn mark(&self, name: &str) -> String {
-            self.marks.lock().unwrap().get(name).cloned().unwrap_or_default()
-        }
-        fn port(&self, name: &str) -> Option<u16> {
-            self.ports.lock().unwrap().get(name).copied()
-        }
-        fn status(&self, name: &str) -> String {
-            if self.ports.lock().unwrap().contains_key(name) {
-                "listening".into()
-            } else {
-                String::new()
-            }
-        }
+        fn rename(&self, _: &str, _: &str) {}
+        fn pause(&self, _: &str, _: bool) {}
         fn exists(&self, name: &str) -> bool {
             self.ports.lock().unwrap().contains_key(name)
                 || self.marks.lock().unwrap().contains_key(name)
+        }
+        fn prop(&self, name: &str, property: &str) -> String {
+            match property {
+                "port" => {
+                    self.ports.lock().unwrap().get(name).map(|p| p.to_string()).unwrap_or_default()
+                }
+                "mark" => self.marks.lock().unwrap().get(name).cloned().unwrap_or_default(),
+                "status" => {
+                    if self.ports.lock().unwrap().contains_key(name) {
+                        "listening".into()
+                    } else {
+                        String::new()
+                    }
+                }
+                _ => String::new(),
+            }
+        }
+        fn list(&self, _: &str) -> Vec<String> {
+            Vec::new()
         }
     }
 

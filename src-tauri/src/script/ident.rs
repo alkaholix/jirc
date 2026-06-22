@@ -310,20 +310,17 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         // Socket identifiers (used inside on SOCKOPEN/SOCKREAD/SOCKCLOSE).
         "sock" => {
             // $sock(name) -> the name if a matching socket exists (else empty),
-            // so `if ($sock(x))` works; $sock(name).port/.mark/.status read it.
+            // so `if ($sock(x))` works; $sock(name).property reads any property
+            // (.port/.ip/.addr/.status/.mark/.sent/.rcvd/.ls/.lr/.to/.type/...).
             let name = a(0);
-            match prop.to_ascii_lowercase().as_str() {
-                "" => {
-                    if rt.sockets.exists(&name) {
-                        name
-                    } else {
-                        String::new()
-                    }
+            if prop.is_empty() {
+                if rt.sockets.exists(&name) {
+                    name
+                } else {
+                    String::new()
                 }
-                "port" => rt.sockets.port(&name).map(|p| p.to_string()).unwrap_or_default(),
-                "mark" => rt.sockets.mark(&name),
-                "status" => rt.sockets.status(&name),
-                _ => String::new(),
+            } else {
+                rt.sockets.prop(&name, prop)
             }
         }
         "sockname" => rt.event.chan.clone(),
