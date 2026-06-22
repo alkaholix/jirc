@@ -583,8 +583,8 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             // $regex([name,] text, pattern) -> match count; stores the first
             // match's capture groups for $regml. The optional name is ignored.
             let (text, pat) = if args.len() >= 3 { (a(1), a(2)) } else { (a(0), a(1)) };
-            match regex::Regex::new(&pat) {
-                Ok(re) => {
+            match mirc_regex(&pat) {
+                Some(re) => {
                     rt.vars.retain(|k, _| !k.starts_with(REGML_PREFIX));
                     let count = re.find_iter(&text).count();
                     if let Some(caps) = re.captures(&text) {
@@ -595,7 +595,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                     }
                     count.to_string()
                 }
-                Err(_) => "0".to_string(),
+                None => "0".to_string(),
             }
         }
         "regml" => {
@@ -606,11 +606,13 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         }
         "regsub" => {
             // $regsub(text, pattern, replacement) -> replaced text. mIRC \1
-            // backreferences are translated to the regex crate's ${1} form.
+            // backreferences are translated to the regex crate's ${1} form, and
+            // /pattern/flags is honoured. (mIRC's [name,]…,%var form isn't
+            // supported — args are pre-expanded, so the %var name is lost.)
             let (text, pat, rep) = (a(0), a(1), a(2));
-            match regex::Regex::new(&pat) {
-                Ok(re) => re.replace_all(&text, translate_backrefs(&rep).as_str()).into_owned(),
-                Err(_) => text,
+            match mirc_regex(&pat) {
+                Some(re) => re.replace_all(&text, translate_backrefs(&rep).as_str()).into_owned(),
+                None => text,
             }
         }
         "read" => {
@@ -702,6 +704,25 @@ fn translate_backrefs(s: &str) -> String {
 
 /// Turns a token "sepcode" argument (an ASCII code) into its character; spaces
 /// are the mIRC default when absent or invalid.
+/// Compiles a mIRC-style regex pattern. Handles the `/pattern/flags` form —
+/// `i` (case-insensitive), `m` (multiline), `s` (dotall), `x` (extended); other
+/// flags like `g` are ignored (global matching is handled by the caller). A bare
+/// pattern (no surrounding slashes) is compiled as-is.
+fn mirc_regex(pat: &str) -> Option<regex::Regex> {
+    let p = pat.trim();
+    let (body, flags) = match (p.strip_prefix('/'), p.rfind('/')) {
+        (Some(_), Some(close)) if close > 0 => (&p[1..close], &p[close + 1..]),
+        _ => (p, ""),
+    };
+    let inline: String = flags.chars().filter(|c| matches!(c, 'i' | 'm' | 's' | 'x')).collect();
+    let full = if inline.is_empty() {
+        body.to_string()
+    } else {
+        format!("(?{inline}){body}")
+    };
+    regex::Regex::new(&full).ok()
+}
+
 fn sep_code(s: &str) -> char {
     s.trim().parse::<u32>().ok().and_then(char::from_u32).unwrap_or(' ')
 }
@@ -1075,6 +1096,10 @@ mod tests {
         assert_eq!(id("instok", &["a.b.c", "X", "2", "46"]), "a.X.b.c");
         assert_eq!(id("reptok", &["a.b.a.c", "a", "X", "2", "46"]), "a.b.X.c");
         assert_eq!(id("reptok", &["a.b.a", "a", "X", "0", "46"]), "X.b.X");
+        // mIRC /pattern/flags regex: i = case-insensitive; bare = case-sensitive.
+        assert_eq!(id("regex", &["Hello", "/hello/i"]), "1");
+        assert_eq!(id("regex", &["Hello", "hello"]), "0");
+        assert_eq!(id("regsub", &["Hello World", "/o/g", "0"]), "Hell0 W0rld");
     }
 
     fn rt_for<'a>(
