@@ -8,6 +8,7 @@
 pub mod ast;
 pub mod eval;
 pub mod ident;
+pub mod ini;
 pub mod parser;
 pub mod socket;
 pub mod timer;
@@ -1348,6 +1349,31 @@ mod tests {
         engine.load("alias r { /msg #c $read(notes.txt, 2) [ $+ $lines(notes.txt) $+ ] }");
         let actions = engine.run_alias(&rctx, "#c", "r", "");
         assert_eq!(actions, vec![Action::Send("PRIVMSG #c :second line [2]".into())]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn writeini_readini_roundtrips() {
+        let dir = std::env::temp_dir().join(format!("jirc-ini-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: dir.clone(),
+            state: std::sync::Arc::new(Default::default()),
+        };
+        let engine = ScriptEngine::new();
+        engine.run_command(&rctx, "#c", "/writeini cfg.ini User nick bob", &[]);
+        engine.run_command(&rctx, "#c", "/writeini cfg.ini User host x.example", &[]);
+        engine.load("alias r { /msg #c $readini(cfg.ini, User, nick) [ $+ $ini(cfg.ini, User, 0) $+ ] }");
+        let actions = engine.run_alias(&rctx, "#c", "r", "");
+        assert_eq!(actions, vec![Action::Send("PRIVMSG #c :bob [2]".into())]);
+        // /remini removes a single item; $readini of it is then empty.
+        engine.run_command(&rctx, "#c", "/remini cfg.ini User host", &[]);
+        engine.load("alias r2 { /msg #c [ $+ $readini(cfg.ini, User, host) $+ ] }");
+        let actions = engine.run_alias(&rctx, "#c", "r2", "");
+        assert_eq!(actions, vec![Action::Send("PRIVMSG #c :[]".into())]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

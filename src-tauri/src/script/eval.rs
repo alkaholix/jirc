@@ -314,6 +314,8 @@ impl<'a> Runtime<'a> {
             "inc" => self.cmd_incdec(raw_args, 1),
             "dec" => self.cmd_incdec(raw_args, -1),
             "write" => self.cmd_write(raw_args),
+            "writeini" => self.cmd_writeini(raw_args),
+            "remini" => self.cmd_remini(raw_args),
             "sockopen" => self.cmd_sockopen(raw_args),
             "sockwrite" => self.cmd_sockwrite(raw_args),
             "sockclose" => {
@@ -404,7 +406,7 @@ impl<'a> Runtime<'a> {
             | "background" | "color" | "font" | "flash" | "beep" | "ebeeps" | "speak" | "splay"
             | "play" | "sound" | "run" | "url" | "dns" | "debug" | "log" | "logview"
             | "timestamp" | "donotdisturb" | "toolbar" | "menubar" | "switchbar" | "treebar"
-            | "mdi" | "save" | "saveini" | "flushini" | "writeini" | "remini" | "loadbuf"
+            | "mdi" | "save" | "saveini" | "flushini" | "loadbuf"
             | "savebuf" | "filter" | "showmirc" | "maximize" | "minimize" | "ial"
             | "creq" | "sreq" | "fullname" | "clipboard" | "resetidle" => {
                 let _ = self.expand(raw_args);
@@ -597,6 +599,35 @@ impl<'a> Runtime<'a> {
             if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
                 let _ = writeln!(f, "{text}");
             }
+        }
+    }
+
+    /// `/writeini [-n] <file> <section> <item> <value>` — set an INI item.
+    fn cmd_writeini(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        let mut rest = expanded.trim();
+        while rest.starts_with('-') {
+            rest = rest.split_once(char::is_whitespace).map(|(_, r)| r).unwrap_or("").trim();
+        }
+        let mut parts = rest.splitn(4, char::is_whitespace);
+        if let (Some(file), Some(section), Some(item), Some(value)) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        {
+            let path = sandbox_path(&self.data_dir, file);
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            let _ = std::fs::write(&path, super::ini::set(&text, section, item, value));
+        }
+    }
+
+    /// `/remini <file> <section> [item]` — remove an INI item, or a whole section.
+    fn cmd_remini(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        let mut parts = expanded.split_whitespace();
+        if let (Some(file), Some(section)) = (parts.next(), parts.next()) {
+            let item = parts.next();
+            let path = sandbox_path(&self.data_dir, file);
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            let _ = std::fs::write(&path, super::ini::remove(&text, section, item));
         }
     }
 

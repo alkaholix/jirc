@@ -708,6 +708,43 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             let path = super::eval::sandbox_path(&rt.data_dir, &a(0));
             std::fs::read_to_string(&path).map(|c| c.lines().count()).unwrap_or(0).to_string()
         }
+        "readini" => {
+            // $readini(file, [n], section, item) -> an item's value. The optional
+            // `n` switch (no evaluation) is accepted but a no-op for us.
+            let off = if args.len() >= 4 && a(1).eq_ignore_ascii_case("n") { 1 } else { 0 };
+            let path = super::eval::sandbox_path(&rt.data_dir, &a(0));
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            super::ini::read(&text, &a(1 + off), &a(2 + off)).unwrap_or_default()
+        }
+        "ini" => {
+            // $ini(file, N) -> Nth section (N=0 -> count); $ini(file, section) -> its
+            // 1-based index. $ini(file, section, N) -> Nth item; (.., item) -> index.
+            let path = super::eval::sandbox_path(&rt.data_dir, &a(0));
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            if args.len() >= 3 {
+                let items = super::ini::items(&text, &a(1));
+                match a(2).parse::<usize>() {
+                    Ok(0) => items.len().to_string(),
+                    Ok(n) => items.get(n - 1).cloned().unwrap_or_default(),
+                    Err(_) => items
+                        .iter()
+                        .position(|k| k.eq_ignore_ascii_case(&a(2)))
+                        .map(|i| (i + 1).to_string())
+                        .unwrap_or_else(|| "0".to_string()),
+                }
+            } else {
+                let secs = super::ini::sections(&text);
+                match a(1).parse::<usize>() {
+                    Ok(0) => secs.len().to_string(),
+                    Ok(n) => secs.get(n - 1).cloned().unwrap_or_default(),
+                    Err(_) => secs
+                        .iter()
+                        .position(|s| s.eq_ignore_ascii_case(&a(1)))
+                        .map(|i| (i + 1).to_string())
+                        .unwrap_or_else(|| "0".to_string()),
+                }
+            }
+        }
         // A user-defined alias used as an identifier ($myalias): run it and use
         // its `/return` value.
         other => {
