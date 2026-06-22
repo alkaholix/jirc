@@ -1307,6 +1307,13 @@ fn state_op(state: &crate::irc::state::StateSnapshot, term: &str) -> Option<bool
                 None => false,
             },
         ),
+        // `<mask> isban #chan` -> the value is covered by a +b ban there.
+        "isban" => Some(
+            match state.channels.iter().find(|c| c.name.eq_ignore_ascii_case(&target)) {
+                Some(c) => c.bans.iter().any(|b| b.eq_ignore_ascii_case(a) || wildcard_match(b, a)),
+                None => false,
+            },
+        ),
         // `#chan ischan` -> are we on that channel?
         "ischan" => Some(state.channels.iter().any(|c| c.name.eq_ignore_ascii_case(a))),
         _ => None,

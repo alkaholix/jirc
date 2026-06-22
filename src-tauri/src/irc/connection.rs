@@ -30,6 +30,9 @@ fn emit(app: &AppHandle, ev: UiEvent) {
 pub struct Effects {
     pub outgoing: Vec<String>,
     pub events: Vec<UiEvent>,
+    /// Set when a channel ban list changed without a state-event (RPL_BANLIST),
+    /// so the script state snapshot is refreshed for `isban`.
+    pub bans_changed: bool,
 }
 
 /// Per-connection mutable context for the read loop / protocol logic.
@@ -230,7 +233,7 @@ async fn run_once(
 
                     // Refresh the shared snapshot when membership/state changed,
                     // so script commands/timers/sockets see current channel info.
-                    if effects.events.iter().any(is_state_event) {
+                    if effects.events.iter().any(is_state_event) || effects.bans_changed {
                         if let Some(store) = app.try_state::<crate::irc::state::StateStore>() {
                             store.set(server_id, state.snapshot());
                         }
@@ -772,6 +775,10 @@ fn handle_mode(
                         ctx.state.apply_prefix_mode(&target, nick, letter, adding);
                         prefix_changed = true;
                     }
+                } else if letter == 'b' {
+                    if let Some(mask) = &arg {
+                        ctx.state.set_ban(&target, mask, adding);
+                    }
                 }
                 let sign = if adding { '+' } else { '-' };
                 match &arg {
@@ -866,6 +873,13 @@ fn handle_numeric(ctx: &mut Context, fx: &mut Effects, resp: Response, args: &[S
                 message: format!("SASL: {}", args.last().cloned().unwrap_or_default()),
             });
             fx.outgoing.extend(auth::on_sasl_result(ctx.auth, false));
+        }
+        Response::RPL_BANLIST => {
+            // [nick, channel, banmask, ...] — populate the channel ban list.
+            if let (Some(channel), Some(mask)) = (args.get(1), args.get(2)) {
+                ctx.state.set_ban(channel, mask, true);
+                fx.bans_changed = true;
+            }
         }
         Response::RPL_TOPIC => {
             // [nick, channel, topic]

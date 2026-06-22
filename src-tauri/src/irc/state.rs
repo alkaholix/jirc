@@ -136,6 +136,8 @@ pub struct ChannelState {
     pub topic: Option<String>,
     /// nick (case-sensitive as seen) -> prefix string, e.g. "@+".
     pub members: BTreeMap<String, String>,
+    /// Active `+b` ban masks (from live MODE and RPL_BANLIST), for `isban`.
+    pub bans: std::collections::BTreeSet<String>,
 }
 
 impl ChannelState {
@@ -204,6 +206,16 @@ impl SessionState {
         self.ial.insert(nick.to_lowercase(), address);
     }
 
+    /// Adds (`adding`) or removes a `+b` ban mask for a channel.
+    pub fn set_ban(&mut self, channel: &str, mask: &str, adding: bool) {
+        let ch = self.channels.entry(channel.to_string()).or_default();
+        if adding {
+            ch.bans.insert(mask.to_string());
+        } else {
+            ch.bans.remove(mask);
+        }
+    }
+
     /// Applies a privilege mode change to a member's prefixes.
     pub fn apply_prefix_mode(&mut self, channel: &str, nick: &str, mode: char, adding: bool) {
         let Some(prefix_char) = self.isupport.prefix_for_mode(mode) else {
@@ -234,6 +246,8 @@ pub struct ChannelView {
     /// (nick, prefix chars) per member, e.g. `("bob", "@")`. Powers the
     /// `isop`/`ishop`/`isvoice`/`ison`/`isreg`/... condition operators.
     pub members: Vec<(String, String)>,
+    /// Active `+b` ban masks, for the `isban` operator.
+    pub bans: Vec<String>,
 }
 
 /// A snapshot of a connection's channel/member state, shared with the script
@@ -258,6 +272,7 @@ impl SessionState {
                     name: name.clone(),
                     nicks: ch.members.keys().cloned().collect(),
                     members: ch.members.iter().map(|(n, p)| (n.clone(), p.clone())).collect(),
+                    bans: ch.bans.iter().cloned().collect(),
                 })
                 .collect(),
             ial: self.ial.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),

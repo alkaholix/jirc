@@ -1535,6 +1535,7 @@ mod tests {
                     ("voiced".into(), "+".into()),
                     ("plain".into(), String::new()),
                 ],
+                ..Default::default()
             }],
             ial: vec![],
         };
@@ -1578,6 +1579,52 @@ mod tests {
             echoed,
             vec!["op-is-op", "plain-not-op", "voiced-ok", "plain-reg", "ison-ok", "ischan-ok", "bitand"]
         );
+    }
+
+    #[test]
+    fn isban_checks_channel_ban_list() {
+        use crate::irc::state::{ChannelView, StateSnapshot};
+        let snap = StateSnapshot {
+            nick: "me".into(),
+            channels: vec![ChannelView {
+                name: "#a".into(),
+                bans: vec!["*!*@evil.example".into(), "baddie!*@*".into()],
+                ..Default::default()
+            }],
+            ial: vec![],
+        };
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(snap),
+        };
+        let engine = ScriptEngine::new();
+        engine.load(
+            "on *:TEXT:*:#:{
+              if (nick!user@evil.example isban #a) { /echo masked }
+              if (baddie!x@y isban #a) { /echo baddie }
+              if (good!user@host isban #a) { /echo should-not }
+            }",
+        );
+        let vars = EventVars {
+            nick: "x".into(),
+            chan: "#a".into(),
+            target: "#a".into(),
+            text: "hi".into(),
+            params: vec!["hi".into()],
+            ..Default::default()
+        };
+        let actions = engine.dispatch_event(&rctx, "TEXT", vars);
+        let echoed: Vec<&str> = actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::Echo { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(echoed, vec!["masked", "baddie"]);
     }
 
     #[test]
