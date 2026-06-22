@@ -424,6 +424,30 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             format!("{},{},{},{}", is.chanmodes_a, is.chanmodes_b, is.chanmodes_c, is.chanmodes_d)
         }
         "chantypes" => rt.state.isupport.chan_types.clone(),
+        // $replacex (single-pass, non-recursive replace of from/to pairs).
+        "replacex" => {
+            let s = a(0);
+            let pairs: Vec<(String, String)> = if args.len() > 1 {
+                args[1..]
+                    .chunks(2)
+                    .filter(|c| c.len() == 2)
+                    .map(|c| (c[0].clone(), c[1].clone()))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            replacex(&s, &pairs)
+        }
+        // $powmod(B,E,M) — modular exponentiation (modular inverse for negative E).
+        "powmod" => powmod(
+            a(0).trim().parse().unwrap_or(0),
+            a(1).trim().parse().unwrap_or(0),
+            a(2).trim().parse().unwrap_or(0),
+        ),
+        // Our strings are already UTF-8, so $utfencode/$utfdecode are identity.
+        "utfencode" | "utfdecode" => a(0),
+        // $ticksqpc — high-resolution counter (process-relative nanoseconds).
+        "ticksqpc" => process_start().elapsed().as_nanos().to_string(),
         "gettok" => {
             let sep = sep_code(&a(2));
             let text = a(0);
@@ -1175,11 +1199,94 @@ fn comma_format(n: i64) -> String {
     }
 }
 
-/// Milliseconds since this process started (for `$ticks` — scripts use deltas).
-fn ticks() -> u64 {
+/// Monotonic clock origin shared by `$ticks` and `$ticksqpc`.
+fn process_start() -> std::time::Instant {
     use std::sync::OnceLock;
     static START: OnceLock<std::time::Instant> = OnceLock::new();
-    START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64
+    *START.get_or_init(std::time::Instant::now)
+}
+
+/// Milliseconds since this process started (for `$ticks` — scripts use deltas).
+fn ticks() -> u64 {
+    process_start().elapsed().as_millis() as u64
+}
+
+fn replacex(s: &str, pairs: &[(String, String)]) -> String {
+    if pairs.is_empty() {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    let mut rest = s;
+    'outer: while !rest.is_empty() {
+        for (from, to) in pairs {
+            let fl = from.len();
+            if fl > 0
+                && rest.len() >= fl
+                && rest.is_char_boundary(fl)
+                && rest.as_bytes()[..fl].eq_ignore_ascii_case(from.as_bytes())
+            {
+                out.push_str(to);
+                rest = &rest[fl..];
+                continue 'outer;
+            }
+        }
+        let ch = rest.chars().next().unwrap();
+        out.push(ch);
+        rest = &rest[ch.len_utf8()..];
+    }
+    out
+}
+
+fn modpow(mut base: u128, mut exp: u128, m: u128) -> u128 {
+    if m <= 1 {
+        return 0;
+    }
+    let mut result = 1u128;
+    base %= m;
+    while exp > 0 {
+        if exp & 1 == 1 {
+            result = result * base % m;
+        }
+        exp >>= 1;
+        base = base * base % m;
+    }
+    result
+}
+
+fn modinv(a: i128, m: i128) -> Option<i128> {
+    let (mut old_r, mut r) = (a.rem_euclid(m), m);
+    let (mut old_s, mut s) = (1i128, 0i128);
+    while r != 0 {
+        let q = old_r / r;
+        let nr = old_r - q * r;
+        old_r = r;
+        r = nr;
+        let ns = old_s - q * s;
+        old_s = s;
+        s = ns;
+    }
+    if old_r == 1 {
+        Some(old_s.rem_euclid(m))
+    } else {
+        None
+    }
+}
+
+/// $powmod(B,E,M) = B^E mod M; for negative E, the modular inverse is used.
+/// Inputs are i64 so the u128 products in modpow cannot overflow.
+fn powmod(b: i64, e: i64, m: i64) -> String {
+    if m <= 0 {
+        return String::new();
+    }
+    let (m128, b128) = (m as i128, b as i128);
+    if e >= 0 {
+        modpow(b128.rem_euclid(m128) as u128, e as u128, m as u128).to_string()
+    } else {
+        match modinv(b128, m128) {
+            Some(inv) => modpow(inv as u128, (-(e as i128)) as u128, m as u128).to_string(),
+            None => String::new(),
+        }
+    }
 }
 
 /// Formats a unixtime `ts` in local time using a mIRC format string ($asctime).
@@ -1561,6 +1668,12 @@ mod tests {
         assert_eq!(id("prefix", &[]), "(qaohv)~&@%+");
         assert_eq!(id("chantypes", &[]), "#&!+");
         assert_eq!(id("chanmodes", &[]), "beI,k,l,imnpstrS");
+        // $replacex single-pass (a->b is NOT then matched by b->c), $powmod, $utf
+        assert_eq!(id("replacex", &["hello", "l", "L"]), "heLLo");
+        assert_eq!(id("replacex", &["abc", "a", "b", "b", "c"]), "bcc");
+        assert_eq!(id("powmod", &["4", "13", "497"]), "445");
+        assert_eq!(id("utfencode", &["hi"]), "hi");
+        assert!(id("ticksqpc", &[]).parse::<u64>().is_ok());
         // `.deg` needs the property, so call eval_ident directly — this is after
         // the `id` closure's final use, so its borrow of `rt` has ended.
         assert_eq!(eval_ident(&mut rt, "sin", &["90".into()], "deg"), "1");
