@@ -3,6 +3,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::eval::{eval_bool_public, wildcard_match, Runtime, SOCK_BR_KEY};
+use sha2::Digest; // brings the Digest trait into scope for Md5/Sha1/Sha2 too
 
 /// Evaluates `$name(args...)` with an optional `.property` suffix (empty when
 /// none). Args are already expanded.
@@ -327,6 +328,19 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             }
             fmt_round6(v)
         }
+        // Hashing — $md5(value,[N]): N = 0 plain text (default), 2 filename. N=1
+        // (&binvar) is treated as text since the engine has no binary variables.
+        "md5" | "sha1" | "sha256" | "sha384" | "sha512" => {
+            let data = hash_input(rt, &a(0), &a(1));
+            match name {
+                "md5" => hex_of(md5::Md5::digest(&data)),
+                "sha1" => hex_of(sha1::Sha1::digest(&data)),
+                "sha256" => hex_of(sha2::Sha256::digest(&data)),
+                "sha384" => hex_of(sha2::Sha384::digest(&data)),
+                _ => hex_of(sha2::Sha512::digest(&data)),
+            }
+        }
+        "crc" => format!("{:08x}", crc32fast::hash(&hash_input(rt, &a(0), &a(1)))),
         "gettok" => {
             let sep = sep_code(&a(2));
             let text = a(0);
@@ -1213,6 +1227,21 @@ fn fmt_round6(n: f64) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
+/// Input bytes for $md5/$sha*/$crc: N=2 reads file contents (sandboxed); any
+/// other N treats `value` as plain text.
+fn hash_input(rt: &Runtime, value: &str, n: &str) -> Vec<u8> {
+    if n == "2" {
+        std::fs::read(super::eval::sandbox_path(&rt.data_dir, value)).unwrap_or_default()
+    } else {
+        value.as_bytes().to_vec()
+    }
+}
+
+/// Lowercase hex of a digest/byte slice.
+fn hex_of(bytes: impl AsRef<[u8]>) -> String {
+    bytes.as_ref().iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// Evaluates a simple arithmetic expression (+ - * / %, parens).
 fn calc(expr: &str) -> Option<f64> {
     let toks: Vec<char> = expr.chars().filter(|c| !c.is_whitespace()).collect();
@@ -1394,6 +1423,14 @@ mod tests {
         assert_eq!(id("log10", &["1000"]), "3");
         assert_eq!(id("pi", &[]), "3.14159265358979323846");
         assert_eq!(id("cos", &["0"]), "1");
+        // hashing (known test vectors)
+        assert_eq!(id("md5", &["abc"]), "900150983cd24fb0d6963f7d28e17f72");
+        assert_eq!(id("sha1", &["abc"]), "a9993e364706816aba3e25717850c26c9cd0d89d");
+        assert_eq!(
+            id("sha256", &["abc"]),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(id("crc", &["123456789"]), "cbf43926");
         // `.deg` needs the property, so call eval_ident directly — this is after
         // the `id` closure's final use, so its borrow of `rt` has ended.
         assert_eq!(eval_ident(&mut rt, "sin", &["90".into()], "deg"), "1");
