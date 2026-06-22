@@ -331,7 +331,7 @@ out of scope.
 - [ ] `$portable`
 - [ ] `$portfree`
 - [x] `$pos`
-- [ ] `$powmod`
+- [x] `$powmod`
 - [x] `$prefix`
 - [ ] `$prop`
 - [ ] `$protect`
@@ -355,7 +355,7 @@ out of scope.
 - [x] `$remove`
 - [x] `$remtok`
 - [x] `$replace`
-- [ ] `$replacex`
+- [x] `$replacex`
 - [x] `$reptok`  ·  [x] `$lastpos` *(Nth-from-last `$pos`)*
 - [ ] `$result`
 - [ ] `$rgb`
@@ -416,7 +416,7 @@ out of scope.
 - [x] `$target`
 - [ ] `$tempfn`
 - [x] `$ticks` *(ms since process start)*
-- [ ] `$ticksqpc`
+- [x] `$ticksqpc`
 - [x] `$time`
 - [ ] `$timer`
 - [ ] `$timestamp`
@@ -437,8 +437,8 @@ out of scope.
 - [ ] `$url`
 - [ ] `$urlget`
 - [ ] `$usermode`
-- [ ] `$utfdecode`
-- [ ] `$utfencode`
+- [x] `$utfdecode`
+- [x] `$utfencode`
 - [ ] `$v1`
 - [ ] `$v2`
 - [ ] `$var`
