@@ -169,8 +169,9 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             take_right(&a(0), n)
         }
         "mid" => {
+            // $mid(text, S, N) -> N chars from position S; N=0 (or absent) = to end.
             let start: usize = a(1).parse().unwrap_or(1);
-            let count: usize = a(2).parse().unwrap_or(usize::MAX);
+            let count = a(2).parse::<usize>().ok().filter(|&c| c > 0).unwrap_or(usize::MAX);
             a(0)
                 .chars()
                 .skip(start.saturating_sub(1))
@@ -327,33 +328,112 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "sockbr" => rt.vars.get(SOCK_BR_KEY).cloned().unwrap_or_else(|| "0".to_string()),
         "sockerr" => "0".to_string(),
         "replace" => {
-            // $replace(text, from, to)
-            if a(1).is_empty() {
-                a(0)
-            } else {
-                a(0).replace(&a(1), &a(2))
+            // $replace(text, from1, to1, from2, to2, ...) -> sequential replaces.
+            let mut text = a(0);
+            let mut i = 1;
+            while i + 1 < args.len() {
+                if !args[i].is_empty() {
+                    text = text.replace(args[i].as_str(), args[i + 1].as_str());
+                }
+                i += 2;
             }
+            text
         }
         "remove" => {
-            if a(1).is_empty() {
-                a(0)
+            // $remove(text, substr1, substr2, ...) -> remove all of each.
+            let mut text = a(0);
+            for s in args.iter().skip(1).filter(|s| !s.is_empty()) {
+                text = text.replace(s.as_str(), "");
+            }
+            text
+        }
+        "instok" => {
+            // $instok(text, token, N, C) -> insert token at the Nth position.
+            let sep = sep_code(&a(3));
+            let mut toks: Vec<String> = if a(0).is_empty() {
+                Vec::new()
             } else {
-                a(0).replace(&a(1), "")
+                a(0).split(sep).map(String::from).collect()
+            };
+            let n = a(2).parse::<usize>().unwrap_or(1).max(1);
+            let idx = (n - 1).min(toks.len());
+            toks.insert(idx, a(1));
+            toks.join(&sep.to_string())
+        }
+        "reptok" => {
+            // $reptok(text, token, new, N, C) -> replace the Nth matching token
+            // (N=0 -> all) with `new`.
+            let sep = sep_code(&a(4));
+            let token = a(1);
+            let new = a(2);
+            let n: usize = a(3).parse().unwrap_or(1);
+            let mut count = 0usize;
+            let out: Vec<String> = a(0)
+                .split(sep)
+                .map(|t| {
+                    if t == token {
+                        count += 1;
+                        if n == 0 || count == n {
+                            return new.clone();
+                        }
+                    }
+                    t.to_string()
+                })
+                .collect();
+            out.join(&sep.to_string())
+        }
+        "lastpos" => {
+            // $lastpos(text, string, N) -> position of the Nth-from-last
+            // occurrence (default last); 0 if not found.
+            let needle = a(1);
+            let hay = a(0);
+            if needle.is_empty() {
+                "0".to_string()
+            } else {
+                let n = a(2).parse::<usize>().unwrap_or(1).max(1);
+                let positions: Vec<usize> = hay.match_indices(&needle).map(|(i, _)| i).collect();
+                if positions.len() >= n {
+                    let byte_idx = positions[positions.len() - n];
+                    (hay[..byte_idx].chars().count() + 1).to_string()
+                } else {
+                    "0".to_string()
+                }
             }
         }
         "pos" => {
-            // 1-based position of needle in haystack, 0 if absent.
-            match a(0).find(&a(1)) {
-                Some(byte_idx) => (a(0)[..byte_idx].chars().count() + 1).to_string(),
-                None => "0".to_string(),
+            // $pos(text, string, N) -> 1-based position of the Nth occurrence
+            // (default 1st); 0 if not found.
+            let needle = a(1);
+            let hay = a(0);
+            let n = a(2).parse::<usize>().unwrap_or(1).max(1);
+            if needle.is_empty() {
+                "0".to_string()
+            } else {
+                let mut from = 0usize;
+                let mut found = 0usize;
+                let mut result = 0usize;
+                while let Some(rel) = hay.get(from..).and_then(|h| h.find(&needle)) {
+                    let byte_idx = from + rel;
+                    found += 1;
+                    if found == n {
+                        result = hay[..byte_idx].chars().count() + 1;
+                        break;
+                    }
+                    from = byte_idx + needle.len();
+                }
+                result.to_string()
             }
         }
         "count" => {
-            if a(1).is_empty() {
-                "0".to_string()
-            } else {
-                a(0).matches(&a(1)).count().to_string()
-            }
+            // $count(text, substr1, substr2, ...) -> total occurrences of all.
+            let hay = a(0);
+            let total: usize = args
+                .iter()
+                .skip(1)
+                .filter(|s| !s.is_empty())
+                .map(|s| hay.matches(s.as_str()).count())
+                .sum();
+            total.to_string()
         }
         "reverse" => a(0).chars().rev().collect(),
         "abs" => a(0).parse::<f64>().map(|n| fmt_num(n.abs())).unwrap_or_default(),
@@ -979,6 +1059,22 @@ mod tests {
         assert_eq!(eval_ident(&mut rt, "count", &["banana".into(), "a".into()], ""), "3");
         assert_eq!(eval_ident(&mut rt, "reverse", &["abc".into()], ""), "cba");
         assert_eq!(eval_ident(&mut rt, "max", &["3".into(), "7".into()], ""), "7");
+        // mIRC-compat: Nth-occurrence $pos/$lastpos, N=0 $mid, multiple args.
+        let mut id = |n: &str, a: &[&str]| {
+            eval_ident(&mut rt, n, &a.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "")
+        };
+        assert_eq!(id("pos", &["hello", "l", "2"]), "4");
+        assert_eq!(id("pos", &["hello", "l", "3"]), "0");
+        assert_eq!(id("lastpos", &["hello", "l"]), "4");
+        assert_eq!(id("lastpos", &["hello", "l", "2"]), "3");
+        assert_eq!(id("mid", &["hello", "2", "0"]), "ello");
+        assert_eq!(id("mid", &["hello", "2", "3"]), "ell");
+        assert_eq!(id("count", &["banana", "a", "n"]), "5");
+        assert_eq!(id("replace", &["abcabc", "a", "X", "c", "Y"]), "XbYXbY");
+        assert_eq!(id("remove", &["abcabc", "a", "c"]), "bb");
+        assert_eq!(id("instok", &["a.b.c", "X", "2", "46"]), "a.X.b.c");
+        assert_eq!(id("reptok", &["a.b.a.c", "a", "X", "2", "46"]), "a.b.X.c");
+        assert_eq!(id("reptok", &["a.b.a", "a", "X", "0", "46"]), "X.b.X");
     }
 
     fn rt_for<'a>(
