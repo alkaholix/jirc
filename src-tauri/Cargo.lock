@@ -1898,6 +1898,7 @@ name = "jirc"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "futures-util",
  "irc-proto",
  "keyring",

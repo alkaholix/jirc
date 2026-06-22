@@ -160,8 +160,25 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         // $ticks -> milliseconds since this process started (deltas are what
         // scripts use; the absolute base differs from mIRC's OS-boot base).
         "ticks" => ticks().to_string(),
-        "time" => fmt_time(now_secs()),
-        "date" => fmt_date(now_secs()),
+        "time" => chrono::Local::now().format("%H:%M:%S").to_string(),
+        "date" => chrono::Local::now().format("%d/%m/%Y").to_string(),
+        "fulldate" => chrono::Local::now().format("%a %b %d %H:%M:%S %Y").to_string(),
+        "asctime" => {
+            // $asctime([N,] format) -> the ctime N (or now) in local time.
+            let (ts, fmt) = match a(0).parse::<i64>() {
+                Ok(n) => (n, a(1)),
+                Err(_) => (now_secs() as i64, a(0)),
+            };
+            let fmt = if fmt.is_empty() {
+                "ddd mmm dd HH:nn:ss yyyy".to_string()
+            } else {
+                fmt
+            };
+            asctime(ts, &fmt)
+        }
+        // mIRC: seconds your local time is behind GMT (positive west of GMT).
+        "timezone" => (-chrono::Local::now().offset().local_minus_utc()).to_string(),
+        "daylight" => "0".to_string(),
         "len" => a(0).chars().count().to_string(),
         "upper" => a(0).to_uppercase(),
         "lower" => a(0).to_lowercase(),
@@ -951,30 +968,67 @@ fn ticks() -> u64 {
     START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64
 }
 
-fn fmt_time(secs: u64) -> String {
-    let s = secs % 86400;
-    format!("{:02}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60)
+/// Formats a unixtime `ts` in local time using a mIRC format string ($asctime).
+fn asctime(ts: i64, mirc_fmt: &str) -> String {
+    use chrono::TimeZone;
+    match chrono::Local.timestamp_opt(ts, 0).single() {
+        Some(dt) => dt.format(&mirc_to_chrono(mirc_fmt)).to_string(),
+        None => String::new(),
+    }
 }
 
-fn fmt_date(secs: u64) -> String {
-    // Days since epoch -> Y/M/D (civil calendar, UTC).
-    let days = (secs / 86400) as i64;
-    let (y, m, d) = civil_from_days(days);
-    format!("{y:04}-{m:02}-{d:02}")
+/// Translates a mIRC date/time format into a chrono format string. Letter runs
+/// map to fields (y=year m=month d=day h=12h H=24h n=minutes s=seconds t=AM/PM
+/// z=timezone); other characters pass through literally — like mIRC, a literal
+/// letter that's also a code (e.g. the `y` in "Day") is interpreted as the code.
+fn mirc_to_chrono(fmt: &str) -> String {
+    let chars: Vec<char> = fmt.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if "ymdhHnstz".contains(c) {
+            let mut j = i;
+            while j < chars.len() && chars[j] == c {
+                j += 1;
+            }
+            out.push_str(mirc_token(c, j - i));
+            i = j;
+        } else {
+            if c == '%' {
+                out.push('%'); // escape literal % for chrono
+            }
+            out.push(c);
+            i += 1;
+        }
+    }
+    out
 }
 
-/// Howard Hinnant's days->civil algorithm.
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let z = z + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    (if m <= 2 { y + 1 } else { y }, m, d)
+fn mirc_token(c: char, n: usize) -> &'static str {
+    match (c, n) {
+        ('y', 2) => "%y",
+        ('y', _) => "%Y",
+        ('m', 1) => "%-m",
+        ('m', 2) => "%m",
+        ('m', 3) => "%b",
+        ('m', _) => "%B",
+        ('d', 1) => "%-d",
+        ('d', 2) => "%d",
+        ('d', 3) => "%a",
+        ('d', _) => "%A",
+        ('h', 1) => "%-I",
+        ('h', _) => "%I",
+        ('H', 1) => "%-H",
+        ('H', _) => "%H",
+        ('n', 1) => "%-M",
+        ('n', _) => "%M",
+        ('s', 1) => "%-S",
+        ('s', _) => "%S",
+        ('t', _) => "%p",
+        ('z', _) => "%Z",
+        _ => "",
+    }
 }
 
 fn take_left(s: &str, n: i64) -> String {
@@ -1192,6 +1246,21 @@ mod tests {
         assert_eq!(id("noqt", &["plain"]), "plain");
         assert_eq!(id("bytes", &["1234567"]), "1,234,567");
         assert!(id("envvar", &["0"]).parse::<usize>().map(|c| c > 0).unwrap_or(false));
+        // local time/date — format checks (the values are timezone-dependent).
+        let d = id("date", &[]);
+        assert!(d.len() == 10 && &d[2..3] == "/" && &d[5..6] == "/", "date={d}");
+        let t = id("time", &[]);
+        assert!(t.len() == 8 && &t[2..3] == ":" && &t[5..6] == ":", "time={t}");
+        assert!(!id("asctime", &["0", "yyyy"]).is_empty());
+    }
+
+    #[test]
+    fn mirc_format_translation() {
+        assert_eq!(mirc_to_chrono("yyyy-mm-dd"), "%Y-%m-%d");
+        assert_eq!(mirc_to_chrono("dd/mm/yyyy HH:nn:ss"), "%d/%m/%Y %H:%M:%S");
+        assert_eq!(mirc_to_chrono("ddd mmm dd"), "%a %b %d");
+        assert_eq!(mirc_to_chrono("h:nn tt"), "%-I:%M %p");
+        assert_eq!(mirc_to_chrono("yy"), "%y");
     }
 
     fn rt_for<'a>(
