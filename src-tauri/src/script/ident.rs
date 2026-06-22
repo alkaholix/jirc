@@ -596,6 +596,44 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 s
             }
         }
+        "noqt" => {
+            // $noqt(text) -> remove outer enclosing quotes.
+            let s = a(0);
+            if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
+                s[1..s.len() - 1].to_string()
+            } else {
+                s
+            }
+        }
+        "envvar" => {
+            // $envvar(name) -> env var value; $envvar(0) -> count; $envvar(N) -> Nth name.
+            let arg = a(0);
+            match arg.parse::<usize>() {
+                Ok(0) => std::env::vars().count().to_string(),
+                Ok(n) => std::env::vars().nth(n - 1).map(|(k, _)| k).unwrap_or_default(),
+                Err(_) => std::env::var(&arg).unwrap_or_default(),
+            }
+        }
+        "bytes" => {
+            // $bytes(N) -> comma-formatted; $bytes(N).suf -> human-readable suffix.
+            let n: f64 = a(0).parse().unwrap_or(0.0);
+            if prop.eq_ignore_ascii_case("suf") {
+                let units = ["", "K", "M", "G", "T"];
+                let mut v = n.abs();
+                let mut i = 0;
+                while v >= 1024.0 && i < units.len() - 1 {
+                    v /= 1024.0;
+                    i += 1;
+                }
+                if i == 0 {
+                    (n as i64).to_string()
+                } else {
+                    format!("{:.2}{}", v, units[i])
+                }
+            } else {
+                comma_format(n as i64)
+            }
+        }
         "strip" => strip_codes(&a(0)),
         "regex" => {
             // $regex([name,] text, pattern) -> match count; stores the first
@@ -889,6 +927,23 @@ fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+/// Formats an integer with thousands separators (for `$bytes`).
+fn comma_format(n: i64) -> String {
+    let s = n.unsigned_abs().to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    if n < 0 {
+        format!("-{out}")
+    } else {
+        out
+    }
+}
+
 /// Milliseconds since this process started (for `$ticks` — scripts use deltas).
 fn ticks() -> u64 {
     use std::sync::OnceLock;
@@ -1133,6 +1188,10 @@ mod tests {
         assert_eq!(id("longfn", &["foo.txt"]), "foo.txt");
         assert!(id("ticks", &[]).parse::<u64>().is_ok());
         assert!(id("gmt", &[]).parse::<u64>().is_ok());
+        assert_eq!(id("noqt", &["\"hello world\""]), "hello world");
+        assert_eq!(id("noqt", &["plain"]), "plain");
+        assert_eq!(id("bytes", &["1234567"]), "1,234,567");
+        assert!(id("envvar", &["0"]).parse::<usize>().map(|c| c > 0).unwrap_or(false));
     }
 
     fn rt_for<'a>(
