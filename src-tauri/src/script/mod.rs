@@ -1659,6 +1659,33 @@ mod tests {
     }
 
     #[test]
+    fn hget_property_iteration() {
+        let dir = std::env::temp_dir().join(format!("jirc-hprop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: dir,
+            state: std::sync::Arc::new(Default::default()),
+        };
+        let engine = ScriptEngine::new();
+        // .item / .data iterate the table in sorted-key order; $hget(h,0).item is
+        // the count. Exercises the `.property` suffix parser end-to-end.
+        engine.load(
+            "alias t { hmake h | hadd h apple red | hadd h banana yellow | /echo n=$hget(h,0).item i1=$hget(h,1).item d1=$hget(h,1).data i2=$hget(h,2).item }",
+        );
+        let actions = engine.run_alias(&rctx, "#c", "t", "");
+        assert_eq!(
+            actions,
+            vec![Action::Echo {
+                target: "#c".into(),
+                text: "n=2 i1=apple d1=red i2=banana".into(),
+            }]
+        );
+    }
+
+    #[test]
     fn hash_save_load_and_find() {
         let dir = std::env::temp_dir().join(format!("jirc-htest-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

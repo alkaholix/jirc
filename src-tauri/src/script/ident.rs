@@ -4,8 +4,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::eval::{eval_bool_public, wildcard_match, Runtime, SOCK_BR_KEY};
 
-/// Evaluates `$name(args...)`. Args are already expanded.
-pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String]) -> String {
+/// Evaluates `$name(args...)` with an optional `.property` suffix (empty when
+/// none). Args are already expanded.
+pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> String {
     let a = |i: usize| args.get(i).cloned().unwrap_or_default();
     match name.to_ascii_lowercase().as_str() {
         "me" => rt.my_nick.to_string(),
@@ -253,13 +254,34 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String]) -> String {
             a(0).split(sep).count().to_string()
         }
         "hget" => {
-            // $hget(table) -> the table name if it exists (else empty), so
-            // `if (!$hget(table))` works; $hget(table, item) -> the item value.
+            // $hget(table) -> table name if it exists; $hget(table, item) -> value;
+            // $hget(table, N).item / .data -> Nth key name / value in sorted order
+            // (N=0 -> the item count), for iterating a table.
             if args.len() < 2 {
                 if rt.hashes.contains_key(&a(0)) {
                     a(0)
                 } else {
                     String::new()
+                }
+            } else if prop.eq_ignore_ascii_case("item") || prop.eq_ignore_ascii_case("data") {
+                match rt.hashes.get(&a(0)) {
+                    Some(h) => {
+                        let mut keys: Vec<&String> = h.keys().collect();
+                        keys.sort();
+                        let n: usize = a(1).parse().unwrap_or(0);
+                        if n == 0 {
+                            keys.len().to_string()
+                        } else if let Some(k) = keys.get(n - 1) {
+                            if prop.eq_ignore_ascii_case("item") {
+                                (*k).clone()
+                            } else {
+                                h.get(*k).cloned().unwrap_or_default()
+                            }
+                        } else {
+                            String::new()
+                        }
+                    }
+                    None => String::new(),
                 }
             } else {
                 rt.hashes
@@ -935,12 +957,12 @@ mod tests {
             data_dir: std::env::temp_dir(),
             state: std::sync::Arc::new(Default::default()),
         };
-        assert_eq!(eval_ident(&mut rt, "replace", &["abcabc".into(), "b".into(), "X".into()]), "aXcaXc");
-        assert_eq!(eval_ident(&mut rt, "remove", &["abcabc".into(), "a".into()]), "bcbc");
-        assert_eq!(eval_ident(&mut rt, "pos", &["hello".into(), "l".into()]), "3");
-        assert_eq!(eval_ident(&mut rt, "count", &["banana".into(), "a".into()]), "3");
-        assert_eq!(eval_ident(&mut rt, "reverse", &["abc".into()]), "cba");
-        assert_eq!(eval_ident(&mut rt, "max", &["3".into(), "7".into()]), "7");
+        assert_eq!(eval_ident(&mut rt, "replace", &["abcabc".into(), "b".into(), "X".into()], ""), "aXcaXc");
+        assert_eq!(eval_ident(&mut rt, "remove", &["abcabc".into(), "a".into()], ""), "bcbc");
+        assert_eq!(eval_ident(&mut rt, "pos", &["hello".into(), "l".into()], ""), "3");
+        assert_eq!(eval_ident(&mut rt, "count", &["banana".into(), "a".into()], ""), "3");
+        assert_eq!(eval_ident(&mut rt, "reverse", &["abc".into()], ""), "cba");
+        assert_eq!(eval_ident(&mut rt, "max", &["3".into(), "7".into()], ""), "7");
     }
 
     fn rt_for<'a>(
@@ -977,7 +999,7 @@ mod tests {
         let mut hashes = HashMap::new();
         let mut rt = rt_for(&script, &mut vars, &mut hashes);
         let mut e = |n: &str, args: &[&str]| {
-            eval_ident(&mut rt, n, &args.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+            eval_ident(&mut rt, n, &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "")
         };
         assert_eq!(e("istok", &["a b c", "b", "32"]), "$true");
         assert_eq!(e("istok", &["a b c", "z", "32"]), "$false");
@@ -1033,7 +1055,7 @@ mod tests {
         let mut hashes = HashMap::new();
         let mut rt = rt_for(&script, &mut vars, &mut hashes);
         let mut e = |n: &str, args: &[&str]| {
-            eval_ident(&mut rt, n, &args.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+            eval_ident(&mut rt, n, &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "")
         };
         assert_eq!(e("base", &["255", "10", "16"]), "FF");
         assert_eq!(e("round", &["3.14159", "2"]), "3.14");

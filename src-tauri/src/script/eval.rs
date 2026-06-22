@@ -978,16 +978,32 @@ impl<'a> Runtime<'a> {
             return "$".to_string();
         }
         // Optional (args).
-        let args = if chars.get(*i) == Some(&'(') {
+        let (args, had_parens) = if chars.get(*i) == Some(&'(') {
             let inner = read_balanced(chars, i);
-            split_args(&inner)
-                .into_iter()
-                .map(|a| self.expand(&a))
-                .collect()
+            (
+                split_args(&inner).into_iter().map(|a| self.expand(&a)).collect::<Vec<_>>(),
+                true,
+            )
         } else {
-            Vec::new()
+            (Vec::new(), false)
         };
-        ident::eval_ident(self, &name, &args)
+        // Optional `.property` suffix — only after `(args)`, matching mIRC's
+        // `$sock(x).port` / `$hget(t,N).item`. Restricting it to the
+        // parenthesised form avoids swallowing a literal `.word` after a bare
+        // identifier (e.g. `$nick.example`).
+        let prop = if had_parens && chars.get(*i) == Some(&'.') {
+            let mut j = *i + 1;
+            let p = read_name(chars, &mut j);
+            if p.is_empty() {
+                String::new()
+            } else {
+                *i = j;
+                p
+            }
+        } else {
+            String::new()
+        };
+        ident::eval_ident(self, &name, &args, &prop)
     }
 
     /// Resolves a parameter spec: `$N` (`end = Some(N)`), `$N-` (`end = None`,
