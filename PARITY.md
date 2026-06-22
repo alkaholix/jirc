@@ -79,8 +79,8 @@ out of scope.
 - [ ] `$cd`
 - [x] `$ceil`
 - [x] `$chan`
-- [ ] `$chanmodes`
-- [ ] `$chantypes` *(parsed internally from ISUPPORT, not exposed as identifier)*
+- [x] `$chanmodes`
+- [x] `$chantypes`
 - [ ] `$chat`
 - [x] `$chr`
 - [ ] `$cid`
@@ -332,7 +332,7 @@ out of scope.
 - [ ] `$portfree`
 - [x] `$pos`
 - [ ] `$powmod`
-- [ ] `$prefix`
+- [x] `$prefix`
 - [ ] `$prop`
 - [ ] `$protect`
 - [x] `$puttok`
