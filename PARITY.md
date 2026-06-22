@@ -35,7 +35,7 @@ out of scope.
 
 - [ ] `$abook`
 - [x] `$abs`
-- [ ] `$acos`
+- [x] `$acos`
 - [ ] `$active`
 - [ ] `$activecid`
 - [ ] `$activewid`
@@ -55,9 +55,9 @@ out of scope.
 - [ ] `$argon2`
 - [x] `$asc`
 - [x] `$asctime` *(local time; mIRC format codes → chrono)*
-- [ ] `$asin`
-- [ ] `$atan`
-- [ ] `$atan2`
+- [x] `$asin`
+- [x] `$atan`
+- [x] `$atan2`
 - [ ] `$avoice`
 - [ ] `$away`
 - [ ] `$awaymsg`
@@ -75,7 +75,7 @@ out of scope.
 - [x] `$calc`
 - [ ] `$caller`
 - [ ] `$cb`
-- [ ] `$cbrt`
+- [x] `$cbrt`
 - [ ] `$cd`
 - [x] `$ceil`
 - [x] `$chan`
@@ -99,8 +99,8 @@ out of scope.
 - [ ] `$compact`
 - [ ] `$compress`
 - [ ] `$comval`
-- [ ] `$cos`
-- [ ] `$cosh`
+- [x] `$cos`
+- [x] `$cosh`
 - [x] `$count`
 - [x] `$cr`
 - [ ] `$crc`
@@ -193,7 +193,7 @@ out of scope.
 - [ ] `$hotline`
 - [ ] `$hotlinepos`
 - [ ] `$hotp`
-- [ ] `$hypot`
+- [x] `$hypot`
 - [x] `$ial`
 - [ ] `$ialchan`
 - [ ] `$ialmark`
@@ -250,9 +250,9 @@ out of scope.
 - [ ] `$link`
 - [ ] `$lock`
 - [ ] `$locked`
-- [ ] `$log`
-- [ ] `$log10`
-- [ ] `$log2`
+- [x] `$log`
+- [x] `$log10`
+- [x] `$log2`
 - [ ] `$logdir`
 - [ ] `$logstamp`
 - [ ] `$logstampfmt`
@@ -323,7 +323,7 @@ out of scope.
 - [ ] `$parseutf`
 - [ ] `$passivedcc`
 - [ ] `$pbkdf2`
-- [ ] `$pi`
+- [x] `$pi`
 - [ ] `$pic`
 - [ ] `$play`
 - [ ] `$pnick`
@@ -380,7 +380,7 @@ out of scope.
 - [x] `$shortfn` *(pass-through)*
 - [ ] `$show`
 - [ ] `$signal`
-- [ ] `$sin`
+- [x] `$sin`
 - [x] `$site`
 - [ ] `$sline`
 - [ ] `$snick`
@@ -393,7 +393,7 @@ out of scope.
 - [x] `$sorttok`
 - [ ] `$sound`
 - [ ] `$speak`
-- [ ] `$sqrt`
+- [x] `$sqrt`
 - [ ] `$sreq`
 - [ ] `$ssl`
 - [ ] `$sslcertvalid`
@@ -411,8 +411,8 @@ out of scope.
 - [ ] `$submenu`
 - [ ] `$switchbar`
 - [ ] `$sysdir`
-- [ ] `$tan`
-- [ ] `$tanh`
+- [x] `$tan`
+- [x] `$tanh`
 - [x] `$target`
 - [ ] `$tempfn`
 - [x] `$ticks` *(ms since process start)*
