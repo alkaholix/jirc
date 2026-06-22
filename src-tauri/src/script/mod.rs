@@ -1238,8 +1238,8 @@ mod tests {
         let snap = StateSnapshot {
             nick: "me".into(),
             channels: vec![
-                ChannelView { name: "#a".into(), nicks: vec!["me".into(), "bob".into()] },
-                ChannelView { name: "#b".into(), nicks: vec!["me".into()] },
+                ChannelView { name: "#a".into(), nicks: vec!["me".into(), "bob".into()], ..Default::default() },
+                ChannelView { name: "#b".into(), nicks: vec!["me".into()], ..Default::default() },
             ],
             ..Default::default()
         };
@@ -1374,6 +1374,64 @@ mod tests {
                 target: "#c".into(),
                 text: "a=~bob@host.example.com s=host.example.com f=bob!~bob@host.example.com w=*!*@host.example.com t=[\t]c=[\r]l=[\n]nl=[\r\n]".into(),
             }]
+        );
+    }
+
+    #[test]
+    fn list_operators_use_channel_state() {
+        use crate::irc::state::{ChannelView, StateSnapshot};
+        let snap = StateSnapshot {
+            nick: "me".into(),
+            channels: vec![ChannelView {
+                name: "#a".into(),
+                nicks: vec!["op".into(), "voiced".into(), "plain".into()],
+                members: vec![
+                    ("op".into(), "@".into()),
+                    ("voiced".into(), "+".into()),
+                    ("plain".into(), String::new()),
+                ],
+            }],
+            ial: vec![],
+        };
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(snap),
+        };
+        let engine = ScriptEngine::new();
+        engine.load(
+            "on *:TEXT:*:#:{
+              if (op isop #a) { /echo op-is-op }
+              if (!plain isop #a) { /echo plain-not-op }
+              if (voiced isvoice #a) { /echo voiced-ok }
+              if (plain isreg #a) { /echo plain-reg }
+              if (op ison #a) { /echo ison-ok }
+              if (#a ischan) { /echo ischan-ok }
+              if (ghost isop #a) { /echo should-not-fire }
+              if (6 & 2) { /echo bitand }
+            }",
+        );
+        let vars = EventVars {
+            nick: "op".into(),
+            chan: "#a".into(),
+            target: "#a".into(),
+            text: "hi".into(),
+            params: vec!["hi".into()],
+            ..Default::default()
+        };
+        let actions = engine.dispatch_event(&rctx, "TEXT", vars);
+        let echoed: Vec<&str> = actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::Echo { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            echoed,
+            vec!["op-is-op", "plain-not-op", "voiced-ok", "plain-reg", "ison-ok", "ischan-ok", "bitand"]
         );
     }
 
@@ -1539,8 +1597,8 @@ mod tests {
         let snap = StateSnapshot {
             nick: "me".into(),
             channels: vec![
-                ChannelView { name: "#a".into(), nicks: vec!["me".into(), "bob".into()] },
-                ChannelView { name: "#b".into(), nicks: vec!["me".into()] },
+                ChannelView { name: "#a".into(), nicks: vec!["me".into(), "bob".into()], ..Default::default() },
+                ChannelView { name: "#b".into(), nicks: vec!["me".into()], ..Default::default() },
             ],
             ial: vec![("bob".into(), "bob!user@host.example.com".into())],
             ..Default::default()

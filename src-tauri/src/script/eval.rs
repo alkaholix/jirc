@@ -988,7 +988,10 @@ impl<'a> Runtime<'a> {
 
     fn eval_cond(&mut self, cond: &str) -> bool {
         let expanded = self.expand(cond);
-        eval_bool(&expanded)
+        // Clone the Arc (cheap) so the leaf resolver can read channel state
+        // without borrowing `self` across the evaluation.
+        let state = self.state.clone();
+        eval_bool_with(&expanded, &|term| state_op(&state, term))
     }
 }
 
@@ -1158,14 +1161,23 @@ pub fn eval_bool_public(s: &str) -> bool {
 }
 
 fn eval_bool(s: &str) -> bool {
+    eval_bool_with(s, &|_| None)
+}
+
+/// Boolean evaluator with an optional stateful leaf resolver. Each leaf term
+/// (after `||`/`&&` splitting, paren and `!` stripping) is offered to `leaf`
+/// first; `Some(b)` overrides the built-in comparison. This is how the
+/// state-aware operators (`isop`, `ison`, `ischan`, …) — which the pure
+/// comparator can't evaluate — are resolved against the channel snapshot.
+fn eval_bool_with(s: &str, leaf: &dyn Fn(&str) -> Option<bool>) -> bool {
     let s = s.trim();
     if let Some(idx) = find_top(s, "||") {
-        return eval_bool(&s[..idx]) || eval_bool(&s[idx + 2..]);
+        return eval_bool_with(&s[..idx], leaf) || eval_bool_with(&s[idx + 2..], leaf);
     }
     if let Some(idx) = find_top(s, "&&") {
-        return eval_bool(&s[..idx]) && eval_bool(&s[idx + 2..]);
+        return eval_bool_with(&s[..idx], leaf) && eval_bool_with(&s[idx + 2..], leaf);
     }
-    eval_term(s)
+    eval_term_with(s, leaf)
 }
 
 /// Finds a top-level (paren-depth 0) occurrence of `op`.
@@ -1188,22 +1200,78 @@ fn find_top(s: &str, op: &str) -> Option<usize> {
     None
 }
 
-fn eval_term(s: &str) -> bool {
+fn eval_term_with(s: &str, leaf: &dyn Fn(&str) -> Option<bool>) -> bool {
     let s = s.trim();
     // Leading `!` negation: if (!%x), if (!$ident), if (!(a == b)).
     if let Some(rest) = s.strip_prefix('!') {
         // Don't mistake the `!=` operator for a negation prefix.
         if !rest.starts_with('=') {
-            return !eval_term(rest.trim());
+            return !eval_term_with(rest.trim(), leaf);
         }
     }
     let s = s.trim_start_matches('(').trim_end_matches(')').trim();
+    // Stripping wrapping parens may expose a leading `!`, e.g. `(!nick isop #)`.
+    if let Some(rest) = s.strip_prefix('!') {
+        if !rest.starts_with('=') {
+            return !eval_term_with(rest.trim(), leaf);
+        }
+    }
+    // State-aware operators (isop/ison/ischan/...) get first crack at the term.
+    if let Some(b) = leaf(s) {
+        return b;
+    }
     let toks: Vec<&str> = s.split_whitespace().collect();
     match toks.len() {
         0 => false,
         1 => truthy(toks[0]),
         2 => unary_op(toks[0], toks[1]),
         _ => compare(toks[0], toks[1], &toks[2..].join(" ")),
+    }
+}
+
+/// Resolves the state-aware list operators (those needing channel/member
+/// state). Operand order matches mSL: `<value> <op> <target>`. Returns `None`
+/// for any other term so the caller falls back to the pure comparison logic.
+/// Prefix chars assume the standard PREFIX set (~ owner, & admin, @ op,
+/// % halfop, + voice).
+fn state_op(state: &crate::irc::state::StateSnapshot, term: &str) -> Option<bool> {
+    let toks: Vec<&str> = term.split_whitespace().collect();
+    if toks.len() < 2 {
+        return None;
+    }
+    let a = toks[0];
+    let op = toks[1].to_ascii_lowercase();
+    let target = toks.get(2..).map(|r| r.join(" ")).unwrap_or_default();
+    // Is `nick` a member of `chan` holding `prefix` (None = any membership)?
+    let member_has = |chan: &str, nick: &str, prefix: Option<char>| -> bool {
+        match state.channels.iter().find(|c| c.name.eq_ignore_ascii_case(chan)) {
+            Some(c) => c.members.iter().any(|(n, pre)| {
+                n.eq_ignore_ascii_case(nick)
+                    && match prefix {
+                        Some(p) => pre.contains(p),
+                        None => true,
+                    }
+            }),
+            None => false,
+        }
+    };
+    match op.as_str() {
+        "ison" => Some(member_has(&target, a, None)),
+        "isop" => Some(member_has(&target, a, Some('@'))),
+        "ishop" => Some(member_has(&target, a, Some('%'))),
+        "isvoice" => Some(member_has(&target, a, Some('+'))),
+        "isowner" => Some(member_has(&target, a, Some('~'))),
+        "isadmin" => Some(member_has(&target, a, Some('&'))),
+        // `$nick isreg #chan` -> a member of the channel holding no prefix.
+        "isreg" => Some(
+            match state.channels.iter().find(|c| c.name.eq_ignore_ascii_case(&target)) {
+                Some(c) => c.members.iter().any(|(n, pre)| n.eq_ignore_ascii_case(a) && pre.is_empty()),
+                None => false,
+            },
+        ),
+        // `#chan ischan` -> are we on that channel?
+        "ischan" => Some(state.channels.iter().any(|c| c.name.eq_ignore_ascii_case(a))),
+        _ => None,
     }
 }
 
@@ -1264,6 +1332,11 @@ fn compare(a: &str, op: &str, b: &str) -> bool {
                     !multiple
                 }
             }
+            _ => false,
+        },
+        // `v1 & v2` -> their bitwise AND is non-zero (mIRC's `&` test).
+        "&" => match (a.parse::<i64>(), b.parse::<i64>()) {
+            (Ok(x), Ok(y)) => (x & y) != 0,
             _ => false,
         },
         "<" | ">" | "<=" | ">=" => match (a.parse::<f64>(), b.parse::<f64>()) {

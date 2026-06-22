@@ -231,6 +231,9 @@ pub struct ChannelView {
     pub name: String,
     /// Member nicks (without prefixes), in roster order.
     pub nicks: Vec<String>,
+    /// (nick, prefix chars) per member, e.g. `("bob", "@")`. Powers the
+    /// `isop`/`ishop`/`isvoice`/`ison`/`isreg`/... condition operators.
+    pub members: Vec<(String, String)>,
 }
 
 /// A snapshot of a connection's channel/member state, shared with the script
@@ -254,6 +257,7 @@ impl SessionState {
                 .map(|(name, ch)| ChannelView {
                     name: name.clone(),
                     nicks: ch.members.keys().cloned().collect(),
+                    members: ch.members.iter().map(|(n, p)| (n.clone(), p.clone())).collect(),
                 })
                 .collect(),
             ial: self.ial.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
