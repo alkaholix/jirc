@@ -77,6 +77,48 @@ pub struct EventVars {
 const STEP_LIMIT: u32 = 100_000;
 const STATUS: &str = "(status)";
 
+/// Synchronous socket operations the engine can call *during* a run, so
+/// `/socklisten` binds immediately and `$sock(name).port` is readable on the
+/// same line (like mIRC). The production backend is the SocketManager; tests use
+/// [`NoSockets`] or a fake. Names may be wildcards for the query methods.
+pub trait ScriptSockets: Send + Sync {
+    /// Binds a listening socket; returns the bound port (`port == 0` → OS-assigned).
+    fn listen(&self, name: &str, port: u16) -> Option<u16>;
+    /// Accepts the pending incoming connection into a socket named `name`.
+    fn accept(&self, name: &str) -> bool;
+    fn set_mark(&self, name: &str, mark: &str);
+    fn mark(&self, name: &str) -> String;
+    fn port(&self, name: &str) -> Option<u16>;
+    /// "listening" / "active" / "" — for `$sock(name).status`.
+    fn status(&self, name: &str) -> String;
+    /// Whether a socket matching `name` (possibly a wildcard) exists.
+    fn exists(&self, name: &str) -> bool;
+}
+
+/// A no-op socket backend (used in tests and before a real one is installed).
+pub struct NoSockets;
+impl ScriptSockets for NoSockets {
+    fn listen(&self, _: &str, _: u16) -> Option<u16> {
+        None
+    }
+    fn accept(&self, _: &str) -> bool {
+        false
+    }
+    fn set_mark(&self, _: &str, _: &str) {}
+    fn mark(&self, _: &str) -> String {
+        String::new()
+    }
+    fn port(&self, _: &str) -> Option<u16> {
+        None
+    }
+    fn status(&self, _: &str) -> String {
+        String::new()
+    }
+    fn exists(&self, _: &str) -> bool {
+        false
+    }
+}
+
 /// The execution context for a single alias/event run.
 pub struct Runtime<'a> {
     pub script: &'a Script,
@@ -99,6 +141,8 @@ pub struct Runtime<'a> {
     pub data_dir: std::path::PathBuf,
     /// Live channel/member snapshot for state-aware identifiers.
     pub state: std::sync::Arc<crate::irc::state::StateSnapshot>,
+    /// Synchronous socket backend for `/socklisten`/`/sockaccept`/`$sock(...)`.
+    pub sockets: std::sync::Arc<dyn ScriptSockets>,
 }
 
 impl<'a> Runtime<'a> {
@@ -271,6 +315,14 @@ impl<'a> Runtime<'a> {
                     self.actions.push(Action::SockClose { name });
                 }
             }
+            "socklisten" => self.cmd_socklisten(raw_args),
+            "sockaccept" => {
+                let name = self.expand(raw_args.trim());
+                if !name.is_empty() {
+                    self.sockets.accept(&name);
+                }
+            }
+            "sockmark" => self.cmd_sockmark(raw_args),
             "sockread" => self.cmd_sockread(raw_args),
             "dialog" => self.cmd_dialog(raw_args),
             "did" => self.cmd_did(raw_args),
@@ -564,6 +616,28 @@ impl<'a> Runtime<'a> {
             data.extend_from_slice(b"\r\n");
         }
         self.actions.push(Action::SockWrite { name, data });
+    }
+
+    /// `/socklisten [-options] <name> [port]` — bind a listening socket. With no
+    /// (or 0) port the OS assigns one, readable via `$sock(name).port`.
+    fn cmd_socklisten(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        let mut toks = expanded.split_whitespace().filter(|t| !t.starts_with('-'));
+        if let Some(name) = toks.next() {
+            let port = toks.next().and_then(|p| p.parse::<u16>().ok()).unwrap_or(0);
+            self.sockets.listen(name, port);
+        }
+    }
+
+    /// `/sockmark <name> [text]` — set (or clear) a socket's mark, read back via
+    /// `$sock(name).mark`.
+    fn cmd_sockmark(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        let trimmed = expanded.trim();
+        let (name, mark) = trimmed.split_once(char::is_whitespace).unwrap_or((trimmed, ""));
+        if !name.is_empty() {
+            self.sockets.set_mark(name, mark.trim());
+        }
     }
 
     /// `/sockread <%var>` — inside `on SOCKREAD`, copies the current line into

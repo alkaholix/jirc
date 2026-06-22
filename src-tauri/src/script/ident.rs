@@ -308,6 +308,24 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             }
         }
         // Socket identifiers (used inside on SOCKOPEN/SOCKREAD/SOCKCLOSE).
+        "sock" => {
+            // $sock(name) -> the name if a matching socket exists (else empty),
+            // so `if ($sock(x))` works; $sock(name).port/.mark/.status read it.
+            let name = a(0);
+            match prop.to_ascii_lowercase().as_str() {
+                "" => {
+                    if rt.sockets.exists(&name) {
+                        name
+                    } else {
+                        String::new()
+                    }
+                }
+                "port" => rt.sockets.port(&name).map(|p| p.to_string()).unwrap_or_default(),
+                "mark" => rt.sockets.mark(&name),
+                "status" => rt.sockets.status(&name),
+                _ => String::new(),
+            }
+        }
         "sockname" => rt.event.chan.clone(),
         "sockbr" => rt.vars.get(SOCK_BR_KEY).cloned().unwrap_or_else(|| "0".to_string()),
         "sockerr" => "0".to_string(),
@@ -956,6 +974,7 @@ mod tests {
             goto: None,
             data_dir: std::env::temp_dir(),
             state: std::sync::Arc::new(Default::default()),
+            sockets: std::sync::Arc::new(crate::script::eval::NoSockets),
         };
         assert_eq!(eval_ident(&mut rt, "replace", &["abcabc".into(), "b".into(), "X".into()], ""), "aXcaXc");
         assert_eq!(eval_ident(&mut rt, "remove", &["abcabc".into(), "a".into()], ""), "bcbc");
@@ -987,6 +1006,7 @@ mod tests {
             goto: None,
             data_dir: std::env::temp_dir(),
             state: std::sync::Arc::new(Default::default()),
+            sockets: std::sync::Arc::new(crate::script::eval::NoSockets),
         }
     }
 

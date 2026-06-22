@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use ast::{PopupItem, Script};
-use eval::{wildcard_match, Action, EventVars, Runtime};
+use eval::{wildcard_match, Action, EventVars, NoSockets, Runtime, ScriptSockets};
 
 /// Connection context supplied by the caller for each run.
 pub struct RunCtx<'a> {
@@ -33,6 +33,7 @@ struct Inner {
     script: Script,
     vars: HashMap<String, String>,
     hashes: HashMap<String, HashMap<String, String>>,
+    sockets: std::sync::Arc<dyn ScriptSockets>,
 }
 
 impl Inner {
@@ -41,6 +42,7 @@ impl Inner {
             script: Script::default(),
             vars: HashMap::new(),
             hashes: HashMap::new(),
+            sockets: std::sync::Arc::new(NoSockets),
         }
     }
 }
@@ -61,6 +63,12 @@ impl ScriptEngine {
         ScriptEngine {
             inner: Mutex::new(Inner::empty()),
         }
+    }
+
+    /// Installs the (production) socket backend; called once at startup so the
+    /// engine can run `/socklisten`/`/sockaccept`/`$sock(...)` against real sockets.
+    pub fn set_sockets(&self, sockets: std::sync::Arc<dyn ScriptSockets>) {
+        self.inner.lock().unwrap().sockets = sockets;
     }
 
     /// Compiles the combined source of all loaded script files.
@@ -116,6 +124,7 @@ impl ScriptEngine {
             goto: None,
             data_dir: ctx.data_dir.clone(),
             state: ctx.state.clone(),
+            sockets: g.sockets.clone(),
         };
         eval_popup_labels(&mut rt, &raw)
     }
@@ -153,6 +162,7 @@ impl ScriptEngine {
             goto: None,
             data_dir: ctx.data_dir.clone(),
             state: ctx.state.clone(),
+            sockets: g.sockets.clone(),
         };
         rt.run(&alias.body);
         rt.actions
@@ -199,6 +209,7 @@ impl ScriptEngine {
             goto: None,
             data_dir: ctx.data_dir.clone(),
             state: ctx.state.clone(),
+            sockets: g.sockets.clone(),
         };
         rt.run(&body);
         rt.actions
@@ -247,6 +258,7 @@ impl ScriptEngine {
                 goto: None,
                 data_dir: ctx.data_dir.clone(),
                 state: ctx.state.clone(),
+                sockets: g.sockets.clone(),
             };
             rt.run(&ev.body);
             halted |= rt.halted;
@@ -1683,6 +1695,68 @@ mod tests {
                 text: "n=2 i1=apple d1=red i2=banana".into(),
             }]
         );
+    }
+
+    #[derive(Default)]
+    struct FakeSockets {
+        listened: std::sync::Mutex<Vec<(String, u16)>>,
+        accepted: std::sync::Mutex<Vec<String>>,
+        marks: std::sync::Mutex<HashMap<String, String>>,
+        ports: std::sync::Mutex<HashMap<String, u16>>,
+    }
+    impl ScriptSockets for FakeSockets {
+        fn listen(&self, name: &str, port: u16) -> Option<u16> {
+            let p = if port == 0 { 54321 } else { port };
+            self.ports.lock().unwrap().insert(name.into(), p);
+            self.listened.lock().unwrap().push((name.into(), port));
+            Some(p)
+        }
+        fn accept(&self, name: &str) -> bool {
+            self.accepted.lock().unwrap().push(name.into());
+            true
+        }
+        fn set_mark(&self, name: &str, mark: &str) {
+            self.marks.lock().unwrap().insert(name.into(), mark.into());
+        }
+        fn mark(&self, name: &str) -> String {
+            self.marks.lock().unwrap().get(name).cloned().unwrap_or_default()
+        }
+        fn port(&self, name: &str) -> Option<u16> {
+            self.ports.lock().unwrap().get(name).copied()
+        }
+        fn status(&self, name: &str) -> String {
+            if self.ports.lock().unwrap().contains_key(name) {
+                "listening".into()
+            } else {
+                String::new()
+            }
+        }
+        fn exists(&self, name: &str) -> bool {
+            self.ports.lock().unwrap().contains_key(name)
+                || self.marks.lock().unwrap().contains_key(name)
+        }
+    }
+
+    #[test]
+    fn socklisten_and_sock_properties() {
+        let engine = ScriptEngine::new();
+        let fake = std::sync::Arc::new(FakeSockets::default());
+        engine.set_sockets(fake.clone());
+        // /socklisten binds (port readable inline, like mIRC); /sockmark stores a
+        // mark; $sock(name) is the existence check.
+        engine.load(
+            "alias t { socklisten relay | sockmark relay hi there | sockaccept conn | /echo port=$sock(relay).port mark=$sock(relay).mark st=$sock(relay).status ex=$sock(relay) no=$sock(nope) }",
+        );
+        let actions = engine.run_alias(&ctx(), "#c", "t", "");
+        assert_eq!(
+            actions,
+            vec![Action::Echo {
+                target: "#c".into(),
+                text: "port=54321 mark=hi there st=listening ex=relay no=".into(),
+            }]
+        );
+        assert_eq!(*fake.listened.lock().unwrap(), vec![("relay".to_string(), 0u16)]);
+        assert_eq!(*fake.accepted.lock().unwrap(), vec!["conn".to_string()]);
     }
 
     #[test]
