@@ -24,3 +24,8 @@ Thumbs.db
 # Local mIRC help reference (copyright mirc.com — for syntax audit only)
 mIRC Help.html
 mIRC Help_files/
+
+# Local parity test scripts (BV2 / Sockbot, from the old jirc-main converter).
+# Kept locally for testing only — not part of the repo. Originals are in the
+# OneDrive mIRC backup.
+test-scripts/
