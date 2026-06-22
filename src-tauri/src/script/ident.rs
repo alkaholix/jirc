@@ -141,6 +141,8 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String]) -> String {
                 rt.event.target.clone()
             }
         }
+        "event" => rt.event.event.clone(),
+        "numeric" => rt.event.numeric.clone(),
         "network" => rt.network.to_string(),
         "server" => rt.server.to_string(),
         "true" => "$true".to_string(),

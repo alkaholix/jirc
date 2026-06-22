@@ -7,7 +7,7 @@
 
 use super::ast::{Alias, Dialog, DialogControl, Event, Popup, PopupItem, Script, Stmt};
 
-const MATCHTEXT_EVENTS: &[&str] = &["TEXT", "ACTION", "NOTICE", "WALLOPS", "CTCP"];
+const MATCHTEXT_EVENTS: &[&str] = &["TEXT", "ACTION", "NOTICE", "WALLOPS", "CTCP", "RAW"];
 
 struct Cursor {
     chars: Vec<char>,
@@ -342,7 +342,13 @@ fn parse_braceless_event(header: &str) -> Option<Event> {
         return None;
     }
     let rest = ev.next().unwrap_or("");
-    let (pattern, target, command) = if MATCHTEXT_EVENTS.contains(&kind.as_str()) {
+    let (pattern, target, command) = if kind == "RAW" {
+        // on *:RAW:<numeric>:<command> — matchtext, no target field.
+        let mut p = rest.splitn(2, ':');
+        let matchtext = p.next().unwrap_or("").trim().to_string();
+        let command = p.next().unwrap_or("").trim().to_string();
+        (matchtext, String::new(), command)
+    } else if MATCHTEXT_EVENTS.contains(&kind.as_str()) {
         let mut p = rest.splitn(3, ':');
         let matchtext = p.next().unwrap_or("").trim().to_string();
         let target = p.next().unwrap_or("").trim().to_string();

@@ -68,6 +68,10 @@ pub struct EventVars {
     pub knick: String,
     /// Dialog control values (id -> value) for `on DIALOG`, read by `$did`.
     pub did: std::collections::HashMap<String, String>,
+    /// The event type name, e.g. "text"/"raw"/"op" — exposed as `$event`.
+    pub event: String,
+    /// The numeric of a raw server line (`on RAW`) — exposed as `$numeric`.
+    pub numeric: String,
 }
 
 const STEP_LIMIT: u32 = 100_000;

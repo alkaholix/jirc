@@ -236,7 +236,7 @@ async fn run_once(
                         }
                     }
 
-                    let script_actions = run_scripts(app, &state, profile, &effects.events);
+                    let script_actions = run_scripts(app, &state, profile, &effects.events, Some(line));
 
                     for out in effects.outgoing {
                         write_line(&mut write_half, app, server_id, &out).await;
@@ -270,7 +270,7 @@ async fn run_once(
         server_id: server_id.to_string(),
         reason: reason.0,
     };
-    let actions = run_scripts(app, &state, profile, std::slice::from_ref(&disc));
+    let actions = run_scripts(app, &state, profile, std::slice::from_ref(&disc), None);
     if !actions.is_empty() {
         crate::script::apply_actions(
             app,
@@ -310,6 +310,7 @@ fn run_scripts(
     state: &SessionState,
     profile: &ServerProfile,
     events: &[UiEvent],
+    raw_line: Option<&str>,
 ) -> Vec<crate::script::eval::Action> {
     let Some(engine) = app.try_state::<crate::script::ScriptEngine>() else {
         return Vec::new();
@@ -322,10 +323,52 @@ fn run_scripts(
         state: std::sync::Arc::new(state.snapshot()),
     };
     let mut actions = Vec::new();
+    // `on RAW` fires for every inbound server line.
+    if let Some(line) = raw_line {
+        if let Some((command, params)) = raw_command_params(line) {
+            actions.extend(crate::script::dispatch_raw(&engine, &ctx, &command, params));
+        }
+    }
     for ev in events {
         actions.extend(crate::script::drive_event(&engine, &ctx, ev));
     }
     actions
+}
+
+/// Splits a raw IRC line into its command/numeric and parameters. An optional
+/// `:prefix` is dropped, middle params split on spaces, and a trailing `:param`
+/// keeps its spaces.
+fn raw_command_params(line: &str) -> Option<(String, Vec<String>)> {
+    let rest = match line.strip_prefix(':') {
+        Some(after) => after.split_once(' ').map(|(_, r)| r).unwrap_or(""),
+        None => line,
+    };
+    let (command, argstr) = match rest.trim_start().split_once(' ') {
+        Some((c, a)) => (c, a),
+        None => (rest.trim_start(), ""),
+    };
+    if command.is_empty() {
+        return None;
+    }
+    let mut params = Vec::new();
+    let mut s = argstr.trim_start();
+    while !s.is_empty() {
+        if let Some(trailing) = s.strip_prefix(':') {
+            params.push(trailing.to_string());
+            break;
+        }
+        match s.split_once(' ') {
+            Some((tok, more)) => {
+                params.push(tok.to_string());
+                s = more.trim_start();
+            }
+            None => {
+                params.push(s.to_string());
+                break;
+            }
+        }
+    }
+    Some((command.to_string(), params))
 }
 
 /// Pure protocol handler: updates session state and returns the side effects

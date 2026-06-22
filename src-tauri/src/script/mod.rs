@@ -217,6 +217,9 @@ impl ScriptEngine {
         kind: &str,
         event: EventVars,
     ) -> (Vec<Action>, bool) {
+        // $event reflects the dispatch kind for every handler (text, raw, op, …).
+        let mut event = event;
+        event.event = kind.to_ascii_lowercase();
         let mut g = self.inner.lock().unwrap();
         let script = g.script.clone();
         let g = &mut *g;
@@ -1118,6 +1121,30 @@ pub fn drive_event(
     engine.dispatch_event(ctx, kind, vars)
 }
 
+/// Dispatches `on RAW` for one inbound server line. `command` is the
+/// numeric/command word, `params` the line's parameters. `$numeric` is set when
+/// the command is a numeric; `$1-` are the params; the matchtext matches the
+/// command/numeric.
+pub fn dispatch_raw(
+    engine: &ScriptEngine,
+    ctx: &RunCtx,
+    command: &str,
+    params: Vec<String>,
+) -> Vec<Action> {
+    let numeric = if !command.is_empty() && command.bytes().all(|b| b.is_ascii_digit()) {
+        command.to_string()
+    } else {
+        String::new()
+    };
+    let vars = EventVars {
+        text: command.to_string(),
+        params,
+        numeric,
+        ..Default::default()
+    };
+    engine.dispatch_event(ctx, "RAW", vars)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1248,6 +1275,27 @@ mod tests {
         );
         // A plain message must NOT fire the CTCP handlers.
         assert!(drive_event(&engine, &ctx(), &msg("hello PING")).is_empty());
+    }
+
+    #[test]
+    fn raw_event_matches_and_exposes_numeric_event() {
+        let engine = ScriptEngine::new();
+        engine.load("on *:RAW:001:/echo got $numeric ev $event p1 $1-\non *:RAW:PING:/echo gotping");
+        let welcome = dispatch_raw(&engine, &ctx(), "001", vec!["me".into(), "Welcome here".into()]);
+        assert_eq!(
+            welcome,
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "got 001 ev raw p1 me Welcome here".into(),
+            }]
+        );
+        let ping = dispatch_raw(&engine, &ctx(), "PING", vec!["12345".into()]);
+        assert_eq!(
+            ping,
+            vec![Action::Echo { target: "(status)".into(), text: "gotping".into() }]
+        );
+        // A numeric matching neither handler fires nothing.
+        assert!(dispatch_raw(&engine, &ctx(), "999", vec![]).is_empty());
     }
 
     #[test]
