@@ -46,7 +46,7 @@ out of scope.
 - [ ] `$agentstat`
 - [ ] `$agentver`
 - [ ] `$alias`
-- [ ] `$and`
+- [x] `$and`
 - [ ] `$anick`
 - [ ] `$ansi2mirc`
 - [ ] `$aop`
@@ -67,8 +67,8 @@ out of scope.
 - [ ] `$bfind`
 - [ ] `$bigfloat`
 - [ ] `$bindip`
-- [ ] `$bitoff`
-- [ ] `$biton`
+- [x] `$bitoff`
+- [x] `$biton`
 - [x] `$bnick`
 - [ ] `$bvar`
 - [x] `$bytes` *(comma-formatted; `.suf` human-readable)*
@@ -174,7 +174,7 @@ out of scope.
 - [x] `$fulldate`
 - [ ] `$fullname`
 - [ ] `$fullscreen`
-- [ ] `$gcd`
+- [x] `$gcd`
 - [ ] `$get`
 - [ ] `$getdir`
 - [ ] `$getdot`
@@ -221,7 +221,7 @@ out of scope.
 - [ ] `$iptype`
 - [ ] `$isadmin` *(client-admin check; distinct from the `isadmin` operator)*
 - [ ] `$isalias`
-- [ ] `$isbit`
+- [x] `$isbit`
 - [ ] `$isdde`
 - [x] `$isdir`
 - [x] `$isfile`
@@ -237,7 +237,7 @@ out of scope.
 - [ ] `$lactive`
 - [ ] `$lactivecid`
 - [ ] `$lactivewid`
-- [ ] `$lcm`
+- [x] `$lcm`
 - [x] `$left`
 - [ ] `$leftwin`
 - [ ] `$leftwincid`
@@ -302,7 +302,7 @@ out of scope.
 - [x] `$nofile`
 - [x] `$nopath`
 - [x] `$noqt`
-- [ ] `$not`
+- [x] `$not`
 - [ ] `$notags`
 - [ ] `$notify`
 - [x] `$null`
@@ -313,7 +313,7 @@ out of scope.
 - [ ] `$onlinetotal`
 - [ ] `$onpoly`
 - [x] `$opnick`
-- [ ] `$or`
+- [x] `$or`
 - [ ] `$ord`
 - [ ] `$os`
 - [ ] `$parms`
@@ -454,7 +454,7 @@ out of scope.
 - [x] `$wildtok`
 - [ ] `$window`
 - [ ] `$wrap`
-- [ ] `$xor`
+- [x] `$xor`
 - [ ] `$zip`
 
 ---
