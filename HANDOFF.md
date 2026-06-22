@@ -9,14 +9,15 @@ Stay **Rust + Tauri + React**. **`jIRC-OLD/` is the version we keep** (it has th
 Full rationale: `C:\Users\John\.claude\plans\reactive-kindling-lemon.md`.
 
 ## Folder / repo state — READ FIRST
-- `C:\jirc\` currently has: `.git`, `jirc-main\` (**DELETE** — converter), `jIRC-OLD\` (**KEEP** → rename to `jirc`).
-- **Git tracks `jirc-main/`**; `jIRC-OLD/` is untracked. After deleting `jirc-main` and renaming `jIRC-OLD`,
-  **re-init git** in the kept tree (`git init` fresh — the existing history is the converter's).
-- **All this session's work is in `jIRC-OLD/`.** Deleting `jirc-main` loses nothing we need.
-- Example/test scripts preserved at **`jIRC-OLD/test-scripts/`** (BV2, Sockbot — used as parity test cases;
-  originals also in the OneDrive mIRC backup).
-- If a build ever fails with a stale-path / "plugin permissions" error after moving folders:
-  **`cargo clean` in `src-tauri`** (that was the only reason jIRC-OLD "didn't build" — a relocation cache, not a bug).
+- **Consolidation is DONE.** The native engine lives at the **`C:\jirc` repo root** (no more `jirc-main/` or
+  `jIRC-OLD/`). Git history was **re-init'd fresh** — initial commit `fdab73d`, then one commit per punch-list item.
+- Remote `origin` (github.com/alkaholix/jirc) is re-added but **NOT pushed** — needs a force-push (your call).
+- Old converter history is archived **outside the repo** at `~/jirc-history-backup.bundle` (`C:\Users\John\…`).
+- Example/test scripts at **`test-scripts/`** (BV2, Sockbot — parity test cases; originals also in the OneDrive
+  mIRC backup). NB: the BV2 v0.31 sockbot exercises listening sockets (see TODO).
+- Build gotcha: stale `jIRC-OLD\…` paths can linger in `target/` after a move — `cargo clean` (or wipe
+  `target/debug`) fixes it. The running release `jirc.exe` locks `target/release`, so don't `cargo clean` that
+  while the app is open.
 
 ## Stack & where things are
 - Tauri v2. Backend `src-tauri/src/`, frontend `src/` (React 18 + TS + Vite + zustand).
@@ -27,7 +28,9 @@ Full rationale: `C:\Users\John\.claude\plans\reactive-kindling-lemon.md`.
   `npm run tauri build -- --no-bundle` → `src-tauri/target/release/jirc.exe`.
 
 ## Verified green
-- 92 backend tests, 29 frontend tests pass; release exe builds (last good: 2026-06-22 16:44).
+- 101 backend tests, 29 frontend tests pass; full debug build (lib + bin) clean.
+- Release exe NOT re-validated this session (the running app locks `target/release`) — run
+  `npm run tauri build -- --no-bundle` with the app closed.
 
 ## Done this session — ported onto jIRC-OLD (all green)
 - **Local console** — `App.tsx` (`openLocalConsole` + welcome "Open a local console"). Run scripts/sockbots with no connection.
@@ -54,21 +57,25 @@ Full rationale: `C:\Users\John\.claude\plans\reactive-kindling-lemon.md`.
   `scriptRunPopup`, `scriptRunDialog`, `scriptsList/Read/Write/Delete`.
 
 ## TODO — next
-1. **Consolidate** (mostly user): delete `jirc-main/`, rename `jIRC-OLD/` → `jirc`, `git init` fresh, light doc
-   touch-ups (jIRC-OLD's `CLAUDE.md`/`README.md`/`ROADMAP.md` are already native-first; just note the converter is dropped).
-2. **Engine mSL-parity punch-list** — the converter's old gaps, now single-location Rust-engine work.
-   Verify each against the native engine first (it may already handle some). Test with `jIRC-OLD/test-scripts/`:
-   - **if-then-else operators**: ensure the full table — `== === != < > <= >= isin iswm` **plus** `isincs iswmcs
-     isnum isalpha isalnum islower isupper isletter ison isop ishop isvoice isreg ischan isban isnotify isignore
-     isaop isavoice isprotect // \\ &` — and **negation** (`!value`, `!op`).
-   - **alias params**: `$N-M` ranges, bare `#` = current channel, `$$` require-prefix.
-   - **identifiers**: `$address/$site/$fulladdress/$wildsite/$maddress` (engine already has an internal address
-     list — verify it covers these), `$event`, `$numeric`.
-   - **events**: parenless / mixed `if` (`if ($2==X) && $y==z {…}`), **braceless one-liner `on` events**
-     (`on *:TEXT:!cmd:#:/msg …`), CTCP matchtext (match the command **or** full text), `on RAW` (match numeric/command + `$numeric`).
-   - **sockets**: confirm `socklisten` reports its bound port for `$sock(name).port`; wildcard `sockclose`/`sockwrite`
-     (`name.*`); `$lf`/`$cr`/`$crlf`/`$tab`.
-   - (These were catalogued in detail in the now-deleted `jirc-main/docs/scripting-roadmap-checklist.html` — the
-     *knowledge* is summarised here; the converter code itself is intentionally gone.)
-3. **Optional UI follow-ups**: a Channel Central "bans" view (data already in `useChannelBans`); more Settings
-   sections (sounds, address book — each needs supporting code); Toolbar (if you ever want it).
+1. **Push when ready:** the fresh history isn't on GitHub yet — `git push -f origin main` (remote re-added,
+   not pushed). Optional: re-run the release build with the app closed (`npm run tauri build -- --no-bundle`).
+2. **Listening sockets** — the one open mSL-parity item (engine work): `/socklisten <name>` (bind a local
+   port), `on SOCKLISTEN`, `/sockaccept <name>`, `$sock(name).port`, plus `$sock(name)` existence,
+   `sockmark`/`$sock().mark`, and `$sockerr`/`$sock().wsmsg`. The **BV2 v0.31 sockbot** (`test-scripts/`) is the
+   driving use case (listens locally, points the client at `localhost $sock(BV2.start).port`, accepts, bridges to
+   Buzzen). Substantial async work in `script/socket.rs` (currently connect-only) + commands in `eval.rs` +
+   identifiers in `ident.rs`.
+3. **Optional UI follow-ups**: a Channel Central "bans" view (ban data now in the state snapshot); more Settings
+   sections (sounds, address book); Toolbar.
+
+### Done this session (mSL-parity punch-list — all committed + tested, 102 backend tests)
+- **Identifiers:** `$crlf $cr $lf $tab`; event address `$address` (bare) `/$site/$fulladdress/$wildsite`;
+  `$event`/`$numeric`.
+- **if-then-else:** list operators `ison isop ishop isvoice isowner isadmin isreg ischan` + `isban` (with live
+  `+b`/`-b` and RPL_BANLIST 367 ban tracking) + `&`; no-space and mixed-paren conditions (`if ($2==X) && $y==z`).
+- **Alias params:** `$N-M` ranges, bare `#` = current channel, `$$` require-prefix.
+- **Events:** braceless one-liner `on`; `on CTCP` (matchtext = command OR full text); `on RAW`.
+- **Sockets:** wildcard `/sockwrite` (`/sockclose` already fanned out).
+- **Skipped (deliberate):** `$maddress` (not a standard mIRC identifier); list operators `isnotify isignore isaop
+  isavoice isprotect` (no client-side notify/ignore/userlist subsystem to back them).
+- **Note:** `$$N`-empty halts the *rest* of the run but doesn't suppress the current command mid-flight.
