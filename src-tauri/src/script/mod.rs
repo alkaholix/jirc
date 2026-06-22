@@ -1430,6 +1430,27 @@ mod tests {
     }
 
     #[test]
+    fn protocol_commands_emit_raw_lines() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias go { /kick #c bob being rude | /away gone fishing | /hop #c | /nickserv identify pw | /omsg #c ops only | /ctcpreply bob ping 123 }",
+        );
+        let actions = engine.run_alias(&ctx(), "#c", "go", "");
+        assert_eq!(
+            actions,
+            vec![
+                Action::Send("KICK #c bob :being rude".into()),
+                Action::Send("AWAY :gone fishing".into()),
+                Action::Send("PART #c".into()),
+                Action::Send("JOIN #c".into()),
+                Action::Send("PRIVMSG NickServ :identify pw".into()),
+                Action::Send("PRIVMSG @#c :ops only".into()),
+                Action::Send("NOTICE bob :\u{1}PING 123\u{1}".into()),
+            ]
+        );
+    }
+
+    #[test]
     fn sockread_consumes_line_and_sets_sockbr() {
         let engine = ScriptEngine::new();
         // First /sockread gets the line; the while loop then ends ($sockbr 0).

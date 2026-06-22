@@ -300,6 +300,84 @@ impl<'a> Runtime<'a> {
                 let (target, text) = self.split_target(raw_args);
                 self.actions.push(Action::Send(format!("TOPIC {target} :{text}")));
             }
+            "kick" => {
+                // /kick <#channel> <nick> [reason]
+                let s = self.expand(raw_args);
+                let mut it = s.splitn(3, char::is_whitespace);
+                if let (Some(chan), Some(nick)) = (it.next(), it.next()) {
+                    let line = match it.next().filter(|r| !r.is_empty()) {
+                        Some(reason) => format!("KICK {chan} {nick} :{reason}"),
+                        None => format!("KICK {chan} {nick}"),
+                    };
+                    self.actions.push(Action::Send(line));
+                }
+            }
+            "invite" => {
+                // /invite <nick> <#channel>
+                let s = self.expand(raw_args);
+                let mut it = s.split_whitespace();
+                if let (Some(nick), Some(chan)) = (it.next(), it.next()) {
+                    self.actions.push(Action::Send(format!("INVITE {nick} {chan}")));
+                }
+            }
+            "hop" => {
+                // /hop [#channel] — cycle the channel (part then rejoin).
+                let ch = self.expand(raw_args);
+                let ch = if ch.is_empty() { self.event.chan.clone() } else { ch };
+                if !ch.is_empty() {
+                    self.actions.push(Action::Send(format!("PART {ch}")));
+                    self.actions.push(Action::Send(format!("JOIN {ch}")));
+                }
+            }
+            "knock" => {
+                let (chan, msg) = self.split_target(raw_args);
+                if !chan.is_empty() {
+                    let line = if msg.is_empty() {
+                        format!("KNOCK {chan}")
+                    } else {
+                        format!("KNOCK {chan} :{msg}")
+                    };
+                    self.actions.push(Action::Send(line));
+                }
+            }
+            "away" => {
+                // /away [message] — an empty message clears away status.
+                let msg = self.expand(raw_args);
+                let line = if msg.is_empty() {
+                    "AWAY".to_string()
+                } else {
+                    format!("AWAY :{msg}")
+                };
+                self.actions.push(Action::Send(line));
+            }
+            "omsg" => {
+                // /omsg <#channel> <message> — message to channel ops (@#chan).
+                let (chan, text) = self.split_target(raw_args);
+                if chan.starts_with('#') && !text.is_empty() {
+                    self.actions.push(Action::Send(format!("PRIVMSG @{chan} :{text}")));
+                }
+            }
+            "onotice" => {
+                let (chan, text) = self.split_target(raw_args);
+                if chan.starts_with('#') && !text.is_empty() {
+                    self.actions.push(Action::Send(format!("NOTICE @{chan} :{text}")));
+                }
+            }
+            "ctcpreply" => {
+                // /ctcpreply <nick> <ctcp> [text] — a CTCP reply (NOTICE).
+                let s = self.expand(raw_args);
+                let mut it = s.splitn(3, char::is_whitespace);
+                if let (Some(nick), Some(ctcp)) = (it.next(), it.next()) {
+                    let body = match it.next().filter(|t| !t.is_empty()) {
+                        Some(t) => format!("{} {}", ctcp.to_ascii_uppercase(), t),
+                        None => ctcp.to_ascii_uppercase(),
+                    };
+                    self.actions.push(Action::Send(format!("NOTICE {nick} :\u{1}{body}\u{1}")));
+                }
+            }
+            "nickserv" | "ns" => self.send_service("NickServ", raw_args),
+            "chanserv" | "cs" => self.send_service("ChanServ", raw_args),
+            "memoserv" | "ms" => self.send_service("MemoServ", raw_args),
             "quit" => {
                 let msg = self.expand(raw_args);
                 self.actions.push(Action::Send(format!("QUIT :{msg}")));
@@ -439,6 +517,15 @@ impl<'a> Runtime<'a> {
 
     fn send_privmsg(&mut self, target: &str, text: &str) {
         self.actions.push(Action::Send(format!("PRIVMSG {target} :{text}")));
+    }
+
+    /// `/nickserv`, `/chanserv`, `/memoserv` (and `/ns`, `/cs`, `/ms`) — send a
+    /// PRIVMSG to the named service.
+    fn send_service(&mut self, service: &str, raw: &str) {
+        let msg = self.expand(raw);
+        if !msg.is_empty() {
+            self.actions.push(Action::Send(format!("PRIVMSG {service} :{msg}")));
+        }
     }
 
     /// Runs an alias body with `params` as `$1..`, isolating `$1..`, the halt
