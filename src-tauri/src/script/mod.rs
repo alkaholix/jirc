@@ -1339,6 +1339,45 @@ mod tests {
     }
 
     #[test]
+    fn event_address_and_whitespace_identifiers() {
+        use crate::irc::state::StateSnapshot;
+        let snap = StateSnapshot {
+            nick: "me".into(),
+            channels: vec![],
+            ial: vec![("bob".into(), "bob!~bob@host.example.com".into())],
+        };
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(snap),
+        };
+        let engine = ScriptEngine::new();
+        // Bare $address/$site/$fulladdress/$wildsite resolve the triggering user
+        // from the IAL; the whitespace constants expand to real control chars.
+        engine.load(
+            "on *:TEXT:*:#:{ /echo a=$address s=$site f=$fulladdress w=$wildsite t=[$tab]c=[$cr]l=[$lf]nl=[$crlf] }",
+        );
+        let vars = EventVars {
+            nick: "bob".into(),
+            chan: "#c".into(),
+            target: "#c".into(),
+            text: "hi".into(),
+            params: vec!["hi".into()],
+            ..Default::default()
+        };
+        let actions = engine.dispatch_event(&rctx, "TEXT", vars);
+        assert_eq!(
+            actions,
+            vec![Action::Echo {
+                target: "#c".into(),
+                text: "a=~bob@host.example.com s=host.example.com f=bob!~bob@host.example.com w=*!*@host.example.com t=[\t]c=[\r]l=[\n]nl=[\r\n]".into(),
+            }]
+        );
+    }
+
+    #[test]
     fn hash_save_load_and_find() {
         let dir = std::env::temp_dir().join(format!("jirc-htest-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

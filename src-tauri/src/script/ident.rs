@@ -57,8 +57,9 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String]) -> String {
             rt.event.did.get(&a(1)).cloned().unwrap_or_default()
         }
         "address" => {
-            // $address(nick) -> user@host; $address(nick, type) -> masked address.
-            let who = a(0).to_lowercase();
+            // Bare $address -> the triggering user's user@host; $address(nick) ->
+            // that nick's user@host; $address(nick, type) -> masked address.
+            let who = if args.is_empty() { rt.event.nick.to_lowercase() } else { a(0).to_lowercase() };
             match rt.state.ial.iter().find(|(n, _)| *n == who) {
                 Some((_, full)) => {
                     if args.len() >= 2 {
@@ -69,6 +70,30 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String]) -> String {
                 }
                 None => String::new(),
             }
+        }
+        // The triggering user's address pieces, looked up from the IAL:
+        // $fulladdress = nick!user@host, $site = host, $wildsite = *!*@host.
+        "fulladdress" => {
+            let who = rt.event.nick.to_lowercase();
+            rt.state.ial.iter().find(|(n, _)| *n == who).map(|(_, f)| f.clone()).unwrap_or_default()
+        }
+        "site" => {
+            let who = rt.event.nick.to_lowercase();
+            rt.state
+                .ial
+                .iter()
+                .find(|(n, _)| *n == who)
+                .and_then(|(_, f)| f.split_once('@').map(|(_, h)| h.to_string()))
+                .unwrap_or_default()
+        }
+        "wildsite" => {
+            let who = rt.event.nick.to_lowercase();
+            rt.state
+                .ial
+                .iter()
+                .find(|(n, _)| *n == who)
+                .and_then(|(_, f)| f.split_once('@').map(|(_, h)| format!("*!*@{h}")))
+                .unwrap_or_default()
         }
         "mask" => {
             // $mask(nick!user@host, type) -> wildcard mask of that type.
@@ -121,6 +146,11 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String]) -> String {
         "true" => "$true".to_string(),
         "false" => "$false".to_string(),
         "null" => String::new(),
+        // Whitespace constants (used heavily by socket scripts).
+        "crlf" => "\r\n".to_string(),
+        "cr" => "\r".to_string(),
+        "lf" => "\n".to_string(),
+        "tab" => "\t".to_string(),
         "ctime" => now_secs().to_string(),
         "time" => fmt_time(now_secs()),
         "date" => fmt_date(now_secs()),
