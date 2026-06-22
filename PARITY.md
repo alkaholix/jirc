@@ -205,7 +205,7 @@ out of scope.
 - [x] `$iif`
 - [ ] `$iil`
 - [ ] `$inellipse`
-- [ ] `$ini`
+- [x] `$ini`
 - [ ] `$inmidi`
 - [ ] `$inpaste`
 - [ ] `$inpoly`
@@ -343,7 +343,7 @@ out of scope.
 - [ ] `$rawbytes`
 - [ ] `$rawmsg`
 - [x] `$read`
-- [ ] `$readini`
+- [x] `$readini`
 - [ ] `$readn`
 - [ ] `$regerrstr`
 - [x] `$regex`
@@ -600,7 +600,7 @@ out of scope.
 - [x] `/quote` *(= `/raw`)*
 - [x] `/raw`
 - [ ] `/reload`
-- [x] `/remini` *(verify)*
+- [x] `/remini`
 - [ ] `/remote`
 - [x] `/remove` *(verify — file remove vs token)*
 - [ ] `/rename`
@@ -662,7 +662,7 @@ out of scope.
 - [x] `/whois`
 - [ ] `/window` *(stub — custom `@windows`)*
 - [ ] `/winhelp`
-- [x] `/write` · [x] `/writeini` *(verify ini)*
+- [x] `/write` · [x] `/writeini`
 
 ---
 
@@ -767,7 +767,7 @@ individually.)*
 ### Media / misc
 - [ ] sounds / `/splay` · [ ] speech (`/speak`) · [ ] MIDI/MP3/WAV playback · [ ] agents
 - [ ] COM/ActiveX · [ ] DLL support · [ ] DDE · [ ] hash/crypto identifiers · [ ] binary vars / `$bvar`
-- [ ] `.ini` file family (`$readini`/`/writeini`/`/remini` — verify) · [ ] file-handle I/O (`/fopen` family)
+- [x] `.ini` file family (`$readini`/`$ini`/`/writeini`/`/remini`) · [ ] file-handle I/O (`/fopen` family)
 
 ### Customization (jIRC's cross-platform answer to DCX)
 - [x] themes · [x] self-nick colour · [x] `:emoji:` + custom packs · [x] nicklist icons · [x] custom CSS
