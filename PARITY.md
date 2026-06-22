@@ -112,7 +112,7 @@ out of scope.
 - [ ] `$ctrlenter`
 - [ ] `$darkmode`
 - [x] `$date`
-- [ ] `$day`
+- [x] `$day`
 - [x] `$daylight` *(returns 0 — DST not split out)*
 - [ ] `$dbuh`
 - [ ] `$dbuw`
@@ -257,7 +257,7 @@ out of scope.
 - [ ] `$logstamp`
 - [ ] `$logstampfmt`
 - [x] `$longfn` *(pass-through)*
-- [ ] `$longip`
+- [x] `$longip`
 - [x] `$lower`
 - [ ] `$ltimer`
 - [ ] `$maddress` *(skip — not a standard mIRC identifier)*
@@ -314,8 +314,8 @@ out of scope.
 - [ ] `$onpoly`
 - [x] `$opnick`
 - [x] `$or`
-- [ ] `$ord`
-- [ ] `$os`
+- [x] `$ord`
+- [x] `$os` *(OS family, not Windows version)*
 - [ ] `$parms`
 - [ ] `$parseem`
 - [ ] `$parseline`
