@@ -225,7 +225,7 @@ impl ScriptEngine {
         let mut actions = Vec::new();
         let mut halted = false;
         for ev in script.events_of(kind) {
-            if !matches(&event, &ev.pattern, &ev.target) {
+            if !matches(&event, &ev.pattern, &ev.target, kind) {
                 continue;
             }
             let mut rt = Runtime {
@@ -330,8 +330,14 @@ fn split_mode_events(modes: &str) -> Vec<(&'static str, String)> {
 }
 
 /// Tests whether an event matches a handler's pattern and target spec.
-fn matches(ev: &EventVars, pattern: &str, target_spec: &str) -> bool {
-    let pat_ok = pattern.is_empty() || pattern == "*" || wildcard_match(pattern, &ev.text);
+fn matches(ev: &EventVars, pattern: &str, target_spec: &str, kind: &str) -> bool {
+    let pat_ok = pattern.is_empty()
+        || pattern == "*"
+        || wildcard_match(pattern, &ev.text)
+        // A CTCP matchtext also matches just the command word, so
+        // `on CTCP:PING:` catches "PING <timestamp>".
+        || (kind == "CTCP"
+            && wildcard_match(pattern, ev.text.split_whitespace().next().unwrap_or("")));
     if !pat_ok {
         return false;
     }
@@ -956,24 +962,37 @@ pub fn drive_event(
                 return Vec::new();
             }
             let is_chan = is_channel(target);
-            let action = text.strip_prefix('\u{1}').is_some() && text.contains("ACTION");
+            let chan = if is_chan { target.clone() } else { String::new() };
+            let reply = if is_chan { target.clone() } else { from.clone() };
+            // CTCP framing: \x01COMMAND args\x01. ACTION surfaces as `on ACTION`;
+            // any other CTCP (PING, VERSION, DCC, ...) as `on CTCP`, with
+            // $1 = the command word.
+            if let Some(ctcp) = text.strip_prefix('\u{1}') {
+                let ctcp = ctcp.trim_end_matches('\u{1}');
+                let (ckind, body) = match ctcp.strip_prefix("ACTION ") {
+                    Some(act) => ("ACTION", act),
+                    None => ("CTCP", ctcp),
+                };
+                let vars = EventVars {
+                    nick: from,
+                    chan,
+                    target: reply,
+                    params: words(body),
+                    text: body.to_string(),
+                    ..Default::default()
+                };
+                return engine.dispatch_event(ctx, ckind, vars);
+            }
             let kind = match kind {
                 crate::irc::event::MessageKind::Notice => "NOTICE",
-                _ if action => "ACTION",
                 _ => "TEXT",
             };
-            let clean = text
-                .trim_start_matches('\u{1}')
-                .trim_end_matches('\u{1}')
-                .strip_prefix("ACTION ")
-                .unwrap_or(text)
-                .to_string();
             let vars = EventVars {
-                nick: from.clone(),
-                chan: if is_chan { target.clone() } else { String::new() },
-                target: if is_chan { target.clone() } else { from.clone() },
-                params: words(&clean),
-                text: clean,
+                nick: from,
+                chan,
+                target: reply,
+                params: words(text),
+                text: text.clone(),
                 ..Default::default()
             };
             (kind, vars)
@@ -1204,6 +1223,31 @@ mod tests {
             engine.dispatch_event(&ctx(), "TEXT", mk("!hi")),
             vec![Action::Send("PRIVMSG #c :yo".into())]
         );
+    }
+
+    #[test]
+    fn ctcp_event_fires_and_matches_command_or_full() {
+        let engine = ScriptEngine::new();
+        // PING matchtext must catch "PING <timestamp>"; VERSION is whole-text.
+        engine.load("on *:CTCP:PING:?:/msg $nick pong\non *:CTCP:VERSION:?:/msg $nick jirc");
+        let msg = |text: &str| UiEvent::Message {
+            server_id: "s".into(),
+            kind: MessageKind::Privmsg,
+            from: Some("bob".into()),
+            target: "me".into(),
+            text: text.into(),
+            time: None,
+        };
+        assert_eq!(
+            drive_event(&engine, &ctx(), &msg("\u{1}PING 99\u{1}")),
+            vec![Action::Send("PRIVMSG bob :pong".into())]
+        );
+        assert_eq!(
+            drive_event(&engine, &ctx(), &msg("\u{1}VERSION\u{1}")),
+            vec![Action::Send("PRIVMSG bob :jirc".into())]
+        );
+        // A plain message must NOT fire the CTCP handlers.
+        assert!(drive_event(&engine, &ctx(), &msg("hello PING")).is_empty());
     }
 
     #[test]
