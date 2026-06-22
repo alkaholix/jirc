@@ -1,4 +1,4 @@
-# jIRC — Handoff / Pickup Notes (last updated 2026-06-22)
+# jIRC — Handoff / Pickup Notes (last updated 2026-06-23)
 
 ## TL;DR — the big decision
 We **un-pivoted** from the MSL→TypeScript *converter* back to the **native Rust mSL engine**.
@@ -11,28 +11,58 @@ Full rationale: `C:\Users\John\.claude\plans\reactive-kindling-lemon.md`.
 ## Folder / repo state — READ FIRST
 - **Consolidation is DONE.** The native engine lives at the **`C:\jirc` repo root** (no more `jirc-main/` or
   `jIRC-OLD/`). Git history was **re-init'd fresh** — initial commit `fdab73d`, then one commit per punch-list item.
-- Remote `origin` (github.com/alkaholix/jirc) is re-added but **NOT pushed** — needs a force-push (your call).
+- Remote `origin` (github.com/alkaholix/jirc) is **pushed** (force-pushed 2026-06-23; the fresh history replaced the
+  old diverged remote). The old remote head is preserved locally as tag `archive-old-origin-20260623`.
 - Old converter history is archived **outside the repo** at `~/jirc-history-backup.bundle` (`C:\Users\John\…`).
-- Example/test scripts at **`test-scripts/`** (BV2, Sockbot — parity test cases; originals also in the OneDrive
-  mIRC backup). NB: the BV2 v0.31 sockbot exercises listening sockets (see TODO).
+- Example/test scripts (`test-scripts/`, BV2/Sockbot) are now **gitignored + untracked** (local-only; they kept
+  reappearing because they had been committed). The BV2 v0.31 sockbot exercises listening sockets (see TODO).
 - Build gotcha: stale `jIRC-OLD\…` paths can linger in `target/` after a move — `cargo clean` (or wipe
   `target/debug`) fixes it. The running release `jirc.exe` locks `target/release`, so don't `cargo clean` that
   while the app is open.
 
 ## Stack & where things are
 - Tauri v2. Backend `src-tauri/src/`, frontend `src/` (React 18 + TS + Vite + zustand).
-- **Native mSL engine: `src-tauri/src/script/`** (`parser`, `ast`, `eval`, `ident`, `mod`, `socket`, `timer`),
-  ~5,200 lines, runs `.mrc` directly. **This is where mSL parity work goes.**
+- **Native mSL engine: `src-tauri/src/script/`** (`parser`, `ast`, `eval`, `ident`, `mod`, `socket`, `timer`,
+  `files`, `ini`), runs `.mrc` directly. **This is where mSL parity work goes.**
 - User scripts: `%APPDATA%/com.jirc.app/scripts/*.mrc`.
 - Build/test: `cargo test --manifest-path src-tauri/Cargo.toml -- --skip live` · `npm run build` · `npx vitest run` ·
   `npm run tauri build -- --no-bundle` → `src-tauri/target/release/jirc.exe`.
 
 ## Verified green
-- 109 backend tests, 29 frontend tests pass; `cargo check` + full debug + release build clean.
+- 114 backend tests, 29 frontend tests pass; `cargo check` + full debug + release build clean.
 - Build gotcha learned: a `SocketManager::rename` self-deadlock (re-locking a Mutex through an
   `if let` guard) hung `cargo test` — looked like an "environment hang". If a test hangs, suspect
   a double-lock, and check `Get-Process cargo,rustc` CPU (idle = deadlocked, not compiling).
 - Listening-socket async accept/connect I/O still needs a **live-network** test (relay sockbot).
+
+## Done 2026-06-23 (autonomous PARITY run — 114 tests green, PARITY 204→267 done)
+Worked through `PARITY.md` in batches, reading the mirc.com per-topic help page before each. One commit per
+batch (+ a PARITY checkbox commit); build green at every step. New identifiers/commands all have unit/e2e tests.
+- **File-handle I/O** (new `script/files.rs`): `/fopen /fwrite /fclose /fseek` + `$fopen/$fread/$fgetc/$feof/$ferr`.
+  `FileStore` persists in engine global state like hash tables; re-opens per op; sandbox-confined. `/fseek` does
+  byte/`-l`line/`-n`next/`-p`prev/`-w`wildcard/`-r`regex.
+- **Math/trig:** `$sqrt $cbrt $hypot`, `$sin/$cos/$tan` (+ hyperbolic + inverse, `.deg` property), `$log/$log2/$log10`, `$pi`.
+- **Hashing:** `$md5 $sha1 $sha256 $sha384 $sha512 $crc` — added md-5/sha1/sha2/crc32fast (pure-Rust, no C deps).
+- **Bitwise/int:** `$and $or $xor $not $biton $bitoff $isbit $gcd $lcm`.
+- **Misc identifiers:** `$day $ord $longip $os`; `$prefix $chanmodes $chantypes` (added ISUPPORT to `StateSnapshot`);
+  `$replacex $powmod $utfencode $utfdecode $ticksqpc`. Local-time `$time/$date/$asctime/...` via chrono (carried from 06-22).
+- **Commands:** protocol `/kick /invite /hop /knock /away /omsg /onotice /ctcpreply /nickserv|/chanserv|/memoserv`
+  (the generic raw fallback got trailing-text `:` wrong); sandboxed file `/mkdir /rmdir /copy /rename /remove`.
+- **Deferred (deliberate):** `$encode/$decode` (switch semantics not on the fetched page), `$hash` (mIRC private algo),
+  `$maxlenl/m/s`/`$ip`/`$rands` (need exact values / client state), `$eval`/`$v1`/`$v2` (engine pre-expands identifier args).
+
+### Remaining PARITY (≈445 open) — what each bucket needs
+Most open items are **subsystem-blocked**, not quick wins:
+- **Custom windows / display** (`/window`, `$window`, `$line`, `aline/rline/dline/cline/...`, `/draw*`): a custom-`@window` subsystem.
+- **DCC** (`/dcc *`, `$dcc*`, `on FILERCVD/SENDFAIL/CHAT/...`): a DCC subsystem (file transfer + chat).
+- **Dialogs** (`$dialog`, `/dialog`, `$did*` beyond `$did`): a custom-dialog GUI.
+- **COM / DDE / DLL / agent** (`$com*`, `$dde*`, `$dll*`, `$agent*`, `/g*`): FFI/COM/automation — likely *(skip)* off-Windows.
+- **Media** (`$sound/$play/$insong/$inwave/...`, `/splay`): audio playback.
+- **Client/connection state** (`$active`, `$away`, `$port`, `$serverip`, `$ssl`, `$usermode`, `$idle`, ...): some are feasible
+  by threading connection metadata into `RunCtx` (the StateSnapshot only carries nick/channels/ial/isupport today).
+- **Feasible next (no big subsystem):** crypto `$hmac/$totp/$hotp/$pbkdf2/$argon2/$crc64` (add hmac/pbkdf2/argon2 crates);
+  binary-var family (`/bset/$bvar/&binvar/...`); `$encode/$decode` base64 once switches are confirmed; and a quick audit of
+  PARITY identifier checkmarks vs `ident.rs` (the socket commands were implemented-but-unmarked — there may be more).
 
 ## Done 2026-06-22 (mirc.com docs audit — parity round, 109 tests green)
 Read the official per-topic mirc.com help pages first, then implemented/fixed against them. All committed.
@@ -77,8 +107,7 @@ Granular tracking lives in **`PARITY.md`** (items checked off as completed).
   `scriptRunPopup`, `scriptRunDialog`, `scriptsList/Read/Write/Delete`.
 
 ## TODO — next
-1. **Push when ready:** the fresh history isn't on GitHub yet — `git push -f origin main` (remote re-added,
-   not pushed). Optional: re-run the release build with the app closed (`npm run tauri build -- --no-bundle`).
+1. **Push:** done (force-pushed to GitHub 2026-06-23). Going forward a normal `git push` works (no more divergence).
 2. **Live-test listening sockets** — implemented this session (`/socklisten`/`/sockaccept`/`/sockmark`,
    `on SOCKLISTEN`, `$sock(name).port/.mark/.status`); the *synchronous* bind/port/query path is unit-tested, but
    the **async accept/connect I/O needs verifying on a live network** (e.g. the BV2 v0.31 relay sockbot). Design:
@@ -87,10 +116,10 @@ Granular tracking lives in **`PARITY.md`** (items checked off as completed).
    `/sockmark` on a *bound-but-not-yet-started* listener is a no-op; `$sock().wsmsg`/`$sockerr` detail is minimal.
 3. **Optional UI follow-ups**: a Channel Central "bans" view (ban data now in the state snapshot); more Settings
    sections (sounds, address book); Toolbar.
-4. **Next mSL-parity subsystem:** file-handle I/O — the `/fopen`/`/fwrite`/`/fread`/`/fclose`/`/fseek` + `$fopen`/
-   `$feof`/`$ferr` family (stateful handles surviving across runs, like the socket manager). It's the next unchecked
-   block in `PARITY.md`. Most other remaining parity items need GUI/DCC subsystems or are architecture-blocked
-   (`$eval`/`$v1`/`$hash`).
+4. **Next mSL-parity work:** file-handle I/O is **done** (2026-06-23). See the "Remaining PARITY" map under
+   *Done 2026-06-23* for what's left and what each bucket needs — the feasible next items (no big subsystem) are
+   crypto (`$hmac/$totp/$hotp/$pbkdf2/$argon2/$crc64`), the binary-var family, and `$encode/$decode`. The big
+   remaining areas (custom windows, DCC, dialogs, COM/DDE) each need a dedicated subsystem and your design input.
 
 ### Done this session (mSL-parity punch-list — all committed + tested, 102 backend tests)
 - **Identifiers:** `$crlf $cr $lf $tab`; event address `$address` (bare) `/$site/$fulladdress/$wildsite`;
