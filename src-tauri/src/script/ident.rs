@@ -279,6 +279,54 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "calc" => calc(&a(0))
             .map(fmt_num)
             .unwrap_or_default(),
+        // Roots / powers / logs (6-decimal default like mIRC).
+        "sqrt" => fmt_round6(num(&a(0)).sqrt()),
+        "cbrt" => fmt_round6(num(&a(0)).cbrt()),
+        "hypot" => fmt_round6(num(&a(0)).hypot(num(&a(1)))),
+        "log" => fmt_round6(num(&a(0)).ln()),
+        "log2" => fmt_round6(num(&a(0)).log2()),
+        "log10" => fmt_round6(num(&a(0)).log10()),
+        // mIRC returns pi to 20 decimal places.
+        "pi" => "3.14159265358979323846".to_string(),
+        // Trig — angles are radians by default; the `.deg` property uses degrees
+        // for the angle (forward functions) or the result (inverse functions).
+        "sin" | "cos" | "tan" => {
+            let mut n = num(&a(0));
+            if prop == "deg" {
+                n = n.to_radians();
+            }
+            fmt_round6(match name {
+                "sin" => n.sin(),
+                "cos" => n.cos(),
+                _ => n.tan(),
+            })
+        }
+        "sinh" | "cosh" | "tanh" => {
+            let n = num(&a(0));
+            fmt_round6(match name {
+                "sinh" => n.sinh(),
+                "cosh" => n.cosh(),
+                _ => n.tanh(),
+            })
+        }
+        "asin" | "acos" | "atan" => {
+            let mut v = match name {
+                "asin" => num(&a(0)).asin(),
+                "acos" => num(&a(0)).acos(),
+                _ => num(&a(0)).atan(),
+            };
+            if prop == "deg" {
+                v = v.to_degrees();
+            }
+            fmt_round6(v)
+        }
+        "atan2" => {
+            let mut v = num(&a(0)).atan2(num(&a(1)));
+            if prop == "deg" {
+                v = v.to_degrees();
+            }
+            fmt_round6(v)
+        }
         "gettok" => {
             let sep = sep_code(&a(2));
             let text = a(0);
@@ -1150,6 +1198,21 @@ fn fmt_num(n: f64) -> String {
     }
 }
 
+/// Parse a number for the math identifiers (non-numeric -> 0).
+fn num(s: &str) -> f64 {
+    s.trim().parse::<f64>().unwrap_or(0.0)
+}
+
+/// Format a math result to mIRC's default 6 decimal places, trimming trailing
+/// zeros (and a trailing dot). Non-finite results (NaN/inf) render as empty.
+fn fmt_round6(n: f64) -> String {
+    if !n.is_finite() {
+        return String::new();
+    }
+    let s = format!("{n:.6}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
 /// Evaluates a simple arithmetic expression (+ - * / %, parens).
 fn calc(expr: &str) -> Option<f64> {
     let toks: Vec<char> = expr.chars().filter(|c| !c.is_whitespace()).collect();
@@ -1323,6 +1386,18 @@ mod tests {
         let t = id("time", &[]);
         assert!(t.len() == 8 && &t[2..3] == ":" && &t[5..6] == ":", "time={t}");
         assert!(!id("asctime", &["0", "yyyy"]).is_empty());
+        // math / trig — 6-decimal default, radians unless `.deg`.
+        assert_eq!(id("sqrt", &["16"]), "4");
+        assert_eq!(id("sqrt", &["2"]), "1.414214");
+        assert_eq!(id("cbrt", &["27"]), "3");
+        assert_eq!(id("hypot", &["3", "4"]), "5");
+        assert_eq!(id("log10", &["1000"]), "3");
+        assert_eq!(id("pi", &[]), "3.14159265358979323846");
+        assert_eq!(id("cos", &["0"]), "1");
+        // `.deg` needs the property, so call eval_ident directly — this is after
+        // the `id` closure's final use, so its borrow of `rt` has ended.
+        assert_eq!(eval_ident(&mut rt, "sin", &["90".into()], "deg"), "1");
+        assert_eq!(eval_ident(&mut rt, "atan", &["1".into()], "deg"), "45");
     }
 
     #[test]
