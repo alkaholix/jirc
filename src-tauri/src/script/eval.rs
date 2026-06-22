@@ -1247,12 +1247,10 @@ fn eval_term_with(s: &str, leaf: &dyn Fn(&str) -> Option<bool>) -> bool {
             return !eval_term_with(rest.trim(), leaf);
         }
     }
-    let s = s.trim_start_matches('(').trim_end_matches(')').trim();
-    // Stripping wrapping parens may expose a leading `!`, e.g. `(!nick isop #)`.
-    if let Some(rest) = s.strip_prefix('!') {
-        if !rest.starts_with('=') {
-            return !eval_term_with(rest.trim(), leaf);
-        }
+    // A fully-parenthesised term: re-evaluate its contents so nested grouping
+    // and `!`/`&&`/`||` keep working (e.g. `(a||b) && c`, `(!nick isop #)`).
+    if is_fully_parenthesised(s) {
+        return eval_bool_with(&s[1..s.len() - 1], leaf);
     }
     // State-aware operators (isop/ison/ischan/...) get first crack at the term.
     if let Some(b) = leaf(s) {
@@ -1261,7 +1259,11 @@ fn eval_term_with(s: &str, leaf: &dyn Fn(&str) -> Option<bool>) -> bool {
     let toks: Vec<&str> = s.split_whitespace().collect();
     match toks.len() {
         0 => false,
-        1 => truthy(toks[0]),
+        // A lone token may be a spaceless comparison (`5==X`); else it's truthy.
+        1 => match split_spaceless_op(toks[0]) {
+            Some((a, op, b)) => compare(a, op, b),
+            None => truthy(toks[0]),
+        },
         2 => unary_op(toks[0], toks[1]),
         _ => compare(toks[0], toks[1], &toks[2..].join(" ")),
     }
@@ -1395,6 +1397,42 @@ fn compare(a: &str, op: &str, b: &str) -> bool {
         },
         _ => false,
     }
+}
+
+/// Splits a spaceless `a<op>b` comparison (e.g. `5==X`, `%n>=3`) into its parts,
+/// so mSL's no-space conditions — `if ($2==X)` — compare correctly. Longer
+/// operators are tried first so `===`/`<=`/`>=` aren't mis-split.
+fn split_spaceless_op(s: &str) -> Option<(&str, &'static str, &str)> {
+    for op in ["===", "==", "!=", "<=", ">=", "<", ">"] {
+        if let Some(idx) = s.find(op) {
+            if idx > 0 {
+                return Some((&s[..idx], op, &s[idx + op.len()..]));
+            }
+        }
+    }
+    None
+}
+
+/// True if `s` is one balanced `(...)` group wrapping the whole string — so its
+/// contents can be safely re-evaluated. False for `(a)==(b)` (the first group
+/// closes before the end). Parens are ASCII, so byte indexing is fine.
+fn is_fully_parenthesised(s: &str) -> bool {
+    let b = s.as_bytes();
+    if b.first() != Some(&b'(') || b.last() != Some(&b')') {
+        return false;
+    }
+    let mut depth = 0u32;
+    for (i, &c) in b.iter().enumerate() {
+        match c {
+            b'(' => depth += 1,
+            b')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if depth == 0 && i + 1 < b.len() {
+            return false;
+        }
+    }
+    depth == 0
 }
 
 /// Splits leading `-switches` off command args, e.g. `"-m tbl item"` ->

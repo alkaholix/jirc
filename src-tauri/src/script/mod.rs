@@ -1628,6 +1628,37 @@ mod tests {
     }
 
     #[test]
+    fn no_space_and_mixed_if_conditions() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "on *:TEXT:*:#:{
+              if ($1==hi) { /echo eq }
+              if ($1!=bye) { /echo ne }
+              if ($2==5) && $1==hi { /echo mixed }
+              if ($2>3) { /echo gt }
+              if ($1==nope) { /echo should-not }
+            }",
+        );
+        let vars = EventVars {
+            nick: "b".into(),
+            chan: "#c".into(),
+            target: "#c".into(),
+            text: "hi 5".into(),
+            params: vec!["hi".into(), "5".into()],
+            ..Default::default()
+        };
+        let actions = engine.dispatch_event(&ctx(), "TEXT", vars);
+        let echoed: Vec<&str> = actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::Echo { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(echoed, vec!["eq", "ne", "mixed", "gt"]);
+    }
+
+    #[test]
     fn hash_save_load_and_find() {
         let dir = std::env::temp_dir().join(format!("jirc-htest-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

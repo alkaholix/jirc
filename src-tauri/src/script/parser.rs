@@ -612,10 +612,50 @@ fn read_cond_and_block(cur: &mut Cursor, branches: &mut Vec<(String, Vec<Stmt>)>
     if cur.peek() != Some('(') {
         return None;
     }
-    let cond = cur.read_parens();
+    // First bracket group (inner, unwrapped — keeps single-group conditions as
+    // before). Then extend across trailing `&&`/`||` operands so mixed-paren
+    // conditions parse: `if ($2==X) && $y==z { ... }`.
+    let mut cond = cur.read_parens();
+    loop {
+        let save = cur.pos;
+        cur.skip_inline_ws();
+        let op = match (cur.peek(), cur.chars.get(cur.pos + 1).copied()) {
+            (Some('&'), Some('&')) => "&&",
+            (Some('|'), Some('|')) => "||",
+            _ => {
+                cur.pos = save;
+                break;
+            }
+        };
+        cur.pos += 2;
+        cur.skip_inline_ws();
+        let operand = if cur.peek() == Some('(') {
+            format!("({})", cur.read_parens())
+        } else {
+            read_cond_operand(cur)
+        };
+        cond.push_str(&format!(" {op} {}", operand.trim()));
+    }
     let body = read_branch_body(cur);
     branches.push((cond.trim().to_string(), body));
     Some(())
+}
+
+/// Reads a parenless condition operand (after `&&`/`||`) up to the next logical
+/// operator, body brace, `|`, or end of line.
+fn read_cond_operand(cur: &mut Cursor) -> String {
+    let mut out = String::new();
+    while let Some(c) = cur.peek() {
+        if c == '{' || c == '\n' || c == '|' {
+            break;
+        }
+        if c == '&' && cur.chars.get(cur.pos + 1) == Some(&'&') {
+            break;
+        }
+        out.push(c);
+        cur.pos += 1;
+    }
+    out
 }
 
 /// Reads the body of an `if`/`elseif`/`else`/`while`: either a `{ }` block (on
