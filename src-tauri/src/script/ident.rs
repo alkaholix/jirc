@@ -155,6 +155,11 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "lf" => "\n".to_string(),
         "tab" => "\t".to_string(),
         "ctime" => now_secs().to_string(),
+        // $gmt -> current GMT time as unixtime (absolute, == $ctime here).
+        "gmt" => now_secs().to_string(),
+        // $ticks -> milliseconds since this process started (deltas are what
+        // scripts use; the absolute base differs from mIRC's OS-boot base).
+        "ticks" => ticks().to_string(),
         "time" => fmt_time(now_secs()),
         "date" => fmt_date(now_secs()),
         "len" => a(0).chars().count().to_string(),
@@ -231,6 +236,19 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "isfile" => bool_str(super::eval::sandbox_path(&rt.data_dir, &a(0)).is_file()),
         "isdir" => bool_str(super::eval::sandbox_path(&rt.data_dir, &a(0)).is_dir()),
         "exists" => bool_str(super::eval::sandbox_path(&rt.data_dir, &a(0)).exists()),
+        // $nopath(filename) -> the file name without its path.
+        "nopath" => a(0).rsplit(['\\', '/']).next().unwrap_or("").to_string(),
+        // $nofile(filename) -> the path (incl. trailing separator), no file name.
+        "nofile" => {
+            let p = a(0);
+            match p.rfind(['\\', '/']) {
+                Some(idx) => p[..=idx].to_string(),
+                None => String::new(),
+            }
+        }
+        // $longfn/$shortfn -> long / 8.3-short filename; we pass through (modern
+        // filesystems use the long form).
+        "longfn" | "shortfn" => a(0),
         "scriptdir" | "mircdir" => {
             format!("{}{}", rt.data_dir.display(), std::path::MAIN_SEPARATOR)
         }
@@ -871,6 +889,13 @@ fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+/// Milliseconds since this process started (for `$ticks` — scripts use deltas).
+fn ticks() -> u64 {
+    use std::sync::OnceLock;
+    static START: OnceLock<std::time::Instant> = OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64
+}
+
 fn fmt_time(secs: u64) -> String {
     let s = secs % 86400;
     format!("{:02}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60)
@@ -1100,6 +1125,14 @@ mod tests {
         assert_eq!(id("regex", &["Hello", "/hello/i"]), "1");
         assert_eq!(id("regex", &["Hello", "hello"]), "0");
         assert_eq!(id("regsub", &["Hello World", "/o/g", "0"]), "Hell0 W0rld");
+        // file-name identifiers
+        assert_eq!(id("nopath", &["C:\\folder\\file.txt"]), "file.txt");
+        assert_eq!(id("nopath", &["/usr/bin/foo"]), "foo");
+        assert_eq!(id("nofile", &["C:\\folder\\file.txt"]), "C:\\folder\\");
+        assert_eq!(id("nofile", &["bare.txt"]), "");
+        assert_eq!(id("longfn", &["foo.txt"]), "foo.txt");
+        assert!(id("ticks", &[]).parse::<u64>().is_ok());
+        assert!(id("gmt", &[]).parse::<u64>().is_ok());
     }
 
     fn rt_for<'a>(
