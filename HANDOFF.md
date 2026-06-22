@@ -28,9 +28,11 @@ Full rationale: `C:\Users\John\.claude\plans\reactive-kindling-lemon.md`.
   `npm run tauri build -- --no-bundle` → `src-tauri/target/release/jirc.exe`.
 
 ## Verified green
-- 101 backend tests, 29 frontend tests pass; full debug build (lib + bin) clean.
-- Release exe NOT re-validated this session (the running app locks `target/release`) — run
-  `npm run tauri build -- --no-bundle` with the app closed.
+- 106 backend tests, 29 frontend tests pass; `cargo check` + full debug build clean.
+- Build gotcha learned: a `SocketManager::rename` self-deadlock (re-locking a Mutex through an
+  `if let` guard) hung `cargo test` — looked like an "environment hang". If a test hangs, suspect
+  a double-lock, and check `Get-Process cargo,rustc` CPU (idle = deadlocked, not compiling).
+- Listening-socket async accept/connect I/O still needs a **live-network** test (relay sockbot).
 
 ## Done this session — ported onto jIRC-OLD (all green)
 - **Local console** — `App.tsx` (`openLocalConsole` + welcome "Open a local console"). Run scripts/sockbots with no connection.

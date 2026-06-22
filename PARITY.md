@@ -213,7 +213,7 @@ out of scope.
 - [ ] `$inrect`
 - [ ] `$inroundrect`
 - [ ] `$insong`
-- [ ] `$instok`
+- [x] `$instok`
 - [x] `$int`
 - [ ] `$intersect`
 - [ ] `$inwave`
@@ -356,7 +356,7 @@ out of scope.
 - [x] `$remtok`
 - [x] `$replace`
 - [ ] `$replacex`
-- [x] `$reptok` *(verify; close to `$puttok`/`$remtok`)*
+- [x] `$reptok`  ·  [x] `$lastpos` *(Nth-from-last `$pos`)*
 - [ ] `$result`
 - [ ] `$rgb`
 - [x] `$right`
@@ -780,6 +780,19 @@ Whitespace + address identifiers, `$event`/`$numeric`; list operators
 (`isop`/`ison`/`ishop`/`isvoice`/`isowner`/`isadmin`/`isreg`/`ischan`/`isban` + `&` + ban
 tracking); `$N-M`/bare-`#`/`$$` params; braceless one-liner `on`; `on CTCP`/`on RAW`;
 wildcard `/sockwrite`; no-space + mixed-paren `if` conditions; **`.property` suffix
-parsing** (`$hget(t,N).item/.data`, `$sock().port`); **listening sockets**
-(`/socklisten`, `on SOCKLISTEN`, `/sockaccept`, `/sockmark`, `$sock(name).port/.mark/.status`)
-— the async accept/connect I/O is pending live-network verification.
+parsing** (`$hget(t,N).item/.data`, `$sock().port`); **full socket section**
+(`/socklisten`, `/sockaccept`, `/socklist`, `/sockrename`, `/sockpause`, `/sockmark`,
+`on SOCKLISTEN`/`on SOCKWRITE`, `$sock(name).*` properties) — async accept/connect I/O
+pending live-network verification.
+
+### mIRC syntax-compatibility audit (verified against mirc.com/help)
+- **Verified correct:** token separator = ASCII code (`$gettok`/`$addtok`/…); `$left`/`$right`
+  negative-N; `$gettok` ranges/negatives; `$iif`, `$calc`, `$str`, `$rand`, `$chr`/`$asc`,
+  `$sorttok`; `/tokenize` (ASCII-code sep); `/timer` (reps then interval); `/msg`/`/describe`.
+- **Fixed:** `$pos(text,str,N)` (Nth occurrence, was always 1st) + new `$lastpos`; `$mid` N=0
+  = to-end; `$count`/`$replace`/`$remove` multiple args; new `$instok`/`$reptok`; `$regex`/`$regsub`
+  now parse `/pattern/flags` (i/m/s/x).
+- **Known gaps (feature, not syntax):** `/write` line switches (`-l`/`-i`/`-d`); `/timer` flags
+  (`-m` ms) + true infinite (reps=0 caps at 1000); `$regsub` `%var` form (args pre-expanded);
+  event access-levels/prefixes (`on @*:`/`on 1:`) parsed but not enforced; `on SNOTICE`/`WALLOPS`;
+  UDP (`/sockudp`, `on UDPREAD`).
