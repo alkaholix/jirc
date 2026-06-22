@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Default capability set granted to the main window.","local":true,"windows":["main"],"permissions":["core:default","notification:default","opener:allow-open-url"]}}

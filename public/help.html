@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>jIRC — Help &amp; Guide</title>
+<style>
+  :root {
+    --bg: #1a1b26; --panel: #1f2335; --panel2: #292e42; --border: #2f334d;
+    --fg: #c0caf5; --muted: #787c99; --accent: #7aa2f7; --green: #9ece6a;
+    --yellow: #e0af68; --red: #f7768e; --code: #bb9af7;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.6 -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .layout { display: flex; align-items: flex-start; max-width: 1100px; margin: 0 auto; }
+  nav.toc {
+    position: sticky; top: 0; align-self: flex-start; width: 240px; flex: none;
+    height: 100vh; overflow-y: auto; padding: 1.5rem 1rem; border-right: 1px solid var(--border);
+    font-size: 14px;
+  }
+  nav.toc h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 1.2rem 0 .4rem; }
+  nav.toc a { display: block; color: var(--fg); text-decoration: none; padding: 2px 0; opacity: .85; }
+  nav.toc a:hover { color: var(--accent); opacity: 1; }
+  main { flex: 1; min-width: 0; padding: 2rem 2.5rem 6rem; }
+  h1 { color: #fff; font-size: 2rem; margin: 0 0 .25rem; }
+  h1 .sub { display: block; color: var(--muted); font-size: 1rem; font-weight: 400; margin-top: .3rem; }
+  h2 { color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: .3rem; margin-top: 2.5rem; }
+  h3 { color: #fff; margin-top: 1.8rem; }
+  a { color: var(--accent); }
+  code { background: var(--panel2); color: var(--code); padding: .1em .35em; border-radius: 4px; font-family: "Cascadia Code", Consolas, monospace; font-size: .9em; }
+  pre {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 1rem; overflow-x: auto; font-family: "Cascadia Code", Consolas, monospace;
+    font-size: .88rem; line-height: 1.5;
+  }
+  pre code { background: none; color: var(--green); padding: 0; }
+  pre .c { color: var(--muted); font-style: italic; }   /* comment */
+  pre .k { color: var(--red); }                          /* command */
+  pre .i { color: var(--code); }                         /* identifier */
+  pre .v { color: var(--yellow); }                       /* variable */
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .92rem; }
+  th, td { border: 1px solid var(--border); padding: .5rem .7rem; text-align: left; vertical-align: top; }
+  th { background: var(--panel2); color: #fff; }
+  td code { white-space: nowrap; }
+  .note { background: var(--panel); border-left: 3px solid var(--accent); padding: .8rem 1rem; border-radius: 0 6px 6px 0; margin: 1rem 0; }
+  .warn { border-left-color: var(--yellow); }
+  .bad { border-left-color: var(--red); }
+  .pill { display: inline-block; background: var(--panel2); color: var(--green); border-radius: 20px; padding: .1rem .6rem; font-size: .8rem; margin-left: .4rem; }
+  footer { color: var(--muted); border-top: 1px solid var(--border); margin-top: 3rem; padding-top: 1rem; font-size: .85rem; }
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="toc">
+  <strong style="color:#fff">jIRC Help</strong>
+  <h2>Using jIRC</h2>
+  <a href="#connect">Connecting</a>
+  <a href="#interface">The interface</a>
+  <a href="#chat">Chatting &amp; commands</a>
+  <a href="#format">Formatting &amp; emoji</a>
+  <a href="#find">Find in buffer</a>
+  <a href="#people">People &amp; away</a>
+  <a href="#channels">Channels</a>
+  <a href="#customise">Customising</a>
+  <a href="#css">Custom CSS cheat sheet</a>
+  <a href="#security">Security &amp; data</a>
+  <h2>Scripting — basics</h2>
+  <a href="#intro">Introduction</a>
+  <a href="#load">Where scripts live</a>
+  <a href="#quickstart">Quick start</a>
+  <a href="#syntax">Syntax & comments</a>
+  <h2>Building blocks</h2>
+  <a href="#aliases">Aliases</a>
+  <a href="#params">Parameters</a>
+  <a href="#vars">Variables</a>
+  <a href="#customid">Custom identifiers</a>
+  <a href="#flow">Control flow</a>
+  <h2>Reacting</h2>
+  <a href="#events">Events (on …)</a>
+  <a href="#popups">Popup menus</a>
+  <a href="#dialogs">Dialogs</a>
+  <a href="#timers">Timers</a>
+  <h2>Reference</h2>
+  <a href="#commands">Commands</a>
+  <a href="#identifiers">Identifiers</a>
+  <a href="#regex">Regex</a>
+  <a href="#files">Files</a>
+  <a href="#hash">Hash tables</a>
+  <a href="#sockets">Sockets</a>
+  <h2>Notes</h2>
+  <a href="#limits">What's not supported</a>
+</nav>
+
+<main>
+<h1>jIRC — Help &amp; Guide
+  <span class="sub">Using the client, and the full mIRC-style scripting reference</span>
+</h1>
+
+<p>jIRC is a modern, cross-platform IRC client that speaks standard IRC (RFC
+1459/2812 + IRCv3) and <strong>IRCX</strong>, with a built-in mIRC-style scripting
+engine. The first part of this guide covers <strong>using the app</strong>; the
+second part is the complete <a href="#intro">scripting reference</a>.</p>
+
+<h2 id="connect">Connecting to a server</h2>
+<ul>
+  <li>Click <strong>+</strong> (or "Connect") to open the connect dialog. Enter the
+    server host and port, tick <strong>TLS</strong> for a secure connection, set your
+    nick (and an alternative used if it's taken), and any channels to auto-join.</li>
+  <li>Saved servers appear in a dropdown — pick one and connect, or delete it.</li>
+  <li>You can connect to <strong>several servers at once</strong>; each gets its own
+    console and windows, and auto-reconnects if dropped.</li>
+  <li>Passwords (server / NickServ) are stored in your <strong>OS keyring</strong>,
+    not in plain text.</li>
+</ul>
+
+<h2 id="interface">The interface</h2>
+<ul>
+  <li><strong>Layout:</strong> choose a collapsible <strong>tree</strong> sidebar or a
+    <strong>switchbar</strong> of tabs in Settings → Appearance.</li>
+  <li>Each server has a <strong>console</strong> (status) window; channels and private
+    chats (queries) open as their own windows.</li>
+  <li>The <strong>nick list</strong> (right side of a channel) shows members with their
+    rank prefixes; the <strong>topic bar</strong> shows/edits the topic.</li>
+  <li>Buttons top-left: <code>⟨⟩</code> scripts, <code>⚙</code> settings, <code>+</code> add a connection.</li>
+</ul>
+
+<h2 id="chat">Chatting &amp; commands</h2>
+<p>Type in the input box and press Enter to talk. Lines starting with <code>/</code>
+are commands. Common ones:</p>
+<table>
+  <tr><th>Command</th><th>Does</th></tr>
+  <tr><td><code>/join #chan</code> · <code>/part</code></td><td>join / leave a channel</td></tr>
+  <tr><td><code>/msg nick text</code> · <code>/query nick</code></td><td>private message / open a query</td></tr>
+  <tr><td><code>/me action</code></td><td>send an action</td></tr>
+  <tr><td><code>/nick newnick</code></td><td>change your nick</td></tr>
+  <tr><td><code>/whois nick</code></td><td>look someone up</td></tr>
+  <tr><td><code>/topic [text]</code></td><td>view / set the channel topic</td></tr>
+  <tr><td><code>/list</code> · <code>/listx</code></td><td>browse the channel list (IRCX <code>/listx</code>)</td></tr>
+  <tr><td><code>/away [msg]</code></td><td>set / clear away (or use the Away button)</td></tr>
+  <tr><td><code>/ignore nick</code> · <code>/unignore</code></td><td>hide / unhide someone</td></tr>
+  <tr><td><code>/raw line</code></td><td>send a raw IRC line</td></tr>
+</table>
+<p>Anything jIRC doesn't recognise is passed to your scripts (an alias) and then to
+the server, so your own <code>/commands</code> work here too.</p>
+
+<h2 id="format">Formatting, colours &amp; emoji</h2>
+<ul>
+  <li>Incoming <strong>mIRC colour/format codes</strong> render in full; URLs are clickable.</li>
+  <li>Type <code>:shortcodes:</code> like <code>:smile:</code> or <code>:fire:</code> — they expand to emoji.</li>
+  <li>Add your own in Settings → Appearance → <strong>Custom emoji</strong>: map a
+    <code>:code:</code> to text/unicode (sent as text) or an <strong>image URL</strong>
+    (shown inline as a little picture).</li>
+</ul>
+
+<h2 id="find">Find in buffer</h2>
+<p>Press <strong>Ctrl/Cmd+F</strong> to search the current window. Matches are
+highlighted with a count; Enter / Shift+Enter jump to the next / previous; Esc closes.</p>
+
+<h2 id="people">People, presence &amp; the notify list</h2>
+<ul>
+  <li><strong>Right-click a nick</strong> for whois / query / whisper / op / voice /
+    kick / ban / ignore (this menu is script-customisable, see Popups).</li>
+  <li><strong>Away:</strong> the topic bar's <strong>Away</strong> button sets/clears your
+    away state (with a message) and lights up while you're away.</li>
+  <li><strong>Notify / watch list:</strong> add friends' nicks in Settings → Alerts. jIRC
+    checks who's online and alerts you when they come/go, and lists who's around in the
+    sidebar's <strong>Online</strong> panel.</li>
+  <li><strong>Highlight words &amp; ignores</strong> are also in Settings → Alerts.</li>
+</ul>
+
+<h2 id="channels">Channel management</h2>
+<ul>
+  <li>Op/voice/kick/ban from the nick-list menu, or with <code>/mode</code>, <code>/kick</code>, <code>/ban</code>.</li>
+  <li>Double-click the topic bar to edit the topic.</li>
+  <li><code>/list</code> opens a sortable, filterable channel browser (IRCX servers: <code>/listx</code>).</li>
+</ul>
+
+<h2 id="customise">Customising jIRC</h2>
+<ul>
+  <li><strong>Theme:</strong> dark / light / match-system (Settings → Appearance).</li>
+  <li><strong>Your nick colour</strong> is configurable; other nicks use a standard colour.</li>
+  <li><strong>Custom emoji</strong> (text or inline images) — see above.</li>
+  <li><strong>Nicklist icons:</strong> scripts can badge a nick with <code>/nickicon nick 👑</code>
+    (an emoji or image URL).</li>
+  <li><strong>Custom CSS:</strong> Settings → Appearance has a CSS box (with a built-in
+    cheat sheet) to restyle <em>anything</em> — colours, fonts, spacing, hide elements —
+    applied live. There's a Reset button if you go too far.</li>
+  <li><strong>Custom dialogs &amp; popups</strong> let scripts build their own UI — see the scripting section.</li>
+</ul>
+
+<h2 id="css">Custom CSS cheat sheet</h2>
+<p>The whole app is drawn with CSS, so you can restyle <em>anything</em> from
+<strong>Settings → Appearance → Custom CSS</strong>. CSS is just
+<code>selector { property: value; }</code> — pick something to change, set a
+property, done. The same cheat sheet is built into the settings panel. Copy an
+example and tweak it:</p>
+<pre><code><span class="c">/* recolour the whole app */</span>
+:root { --accent: #ff4da6; }
+
+<span class="c">/* bigger chat font */</span>
+.messages { font-size: 16px; }
+
+<span class="c">/* hide timestamps */</span>
+.line .time { display: none; }
+
+<span class="c">/* compact member list */</span>
+.nick-entry { padding: 1px 4px; }
+
+<span class="c">/* a background image */</span>
+.messages { background: url("https://…/bg.png") center/cover; }
+</code></pre>
+<h3>Colour variables — change these to recolour everything</h3>
+<table>
+  <tr><th>Variable</th><th>Controls</th></tr>
+  <tr><td><code>--accent</code></td><td>links, highlights, your own nick</td></tr>
+  <tr><td><code>--bg</code> · <code>--bg2</code></td><td>window / chat background</td></tr>
+  <tr><td><code>--panel</code> · <code>--panel2</code></td><td>sidebars &amp; dialogs / inputs &amp; hovers</td></tr>
+  <tr><td><code>--fg</code></td><td>main text colour</td></tr>
+  <tr><td><code>--muted</code></td><td>dim text (timestamps, hints)</td></tr>
+  <tr><td><code>--border</code></td><td>lines between panels</td></tr>
+  <tr><td><code>--err</code> · <code>--ok</code></td><td>error / success colours</td></tr>
+</table>
+<h3>Parts of the app — target these to restyle them</h3>
+<table>
+  <tr><th>Selector</th><th>What it is</th></tr>
+  <tr><td><code>.messages</code></td><td>the chat area</td></tr>
+  <tr><td><code>.line .nick</code></td><td>nicknames in chat</td></tr>
+  <tr><td><code>.line .time</code></td><td>timestamps</td></tr>
+  <tr><td><code>.line .text</code></td><td>message text</td></tr>
+  <tr><td><code>.nicklist</code> · <code>.nick-entry</code></td><td>the member list / one member row</td></tr>
+  <tr><td><code>.sidebar</code> · <code>.switchbar</code></td><td>the channel navigation</td></tr>
+  <tr><td><code>.topicbar</code></td><td>the topic bar</td></tr>
+  <tr><td><code>.inputbar</code></td><td>the message input box</td></tr>
+  <tr><td><code>.buffer-item</code></td><td>a channel/query in the tree</td></tr>
+</table>
+<div class="note">Change a colour variable for a sweeping new look, or target a specific
+part for fine control. Made a mess? Hit <strong>Reset</strong> in the settings panel.</div>
+
+<h2 id="security">Security &amp; where your data lives</h2>
+<ul>
+  <li><strong>TLS</strong> (rustls), <strong>SASL PLAIN</strong>, NickServ identify, and a
+    <strong>SOCKS5 proxy</strong> are all supported.</li>
+  <li>Passwords live in the <strong>OS keyring</strong> (Windows Credential Manager / macOS
+    Keychain / Linux Secret Service), never in plain files.</li>
+  <li>Server profiles: <code>profiles.json</code>; scripts: <code>scripts/*.mrc</code>;
+    chat logs: <code>logs/&lt;network&gt;/&lt;buffer&gt;.log</code> — all under the app config/data dir.</li>
+</ul>
+
+<hr style="border-color:var(--border); margin:2.5rem 0" />
+<h1 style="font-size:1.6rem">Scripting (mSL)</h1>
+<p>A substantial subset of mIRC's scripting language: your own <code>/commands</code>
+(aliases), automatic reactions (events), right-click menus (popups), custom dialogs,
+timers, regex, file I/O and sockets.</p>
+<div class="note warn">
+This is a <strong>subset</strong> of mIRC — not 100% compatible. See
+<a href="#limits">What's not supported</a> for the boundaries.
+</div>
+
+<h2 id="intro">Introduction</h2>
+<p>A script is plain text made of <strong>aliases</strong>, <strong>events</strong>,
+and <strong>menus</strong>. Each lives in a <code>.mrc</code> file. All your
+<code>.mrc</code> files are compiled together, so an alias in one file can be called
+from another.</p>
+
+<h2 id="load">Where scripts live &amp; how to load them</h2>
+<ul>
+  <li>Open the <strong>Scripts</strong> dialog in jIRC (the <code>⟨⟩</code> button).</li>
+  <li>Create/edit files there, or click <strong>Add examples</strong> to drop in starter scripts.</li>
+  <li>On disk they're under the app config folder:
+    <ul>
+      <li><strong>Windows:</strong> <code>%APPDATA%\com.jirc.app\scripts\</code></li>
+      <li><strong>macOS:</strong> <code>~/Library/Application Support/com.jirc.app/scripts/</code></li>
+      <li><strong>Linux:</strong> <code>~/.config/com.jirc.app/scripts/</code></li>
+    </ul>
+  </li>
+  <li>Saving in the Scripts dialog recompiles everything immediately — no restart needed.</li>
+</ul>
+
+<h2 id="quickstart">Quick start</h2>
+<p>Paste this into a script file and save. Then type <code>/hello</code> in any
+channel, and watch what happens when someone joins.</p>
+<pre><code><span class="c">; my first script</span>
+<span class="k">alias</span> hello { <span class="k">/msg</span> <span class="i">$chan</span> Hello from a script, <span class="i">$me</span><span class="i">$+</span>! }
+
+<span class="k">on</span> *:JOIN:#:{ <span class="k">/msg</span> <span class="i">$chan</span> Welcome <span class="i">$nick</span> to <span class="i">$chan</span> }
+</code></pre>
+<p>Scripted messages are echoed into your own window too, just like in mIRC, so
+you'll see the output yourself.</p>
+
+<h2 id="syntax">Syntax &amp; comments</h2>
+<ul>
+  <li>A line starting with <code>;</code> is a comment.</li>
+  <li>Statements are separated by a <strong>new line</strong> or a <strong>pipe</strong> <code>|</code>.</li>
+  <li>Blocks are wrapped in <code>{ }</code>.</li>
+  <li><code>$identifiers</code> return values; <code>%variables</code> are yours to set.</li>
+  <li><code>$+</code> joins two pieces together with no space: <code>$me $+ !</code> &rarr; <code>YourNick!</code></li>
+</ul>
+<pre><code><span class="c">; two statements on one line</span>
+<span class="k">alias</span> greet { <span class="k">/echo</span> hi | <span class="k">/echo</span> there }
+</code></pre>
+
+<h2 id="aliases">Aliases (your own /commands)</h2>
+<p>An alias defines a command you can type. Use <code>$1</code>, <code>$2</code>, …
+for the words the user typed after it.</p>
+<pre><code><span class="k">alias</span> slap { <span class="k">/me</span> slaps <span class="i">$1</span> around a bit with a large trout }
+<span class="k">alias</span> op   { <span class="k">/mode</span> <span class="i">$chan</span> +o <span class="i">$1</span> }
+<span class="k">alias</span> shrug { <span class="k">/say</span> &#175;\_(&#12484;)_/&#175; }
+</code></pre>
+<p>Type <code>/slap bob</code> &rarr; sends an action "slaps bob …".</p>
+
+<h2 id="params">Parameters: $1, $2, $2-, $0</h2>
+<table>
+  <tr><th>Token</th><th>Meaning</th></tr>
+  <tr><td><code>$1</code>, <code>$2</code> …</td><td>The first, second … word.</td></tr>
+  <tr><td><code>$2-</code></td><td>The second word onward (the rest of the line).</td></tr>
+  <tr><td><code>$0</code></td><td>How many words there are.</td></tr>
+</table>
+<pre><code><span class="k">alias</span> kickreason { <span class="k">/kick</span> <span class="i">$chan</span> <span class="i">$1</span> <span class="i">$2-</span> }
+<span class="c">; /kickreason bob being rude  ->  KICK #chan bob :being rude</span>
+</code></pre>
+
+<h2 id="vars">Variables</h2>
+<p>Variables start with <code>%</code>. They persist for the session.</p>
+<table>
+  <tr><th>Command</th><th>Effect</th></tr>
+  <tr><td><code>/set %x value</code></td><td>Set a variable.</td></tr>
+  <tr><td><code>/inc %x [n]</code></td><td>Increase by n (default 1).</td></tr>
+  <tr><td><code>/dec %x [n]</code></td><td>Decrease by n.</td></tr>
+  <tr><td><code>/unset %x</code></td><td>Remove it.</td></tr>
+</table>
+<pre><code><span class="k">alias</span> count {
+  <span class="k">/set</span> <span class="v">%i</span> 0
+  <span class="k">/while</span> (<span class="v">%i</span> &lt; 3) { <span class="k">/inc</span> <span class="v">%i</span> | <span class="k">/echo</span> tick <span class="v">%i</span> }
+}
+</code></pre>
+
+<h2 id="customid">Custom identifiers (return a value)</h2>
+<p>Any alias can be used as an <code>$identifier</code> if it returns a value with
+<code>/return</code>. This lets you build reusable helpers.</p>
+<pre><code><span class="k">alias</span> double { <span class="k">/return</span> <span class="i">$calc</span>(<span class="i">$1</span> * 2) }
+
+<span class="k">alias</span> test { <span class="k">/echo</span> twice five is <span class="i">$double</span>(5) }
+<span class="c">; -> twice five is 10</span>
+</code></pre>
+
+<h2 id="flow">Control flow</h2>
+<p><code>if</code> / <code>elseif</code> / <code>else</code> and <code>while</code> loops. Bodies can be a
+<code>{ }</code> block <em>or</em> a single brace-less statement on the same line (it runs to the
+end of the line or the next <code>|</code>).</p>
+<pre><code><span class="k">alias</span> grade {
+  <span class="k">if</span> (<span class="i">$1</span> &gt;= 90) { <span class="k">/echo</span> A }
+  <span class="k">elseif</span> (<span class="i">$1</span> &gt;= 80) { <span class="k">/echo</span> B }
+  <span class="k">else</span> { <span class="k">/echo</span> keep trying }
+}
+<span class="c">; brace-less form — common in mIRC scripts:</span>
+<span class="k">alias</span> check {
+  <span class="k">if</span> (<span class="i">$1</span> == <span class="i">$null</span>) <span class="k">return</span>
+  <span class="k">if</span> (<span class="i">$1</span> isnum) <span class="k">/echo</span> got a number | <span class="k">/echo</span> always runs
+}
+</code></pre>
+<h3>Comparison operators</h3>
+<table>
+  <tr><th>Operator</th><th>True when…</th></tr>
+  <tr><td><code>==</code> · <code>===</code></td><td>equal (case-insensitive) · equal (case-sensitive)</td></tr>
+  <tr><td><code>!=</code></td><td>not equal</td></tr>
+  <tr><td><code>&lt; &gt; &lt;= &gt;=</code></td><td>numeric comparison</td></tr>
+  <tr><td><code>// </code> · <code>\\</code></td><td><code>a // b</code> — b is / is not a multiple of a</td></tr>
+  <tr><td><code>isin</code> · <code>isincs</code></td><td><code>a isin b</code> — a is contained in b (cs = case-sensitive)</td></tr>
+  <tr><td><code>iswm</code> · <code>iswmcs</code></td><td><code>a iswm b</code> — wildcard match (<code>*</code>, <code>?</code>)</td></tr>
+  <tr><td><code>isnum</code></td><td><code>a isnum</code> — numeric; <code>a isnum 1-10</code> — and in range</td></tr>
+  <tr><td><code>isletter</code> · <code>isalpha</code> · <code>isalnum</code></td><td>letters / letters / letters+digits only</td></tr>
+  <tr><td><code>islower</code> · <code>isupper</code></td><td>all lower- / upper-case</td></tr>
+  <tr><td><code>!</code></td><td>prefix negation, e.g. <code>if (!%x)</code> (x is empty/zero)</td></tr>
+  <tr><td><code>&amp;&amp;</code> / <code>||</code></td><td>logical and / or</td></tr>
+</table>
+<h3>goto / labels</h3>
+<p>A line <code>:name</code> is a label; <code>/goto name</code> jumps to it (it can jump
+out of <code>if</code>/<code>while</code> blocks). A safety cap stops runaway loops.</p>
+<pre><code><span class="k">alias</span> countup {
+  <span class="k">/set</span> <span class="v">%i</span> 0
+  :loop
+  <span class="k">/inc</span> <span class="v">%i</span>
+  <span class="k">/echo</span> <span class="v">%i</span>
+  <span class="k">if</span> (<span class="v">%i</span> &lt; 5) { <span class="k">/goto</span> loop }
+  <span class="k">/echo</span> done
+}
+</code></pre>
+
+<h2 id="events">Events: reacting with <code>on</code></h2>
+<p>Events run automatically. The general form is:</p>
+<pre><code><span class="k">on</span> &lt;level&gt;:&lt;EVENT&gt;:&lt;target&gt;:{ commands }
+</code></pre>
+<p>The <em>level</em> is usually <code>*</code> (it's accepted but not enforced).
+Text-style events also take a <strong>matchtext</strong> pattern before the target:</p>
+<pre><code><span class="k">on</span> *:TEXT:&lt;matchtext&gt;:&lt;target&gt;:{ commands }
+</code></pre>
+<h3>The target field</h3>
+<table>
+  <tr><th>Target</th><th>Matches</th></tr>
+  <tr><td><code>#</code></td><td>any channel</td></tr>
+  <tr><td><code>#channel</code></td><td>that specific channel</td></tr>
+  <tr><td><code>?</code></td><td>a private/query message (no channel)</td></tr>
+  <tr><td><code>*</code></td><td>anywhere</td></tr>
+</table>
+
+<h3>Supported events</h3>
+<table>
+  <tr><th>Event</th><th>Fires when…</th><th>Available</th></tr>
+  <tr><td><code>TEXT</code></td><td>someone sends a message</td><td><code>$nick $chan $target $1-</code></td></tr>
+  <tr><td><code>ACTION</code></td><td>someone sends a <code>/me</code> action</td><td><code>$nick $chan $1-</code></td></tr>
+  <tr><td><code>NOTICE</code></td><td>someone sends a notice</td><td><code>$nick $chan $1-</code></td></tr>
+  <tr><td><code>INPUT</code></td><td><strong>you</strong> type a line</td><td><code>$chan $target $1-</code></td></tr>
+  <tr><td><code>JOIN</code></td><td>someone joins</td><td><code>$nick $chan</code></td></tr>
+  <tr><td><code>PART</code></td><td>someone leaves</td><td><code>$nick $chan $1-</code> (part msg)</td></tr>
+  <tr><td><code>QUIT</code></td><td>someone quits</td><td><code>$nick $1-</code> (quit msg)</td></tr>
+  <tr><td><code>NICK</code></td><td>someone changes nick</td><td><code>$nick</code> (old), <code>$newnick</code></td></tr>
+  <tr><td><code>KICK</code></td><td>someone is kicked</td><td><code>$nick</code> (kicker), <code>$knick</code> (kicked), <code>$chan $1-</code> (reason)</td></tr>
+  <tr><td><code>MODE</code></td><td>a mode changes</td><td><code>$nick</code> (setter), <code>$chan $1-</code> (modes)</td></tr>
+  <tr><td><code>OP DEOP VOICE DEVOICE BAN UNBAN OWNER ADMIN HELP</code> (+ DE‑ forms)</td><td>a specific mode change</td><td><code>$nick</code> (setter), <code>$opnick</code>/<code>$bnick</code>/<code>$vnick</code>/<code>$knick</code> = affected nick/mask, <code>$chan</code></td></tr>
+  <tr><td><code>TOPIC</code></td><td>the topic changes</td><td><code>$nick</code> (setter), <code>$chan $1-</code> (topic)</td></tr>
+  <tr><td><code>INVITE</code></td><td>you are invited</td><td><code>$nick</code> (inviter), <code>$chan</code></td></tr>
+  <tr><td><code>CONNECT</code></td><td>you finish connecting</td><td>—</td></tr>
+  <tr><td><code>DISCONNECT</code></td><td>you disconnect</td><td>—</td></tr>
+</table>
+
+<h3>Examples</h3>
+<pre><code><span class="c">; reply to a trigger word</span>
+<span class="k">on</span> *:TEXT:!ping*:#:{ <span class="k">/msg</span> <span class="i">$chan</span> pong <span class="i">$nick</span> }
+
+<span class="c">; greet joiners</span>
+<span class="k">on</span> *:JOIN:#:{ <span class="k">/msg</span> <span class="i">$chan</span> welcome <span class="i">$nick</span> }
+
+<span class="c">; announce kicks</span>
+<span class="k">on</span> *:KICK:#:{ <span class="k">/msg</span> <span class="i">$chan</span> <span class="i">$knick</span> was kicked by <span class="i">$nick</span> (<span class="i">$1-</span>) }
+
+<span class="c">; log mode changes</span>
+<span class="k">on</span> *:MODE:#:{ <span class="k">/echo</span> -s <span class="i">$nick</span> set <span class="i">$1-</span> on <span class="i">$chan</span> }
+
+<span class="c">; react to your OWN input</span>
+<span class="k">on</span> *:INPUT:#:{ <span class="k">if</span> (<span class="i">$1</span> == !time) { <span class="k">/msg</span> <span class="i">$chan</span> it is <span class="i">$time</span> } }
+</code></pre>
+<div class="note warn">
+<strong>on TEXT</strong> fires for <em>other</em> people's messages, not your own — use
+<strong>on INPUT</strong> for your own typed lines. An <code>on INPUT</code> handler can
+call <code>/halt</code> to stop your line from being sent (e.g. to intercept a custom command).
+</div>
+
+<h2 id="popups">Popup menus</h2>
+<p>Add items to the right-click menu in the nick list. Leading dots make submenus;
+a line that is just <code>-</code> is a separator. In the nick-list menu,
+<code>$1</code> is the nick you clicked.</p>
+<pre><code><span class="k">menu</span> nicklist {
+  Whois:<span class="k">/whois</span> <span class="i">$1</span>
+  -
+  Control
+  .Op:<span class="k">/mode</span> <span class="i">$chan</span> +o <span class="i">$1</span>
+  .Deop:<span class="k">/mode</span> <span class="i">$chan</span> -o <span class="i">$1</span>
+  .Kick:<span class="k">/kick</span> <span class="i">$chan</span> <span class="i">$1</span>
+  -
+  Slap:<span class="k">/me</span> slaps <span class="i">$1</span> around a bit
+}
+</code></pre>
+
+<h2 id="dialogs">Custom dialogs</h2>
+<p>Build your own pop-up windows with input fields, dropdowns and buttons. Unlike
+mIRC, there are no pixel coordinates — controls are given a <strong>name</strong>
+and laid out automatically, and they render as real, themed web controls.</p>
+
+<h3>Defining a dialog</h3>
+<pre><code><span class="k">dialog</span> quicksay {
+  <span class="k">title</span>  "Quick say"
+  <span class="k">text</span>   info  "Type a message:"
+  <span class="k">edit</span>   msg
+  <span class="k">combo</span>  where "#test" "#lobby"
+  <span class="k">check</span>  act   "Send as an action"
+  <span class="k">button</span> send  "Send" :default
+  <span class="k">button</span> cancel "Cancel" :cancel
+}
+</code></pre>
+<table>
+  <tr><th>Control</th><th>Renders as</th></tr>
+  <tr><td><code>text   id "label"</code></td><td>a static label</td></tr>
+  <tr><td><code>edit   id ["initial"]</code></td><td>a single-line input</td></tr>
+  <tr><td><code>editbox id</code></td><td>a multi-line text area</td></tr>
+  <tr><td><code>check  id "label"</code></td><td>a checkbox (<code>$did</code> = <code>1</code>/<code>0</code>)</td></tr>
+  <tr><td><code>combo  id "opt"…</code></td><td>a dropdown</td></tr>
+  <tr><td><code>list   id "opt"…</code></td><td>a list box</td></tr>
+  <tr><td><code>button id "label" [:default] [:cancel]</code></td><td>a button</td></tr>
+</table>
+
+<h3>Opening, reading, reacting</h3>
+<ul>
+  <li><code>/dialog name</code> opens it; <code>/dialog -c name</code> closes it.</li>
+  <li><code>$did(name, control)</code> reads a control's current value.</li>
+  <li><code>/did [-a|-r] name control [text]</code> changes a control: <code>-a</code> add a combo/list item, <code>-r</code> clear, default set the value.</li>
+  <li><code>on *:DIALOG:name:{ }</code> fires on interaction; <code>$1</code> is the control that triggered it (a button id, or <code>init</code> when it opens).</li>
+</ul>
+<pre><code><span class="k">alias</span> qsay { <span class="k">/dialog</span> quicksay }
+
+<span class="k">on</span> *:DIALOG:quicksay:{
+  <span class="k">if</span> (<span class="i">$1</span> == send) {
+    <span class="k">if</span> (<span class="i">$did</span>(quicksay, act) == 1) { <span class="k">/describe</span> <span class="i">$did</span>(quicksay, where) <span class="i">$did</span>(quicksay, msg) }
+    <span class="k">else</span> { <span class="k">/msg</span> <span class="i">$did</span>(quicksay, where) <span class="i">$did</span>(quicksay, msg) }
+    <span class="k">/dialog</span> -c quicksay
+  }
+}
+</code></pre>
+<div class="note">Behind the scenes, the dialog's control values are sent to your script
+each time you interact, so <code>$did</code> always reads the current form state. Use
+<code>on *:DIALOG:name:</code> with <code>$1 == init</code> to pre-fill controls with <code>/did</code> when it opens.</div>
+
+<h2 id="timers">Timers</h2>
+<p><code>/timer[name] &lt;reps&gt; &lt;seconds&gt; &lt;command&gt;</code> runs a command repeatedly.
+<code>reps</code> of <code>0</code> means "keep repeating". Give a name to stop it later.</p>
+<table>
+  <tr><th>Command</th><th>Effect</th></tr>
+  <tr><td><code>/timer reps secs cmd</code></td><td>start an (auto-named) timer</td></tr>
+  <tr><td><code>/timerNAME reps secs cmd</code></td><td>start a named timer (replaces same name)</td></tr>
+  <tr><td><code>/timerNAME off</code></td><td>stop that timer</td></tr>
+  <tr><td><code>/timers</code> · <code>/timers off</code></td><td>list all · stop all</td></tr>
+</table>
+<pre><code><span class="c">; say "tick" 5 times, once per second</span>
+<span class="k">alias</span> ticker { <span class="k">/timer</span> 5 1 <span class="k">/msg</span> <span class="i">$chan</span> tick }
+<span class="c">; a named, repeating announcer you can stop with /stopann</span>
+<span class="k">alias</span> ann    { <span class="k">/timerann</span> 0 300 <span class="k">/msg</span> <span class="i">$chan</span> visit our site! }
+<span class="k">alias</span> stopann { <span class="k">/timerann</span> off }
+</code></pre>
+
+<h2 id="commands">Command reference</h2>
+<table>
+  <tr><th>Command</th><th>Description</th></tr>
+  <tr><td><code>/echo [-s] [#tgt] text</code></td><td>Print locally. <code>-s</code> = status window.</td></tr>
+  <tr><td><code>/say text</code></td><td>Send text to the current channel/query.</td></tr>
+  <tr><td><code>/msg &lt;tgt&gt; text</code></td><td>Send a message to a channel or user.</td></tr>
+  <tr><td><code>/notice &lt;tgt&gt; text</code></td><td>Send a notice.</td></tr>
+  <tr><td><code>/me action</code></td><td>Send an action to the current window.</td></tr>
+  <tr><td><code>/describe &lt;tgt&gt; action</code></td><td>Send an action to a specific target.</td></tr>
+  <tr><td><code>/join #chan</code> · <code>/part [#chan]</code></td><td>Join / leave a channel.</td></tr>
+  <tr><td><code>/nick newnick</code></td><td>Change your nick.</td></tr>
+  <tr><td><code>/mode &lt;tgt&gt; modes</code></td><td>Set channel/user modes.</td></tr>
+  <tr><td><code>/topic #chan text</code></td><td>Set a channel topic.</td></tr>
+  <tr><td><code>/quit [msg]</code></td><td>Disconnect.</td></tr>
+  <tr><td><code>/raw line</code> · <code>/quote</code></td><td>Send a raw IRC line.</td></tr>
+  <tr><td><code>/amsg text</code> · <code>/ame action</code></td><td>Message / action to <em>every</em> channel you're on.</td></tr>
+  <tr><td><code>/query &lt;nick&gt; [msg]</code></td><td>Open a query (and send a message if given).</td></tr>
+  <tr><td><code>/ban [#chan] &lt;nick|mask&gt; [type]</code> · <code>/unban</code></td><td>Set/clear a channel ban (masks a known nick via the address list).</td></tr>
+  <tr><td><code>/var %a = 1, %b = $me</code></td><td>Declare local variables (mIRC <code>=</code> and comma form).</td></tr>
+  <tr><td><code>/set /inc /dec /unset</code></td><td>Manage <code>%variables</code> (<code>/unset</code> takes wildcards).</td></tr>
+  <tr><td><code>/hadd /hdel /hinc /hdec /hsave /hload /hmake /hfree /hclear</code></td><td>Manage hash tables (see below).</td></tr>
+  <tr><td><code>/tokenize &lt;c&gt; text</code></td><td>Split <em>text</em> by char code <em>c</em> into <code>$1, $2…</code></td></tr>
+  <tr><td><code>/noop</code></td><td>Do nothing (but evaluate its parameters).</td></tr>
+  <tr><td><code>/write [-c] file text</code></td><td>Append a line to a file (see Files).</td></tr>
+  <tr><td><code>/sockopen /sockwrite /sockread /sockclose</code></td><td>TCP sockets (see Sockets).</td></tr>
+  <tr><td><code>/dialog /did</code></td><td>Open/manage a custom dialog (see Dialogs).</td></tr>
+  <tr><td><code>/nickicon nick icon</code></td><td>Badge a nick in the nick list (emoji or image URL).</td></tr>
+  <tr><td><code>/timer[name] reps secs cmd</code></td><td>Schedule a command (named; see Timers).</td></tr>
+  <tr><td><code>/return value</code></td><td>Return a value from an alias.</td></tr>
+  <tr><td><code>/goto label</code></td><td>Jump to a <code>:label</code> (see Control flow).</td></tr>
+  <tr><td><code>/halt</code></td><td>Stop the script (in <code>on INPUT</code>, suppresses the line).</td></tr>
+</table>
+<div class="note">Unrecognized <em>client-side</em> commands (window/display/sound, e.g.
+<code>/clear</code>, <code>/window</code>, <code>/beep</code>, <code>/run</code>) are quietly ignored
+so dropped-in scripts don't error. Anything else that isn't a built-in or one of your
+aliases is sent to the server as a raw IRC command — so real IRC commands like
+<code>/whois</code> or <code>/list</code> work, but a typo like <code>/joimn</code> still
+goes to the server.</div>
+
+<h2 id="identifiers">Identifier reference</h2>
+<h3>Context</h3>
+<table>
+  <tr><th>Identifier</th><th>Returns</th></tr>
+  <tr><td><code>$me</code></td><td>your nick</td></tr>
+  <tr><td><code>$nick</code></td><td>the nick that triggered the event</td></tr>
+  <tr><td><code>$knick</code> / <code>$newnick</code></td><td>kicked user / new nick (event-dependent)</td></tr>
+  <tr><td><code>$chan</code></td><td>the channel</td></tr>
+  <tr><td><code>$target</code></td><td>the channel or query the event is about</td></tr>
+  <tr><td><code>$network</code></td><td>network name</td></tr>
+  <tr><td><code>$server</code></td><td>server host</td></tr>
+  <tr><td><code>$time</code> · <code>$date</code> · <code>$ctime</code></td><td>current time / date / unix seconds</td></tr>
+  <tr><td><code>$true</code> · <code>$false</code> · <code>$null</code></td><td>constants</td></tr>
+</table>
+<h3>Channels &amp; members (state-aware)</h3>
+<table>
+  <tr><th>Identifier</th><th>Returns</th></tr>
+  <tr><td><code>$chan(N)</code></td><td>name of your Nth channel (<code>$chan(0)</code> = count)</td></tr>
+  <tr><td><code>$nick(#chan, N)</code></td><td>Nth member of a channel (<code>N=0</code> = count)</td></tr>
+  <tr><td><code>$onchan(#chan)</code></td><td><code>$true</code>/<code>$false</code> — are you in it?</td></tr>
+  <tr><td><code>$comchan(nick, N)</code></td><td>Nth channel you share with <em>nick</em> (<code>N=0</code> = count)</td></tr>
+  <tr><td><code>$address(nick)</code></td><td><em>user@host</em> for a nick (from the address list)</td></tr>
+  <tr><td><code>$address(nick, type)</code> · <code>$mask(addr, type)</code></td><td>a wildcard ban mask (mIRC types 1–10)</td></tr>
+  <tr><td><code>$ial(mask, N)</code></td><td>Nth nick whose address matches a wildcard mask (<code>N=0</code> = count)</td></tr>
+</table>
+<p>The address list is filled from message prefixes and (when the server supports
+<code>userhost-in-names</code>) the member list, so <code>$address</code> works best for
+people who've been seen/active. Handy for bans:</p>
+<pre><code><span class="k">alias</span> banhost { <span class="k">/mode</span> <span class="i">$chan</span> +b <span class="i">$address</span>(<span class="i">$1</span>, 3) }
+<span class="c">; /banhost bob  ->  MODE #chan +b *!*@bob's.host</span>
+</code></pre>
+<pre><code><span class="c">; voice everyone in the current channel</span>
+<span class="k">alias</span> voiceall {
+  <span class="k">/set</span> <span class="v">%i</span> 1
+  :loop
+  <span class="k">if</span> (<span class="v">%i</span> &lt;= <span class="i">$nick</span>(<span class="i">$chan</span>, 0)) {
+    <span class="k">/mode</span> <span class="i">$chan</span> +v <span class="i">$nick</span>(<span class="i">$chan</span>, <span class="v">%i</span>)
+    <span class="k">/inc</span> <span class="v">%i</span> | <span class="k">/goto</span> loop
+  }
+}
+</code></pre>
+<h3>Strings</h3>
+<table>
+  <tr><th>Identifier</th><th>Returns</th></tr>
+  <tr><td><code>$len(text)</code></td><td>length</td></tr>
+  <tr><td><code>$upper(text)</code> · <code>$lower(text)</code></td><td>change case</td></tr>
+  <tr><td><code>$left(text, n)</code> · <code>$right(text, n)</code></td><td>first / last n chars</td></tr>
+  <tr><td><code>$mid(text, start, n)</code></td><td>substring (1-based start)</td></tr>
+  <tr><td><code>$pos(text, find)</code></td><td>1-based position, 0 if absent</td></tr>
+  <tr><td><code>$count(text, sub)</code></td><td>how many times sub appears</td></tr>
+  <tr><td><code>$replace(text, a, b)</code></td><td>replace a with b</td></tr>
+  <tr><td><code>$remove(text, sub)</code></td><td>remove sub</td></tr>
+  <tr><td><code>$reverse(text)</code></td><td>reverse it</td></tr>
+  <tr><td><code>$str(text, n)</code></td><td>repeat n times</td></tr>
+  <tr><td><code>$chr(n)</code> · <code>$asc(c)</code></td><td>code &harr; character</td></tr>
+  <tr><td><code>$+(a, b, c, …)</code></td><td>join the parts with no spaces, e.g. <code>$+(%a, -, %b)</code></td></tr>
+  <tr><td><code>$strip(text)</code></td><td>remove colour/bold/etc. codes</td></tr>
+  <tr><td><code>$qt(text)</code></td><td>wrap in quotes if it has spaces</td></tr>
+</table>
+<h3>Numbers</h3>
+<table>
+  <tr><th>Identifier</th><th>Returns</th></tr>
+  <tr><td><code>$calc(expr)</code></td><td>arithmetic, e.g. <code>$calc(2 + 3 * 4)</code></td></tr>
+  <tr><td><code>$rand(lo, hi)</code> · <code>$r(lo, hi)</code></td><td>random integer — or letter, e.g. <code>$rand(a, z)</code></td></tr>
+  <tr><td><code>$base(n, from, to [,zeropad])</code></td><td>convert number bases, e.g. <code>$base(255, 10, 16)</code> → <code>FF</code></td></tr>
+  <tr><td><code>$round(n, d)</code></td><td>round to d decimal places</td></tr>
+  <tr><td><code>$abs $int $ceil $floor</code></td><td><code>$abs(-3)</code> etc.</td></tr>
+  <tr><td><code>$min(a, b)</code> · <code>$max(a, b)</code></td><td>smaller / larger</td></tr>
+  <tr><td><code>$duration(secs)</code></td><td>e.g. <code>$duration(3661)</code> → <code>1hr1min1sec</code></td></tr>
+  <tr><td><code>$iif(cond, a, b)</code></td><td>inline if: returns a if cond else b</td></tr>
+</table>
+<h3>Token lists</h3>
+<p>"Tokens" are pieces of text separated by a character given as its <strong>code</strong>
+(<code>32</code> = space, <code>44</code> = comma, <code>46</code> = dot). Positions are 1-based.</p>
+<table>
+  <tr><th>Identifier</th><th>Returns</th></tr>
+  <tr><td><code>$gettok(list, n, c)</code></td><td>the nth token — also ranges <code>n-m</code>, <code>n-</code>, and negatives (<code>-1</code> = last)</td></tr>
+  <tr><td><code>$numtok(list, c)</code></td><td>how many tokens</td></tr>
+  <tr><td><code>$addtok(list, tok, c)</code></td><td>add tok if not already present</td></tr>
+  <tr><td><code>$istok(list, tok, c)</code></td><td><code>$true</code>/<code>$false</code></td></tr>
+  <tr><td><code>$findtok(list, tok, n, c)</code></td><td>position of the nth matching token</td></tr>
+  <tr><td><code>$deltok(list, n, c)</code></td><td>delete token n (or range <code>n-m</code>)</td></tr>
+  <tr><td><code>$remtok(list, tok, n, c)</code></td><td>remove the nth occurrence of tok</td></tr>
+  <tr><td><code>$puttok(list, tok, n, c)</code></td><td>replace token n</td></tr>
+  <tr><td><code>$sorttok(list, c [,opts])</code></td><td>sort; opts <code>n</code>=numeric, <code>r</code>=reverse</td></tr>
+  <tr><td><code>$wildtok(list, wild, n, c)</code></td><td>nth token matching a wildcard (n=0 → count)</td></tr>
+  <tr><td><code>$matchtok(list, sub, n, c)</code></td><td>nth token containing sub</td></tr>
+</table>
+<pre><code><span class="k">alias</span> demo {
+  <span class="k">/echo</span> <span class="i">$gettok</span>(a.b.c, 2, 46)      <span class="c">; -> b</span>
+  <span class="k">/echo</span> <span class="i">$sorttok</span>(c a b, 32)         <span class="c">; -> a b c</span>
+  <span class="k">/echo</span> <span class="i">$addtok</span>(red green, blue, 32) <span class="c">; -> red green blue</span>
+}
+</code></pre>
+
+<h2 id="regex">Regular expressions</h2>
+<table>
+  <tr><th>Identifier</th><th>Returns</th></tr>
+  <tr><td><code>$regex(text, pattern)</code></td><td>number of matches; stores capture groups</td></tr>
+  <tr><td><code>$regml(n)</code></td><td>the nth captured group from the last <code>$regex</code></td></tr>
+  <tr><td><code>$regsub(text, pattern, repl)</code></td><td>text with replacements (<code>\1</code> backrefs)</td></tr>
+</table>
+<pre><code><span class="k">alias</span> parse {
+  <span class="k">if</span> (<span class="i">$regex</span>(<span class="i">$1-</span>, ([a-z]+)(\d+))) {
+    <span class="k">/echo</span> letters= <span class="i">$regml</span>(1)  digits= <span class="i">$regml</span>(2)
+  }
+}
+<span class="c">; /parse abc123  ->  letters=abc  digits=123</span>
+
+<span class="k">alias</span> censor { <span class="k">/return</span> <span class="i">$regsub</span>(<span class="i">$1-</span>, \d, #) }
+<span class="c">; $censor(call 5551234) -> call ####### </span>
+</code></pre>
+<div class="note">Uses standard (PCRE-like) regex syntax via the Rust regex engine. The optional
+named-context first argument of mIRC's <code>$regex</code> is accepted but ignored.</div>
+
+<h2 id="files">Files <span class="pill">sandboxed</span></h2>
+<p>Scripts can read and write small text files. For safety, file access is
+<strong>sandboxed</strong>: only the file <em>name</em> is used, and all files live in a
+dedicated folder (<code>scriptdata</code> next to your scripts). Scripts can't read or
+write anywhere else on your disk.</p>
+<table>
+  <tr><th>Command / Identifier</th><th>Effect</th></tr>
+  <tr><td><code>/write file text</code></td><td>append <em>text</em> as a new line</td></tr>
+  <tr><td><code>/write -c file [text]</code></td><td>clear the file first, then optionally write</td></tr>
+  <tr><td><code>$read(file)</code></td><td>a random line</td></tr>
+  <tr><td><code>$read(file, n)</code></td><td>line number n</td></tr>
+  <tr><td><code>$lines(file)</code></td><td>number of lines</td></tr>
+  <tr><td><code>$isfile(file)</code> · <code>$isdir(d)</code> · <code>$exists(f)</code></td><td><code>$true</code>/<code>$false</code></td></tr>
+  <tr><td><code>$scriptdir</code></td><td>the sandbox folder path (with trailing separator)</td></tr>
+</table>
+<pre><code><span class="c">; a simple quotes database</span>
+<span class="k">alias</span> addquote { <span class="k">/write</span> quotes.txt <span class="i">$1-</span> }
+<span class="k">alias</span> quote    { <span class="k">/msg</span> <span class="i">$chan</span> <span class="i">$read</span>(quotes.txt) }
+</code></pre>
+
+<h2 id="hash">Hash tables</h2>
+<p>Key/value storage. Tables live for the session, but can be saved to / loaded
+from files (sandboxed, like <a href="#files">file I/O</a>).</p>
+<table>
+  <tr><th>Command / Identifier</th><th>Effect</th></tr>
+  <tr><td><code>/hmake table [N]</code> · <code>/hfree [-w] table</code></td><td>create / delete a table (<code>-w</code> = wildcard name)</td></tr>
+  <tr><td><code>/hadd [-m] table item value</code></td><td>store a value (<code>-m</code> creates the table if needed)</td></tr>
+  <tr><td><code>/hdel [-w] table item</code></td><td>remove an item (<code>-w</code> = wildcard item)</td></tr>
+  <tr><td><code>/hinc /hdec [-m] table item [n]</code></td><td>add / subtract from a numeric item</td></tr>
+  <tr><td><code>/hclear table</code></td><td>remove all items, keep the table</td></tr>
+  <tr><td><code>$hget(table)</code></td><td>the table name if it exists (so <code>if (!$hget(t))</code> works)</td></tr>
+  <tr><td><code>$hget(table, item)</code></td><td>read a value</td></tr>
+  <tr><td><code>$hfind(table, wild, n)</code></td><td>nth item name matching a wildcard (n=0 → count)</td></tr>
+  <tr><td><code>/hsave table file</code></td><td>save the table to a file</td></tr>
+  <tr><td><code>/hload table file</code></td><td>load a table from a file</td></tr>
+</table>
+<pre><code><span class="k">on</span> *:TEXT:!seen *:#:{
+  <span class="k">/msg</span> <span class="i">$chan</span> last saw <span class="i">$2</span> at <span class="i">$hget</span>(seen, <span class="i">$2</span>)
+}
+<span class="k">on</span> *:TEXT:*:#:{ <span class="k">/hadd</span> seen <span class="i">$nick</span> <span class="i">$time</span> }
+</code></pre>
+
+<h2 id="sockets">Sockets (sockbots) <span class="pill">advanced</span></h2>
+<p>Scripts can open raw TCP connections — enough to build sockbots, talk to other
+services, or speak a custom protocol. Sockets are <strong>line-oriented</strong>;
+use <code>/sockopen -e</code> for a <strong>TLS</strong> (encrypted) connection.</p>
+<div class="note bad">
+<strong>Security:</strong> sockets let a script connect anywhere on the network —
+they intentionally step outside the file sandbox. Only run socket scripts you trust.
+</div>
+<table>
+  <tr><th>Command / Identifier / Event</th><th>Effect</th></tr>
+  <tr><td><code>/sockopen [-e] name host port</code></td><td>open a TCP socket (<code>-e</code> = TLS)</td></tr>
+  <tr><td><code>/sockwrite [-n] name text</code></td><td>send text; <code>-n</code> appends CRLF</td></tr>
+  <tr><td><code>/sockclose name</code></td><td>close the socket</td></tr>
+  <tr><td><code>/socklist [wild]</code></td><td>list open sockets (optional wildcard)</td></tr>
+  <tr><td><code>/sockread %var</code></td><td>(in <code>on SOCKREAD</code>) read the current line</td></tr>
+  <tr><td><code>on *:SOCKOPEN:name:{ }</code></td><td>fired when connected</td></tr>
+  <tr><td><code>on *:SOCKREAD:name:{ }</code></td><td>fired per incoming line (also in <code>$1-</code>)</td></tr>
+  <tr><td><code>on *:SOCKCLOSE:name:{ }</code></td><td>fired when the socket closes</td></tr>
+  <tr><td><code>$sockname</code></td><td>the socket's name</td></tr>
+  <tr><td><code>$sockbr</code></td><td>bytes read by the last <code>/sockread</code></td></tr>
+</table>
+<p>The socket name in an event (e.g. <code>:mybot:</code>) is matched as a wildcard,
+and socket events run in the context of the connection that opened them — so
+<code>/msg #chan</code> from a handler goes to that network.</p>
+<pre><code><span class="c">; a minimal bot that connects to an IRC server over a socket</span>
+<span class="k">alias</span> startbot { <span class="k">/sockopen</span> mybot irc.example.org 6667 }
+
+<span class="k">on</span> *:SOCKOPEN:mybot:{
+  <span class="k">/sockwrite</span> -n mybot NICK jbot
+  <span class="k">/sockwrite</span> -n mybot USER jbot 0 * :jbot
+}
+
+<span class="k">on</span> *:SOCKREAD:mybot:{
+  <span class="k">var</span> <span class="v">%line</span>
+  <span class="k">/sockread</span> <span class="v">%line</span>
+  <span class="c">; reply to the server's PING so we stay connected</span>
+  <span class="k">if</span> (<span class="i">$1</span> == PING) { <span class="k">/sockwrite</span> -n mybot PONG <span class="i">$2-</span> }
+}
+
+<span class="k">on</span> *:SOCKCLOSE:mybot:{ <span class="k">/echo</span> -s mybot disconnected }
+</code></pre>
+<p>The simple form works too — the line is in <code>$1-</code>, so you can skip
+<code>/sockread</code> entirely: <code>on *:SOCKREAD:mybot:{ if (PING isin $1-) { … } }</code>.</p>
+
+<h2 id="limits">What's not supported</h2>
+
+<h3>Intentionally left out (by design)</h3>
+<div class="note bad">
+These will <strong>not</strong> be added — they're Windows-only and/or unsafe, and go
+against jIRC being cross-platform and safe to share:
+<ul style="margin:.5rem 0 0">
+  <li><strong>COM/DLL bridges</strong> (<code>$com</code>, <code>$dll</code>) and DDE.</li>
+  <li>Loading native binaries / arbitrary executables from scripts.</li>
+</ul>
+</div>
+
+<h3>Not yet (may come later)</h3>
+<div class="note warn">
+Planned or possible future work — scripts using these won't work today:
+<ul style="margin:.5rem 0 0">
+  <li><strong>DCC</strong> file transfer / chat.</li>
+  <li>Custom <code>@windows</code> / picture windows, and window/notify lifecycle events
+    (<code>on OPEN/CLOSE/SNOTICE/NOTIFY</code>).</li>
+  <li><strong>Property suffixes</strong> like <code>$sock(x).status</code>,
+    <code>$hget(t,N).item</code>, <code>$chan(#).topic</code> — the base identifiers work,
+    the <code>.property</code> part doesn't yet.</li>
+  <li>Binary variables (<code>&amp;binvar</code>, <code>$bvar</code>, <code>/bset</code>),
+    <code>$regsubex</code>, and crypto identifiers (<code>$md5</code>, <code>$hmac</code>,
+    <code>$sha1</code>).</li>
+  <li><code>$input</code> and other modal dialog identifiers, <code>.ini</code> files
+    (<code>$readini</code>/<code>/writeini</code>), and a long tail of rarely-used identifiers.</li>
+</ul>
+</div>
+
+<p>Two gotchas worth remembering:</p>
+<ul>
+  <li>An <strong>unknown identifier</strong> prints as literal text (e.g. <code>$sha1</code> shows up as the word "$sha1").</li>
+  <li>An unknown <strong>client-side</strong> command (windows/display/sound) is ignored;
+    any other unknown command is sent to the server as a raw IRC line.</li>
+</ul>
+
+<footer>
+jIRC help &amp; scripting guide — generated for the current build. As jIRC grows, this
+document is updated to match. Found something that should work but doesn't? It's
+probably on the list above.
+</footer>
+</main>
+</div>
+</body>
+</html>

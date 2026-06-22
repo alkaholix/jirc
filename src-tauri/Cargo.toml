@@ -1,0 +1,46 @@
+[package]
+name = "jirc"
+version = "0.1.0"
+description = "jIRC — a modern, open-source mIRC-style IRC client (standard IRC + IRCX)"
+authors = ["jIRC contributors"]
+edition = "2021"
+license = "MIT"
+repository = ""
+
+# The library that holds the app logic. Named with a `_lib` suffix so it does
+# not clash with the `jirc` binary on Windows.
+[lib]
+name = "jirc_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "net", "io-util", "sync", "macros", "time"] }
+irc-proto = "1.1.0"
+futures-util = "0.3.32"
+thiserror = "2.0.18"
+uuid = { version = "1.23.3", features = ["v4"] }
+# Use the `ring` crypto provider to avoid the aws-lc-rs C/NASM build deps.
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "tls12"] }
+rustls = { version = "0.23.40", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+webpki-roots = "1.0.7"
+keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+base64 = "0.22"
+regex = "1"
+tokio-socks = "0.5"
+tauri-plugin-notification = "2.3.3"
+tauri-plugin-opener = "2.5.4"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
