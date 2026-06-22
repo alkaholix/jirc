@@ -496,7 +496,7 @@ out of scope.
 - [ ] `/color` *(stub)*
 - [ ] `/comclose` · [ ] `/comlist` · [ ] `/comopen` · [ ] `/comreg`
 - [ ] `/continue`
-- [ ] `/copy`
+- [x] `/copy`
 - [ ] `/creq` *(stub)*
 - [x] `/ctcpreply`
 - [ ] `/ctcps`
@@ -572,7 +572,7 @@ out of scope.
 - [ ] `/mdi` *(stub)*
 - [x] `/me`
 - [ ] `/menubar` *(stub)*
-- [ ] `/mkdir`
+- [x] `/mkdir`
 - [ ] `/mnick`
 - [x] `/mode`
 - [x] `/msg`
@@ -602,14 +602,14 @@ out of scope.
 - [ ] `/reload`
 - [x] `/remini`
 - [ ] `/remote`
-- [x] `/remove` *(verify — file remove vs token)*
-- [ ] `/rename`
+- [x] `/remove`
+- [x] `/rename`
 - [ ] `/reseterror`
 - [ ] `/resetidle` *(stub)*
 - [x] `/return`
 - [ ] `/rlevel`
 - [ ] `/rline` *(stub)*
-- [ ] `/rmdir`
+- [x] `/rmdir`
 - [x] `/run`
 - [ ] `/ruser`
 - [ ] `/save` *(stub)*
