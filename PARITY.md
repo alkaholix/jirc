@@ -54,7 +54,7 @@ out of scope.
 - [ ] `$appstate`
 - [ ] `$argon2`
 - [x] `$asc`
-- [ ] `$asctime`
+- [x] `$asctime` *(local time; mIRC format codes → chrono)*
 - [ ] `$asin`
 - [ ] `$atan`
 - [ ] `$atan2`
@@ -71,7 +71,7 @@ out of scope.
 - [ ] `$biton`
 - [x] `$bnick`
 - [ ] `$bvar`
-- [ ] `$bytes`
+- [x] `$bytes` *(comma-formatted; `.suf` human-readable)*
 - [x] `$calc`
 - [ ] `$caller`
 - [ ] `$cb`
@@ -113,7 +113,7 @@ out of scope.
 - [ ] `$darkmode`
 - [x] `$date`
 - [ ] `$day`
-- [ ] `$daylight`
+- [x] `$daylight` *(returns 0 — DST not split out)*
 - [ ] `$dbuh`
 - [ ] `$dbuw`
 - [ ] `$dccignore`
@@ -143,7 +143,7 @@ out of scope.
 - [ ] `$editbox`
 - [ ] `$emailaddr`
 - [ ] `$encode`
-- [ ] `$envvar`
+- [x] `$envvar`
 - [ ] `$error`
 - [ ] `$eval`
 - [x] `$event`
@@ -171,7 +171,7 @@ out of scope.
 - [ ] `$fromeditbox`
 - [ ] `$fserve`
 - [x] `$fulladdress`
-- [ ] `$fulldate`
+- [x] `$fulldate`
 - [ ] `$fullname`
 - [ ] `$fullscreen`
 - [ ] `$gcd`
@@ -179,7 +179,7 @@ out of scope.
 - [ ] `$getdir`
 - [ ] `$getdot`
 - [x] `$gettok` *(incl. ranges)*
-- [ ] `$gmt`
+- [x] `$gmt`
 - [ ] `$group`
 - [ ] `$halted`
 - [ ] `$hash`
@@ -256,7 +256,7 @@ out of scope.
 - [ ] `$logdir`
 - [ ] `$logstamp`
 - [ ] `$logstampfmt`
-- [ ] `$longfn`
+- [x] `$longfn` *(pass-through)*
 - [ ] `$longip`
 - [x] `$lower`
 - [ ] `$ltimer`
@@ -299,9 +299,9 @@ out of scope.
 - [x] `$newnick`
 - [x] `$nick`
 - [ ] `$nickmode`
-- [ ] `$nofile`
-- [ ] `$nopath`
-- [ ] `$noqt`
+- [x] `$nofile`
+- [x] `$nopath`
+- [x] `$noqt`
 - [ ] `$not`
 - [ ] `$notags`
 - [ ] `$notify`
@@ -377,7 +377,7 @@ out of scope.
 - [ ] `$sha256`
 - [ ] `$sha384`
 - [ ] `$sha512`
-- [ ] `$shortfn`
+- [x] `$shortfn` *(pass-through)*
 - [ ] `$show`
 - [ ] `$signal`
 - [ ] `$sin`
@@ -415,13 +415,13 @@ out of scope.
 - [ ] `$tanh`
 - [x] `$target`
 - [ ] `$tempfn`
-- [ ] `$ticks`
+- [x] `$ticks` *(ms since process start)*
 - [ ] `$ticksqpc`
 - [x] `$time`
 - [ ] `$timer`
 - [ ] `$timestamp`
 - [ ] `$timestampfmt`
-- [ ] `$timezone`
+- [x] `$timezone`
 - [ ] `$tip`
 - [ ] `$tips`
 - [ ] `$titlebar`
