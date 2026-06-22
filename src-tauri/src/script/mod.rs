@@ -1122,6 +1122,37 @@ mod tests {
     }
 
     #[test]
+    fn alias_param_ranges_and_require() {
+        let engine = ScriptEngine::new();
+        engine.load("alias t { /msg #d [$2-4] [$2-] [$3] [$1-] [$0] [$$2] }");
+        let actions = engine.run_alias(&ctx(), "#here", "t", "a b c d e");
+        assert_eq!(
+            actions,
+            vec![Action::Send(
+                "PRIVMSG #d :[b c d] [b c d e] [c] [a b c d e] [5] [b]".into()
+            )]
+        );
+    }
+
+    #[test]
+    fn bare_hash_resolves_to_current_channel() {
+        let engine = ScriptEngine::new();
+        engine.load("alias t { /msg # hello }");
+        let actions = engine.run_alias(&ctx(), "#here", "t", "");
+        assert_eq!(actions, vec![Action::Send("PRIVMSG #here :hello".into())]);
+    }
+
+    #[test]
+    fn require_param_halts_rest_when_missing() {
+        let engine = ScriptEngine::new();
+        // $$2 is empty -> the run halts before the second command. The first
+        // still emits (the current command isn't suppressed mid-flight).
+        engine.load("alias t { /msg #d got=$$2 | /msg #d after }");
+        let actions = engine.run_alias(&ctx(), "#here", "t", "only");
+        assert_eq!(actions, vec![Action::Send("PRIVMSG #d :got=".into())]);
+    }
+
+    #[test]
     fn local_alias_callable_from_script_not_input() {
         // A `-l` local helper must be invokable from another alias, but not as a
         // user `/command` (which would otherwise be sent to the server as raw).

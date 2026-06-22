@@ -899,6 +899,10 @@ impl<'a> Runtime<'a> {
 
     /// Expands identifiers/vars within a single (space-free) token.
     fn eval_token(&mut self, tok: &str) -> String {
+        // A lone `#` is the current channel (mIRC); `#name` stays a literal channel.
+        if tok == "#" {
+            return self.event.chan.clone();
+        }
         let chars: Vec<char> = tok.chars().collect();
         let mut out = String::new();
         let mut i = 0;
@@ -937,19 +941,32 @@ impl<'a> Runtime<'a> {
             }
             return "+".to_string();
         }
-        // Numeric param: $1, $2-, $0
+        // `$$N` — a require prefix: like `$N`, but the script halts when the
+        // parameter is empty. Only when a digit follows (a literal `$$`
+        // elsewhere is left untouched).
+        let require = chars.get(*i) == Some(&'$')
+            && matches!(chars.get(*i + 1), Some(c) if c.is_ascii_digit());
+        if require {
+            *i += 1;
+        }
+        // Numeric param: $1 (single), $2- (to end), $2-4 (range), $0 (count).
         if matches!(chars.get(*i), Some(c) if c.is_ascii_digit()) {
-            let mut num = String::new();
-            while matches!(chars.get(*i), Some(c) if c.is_ascii_digit()) {
-                num.push(chars[*i]);
+            let start = read_number(chars, i);
+            let end = if chars.get(*i) == Some(&'-') {
                 *i += 1;
+                if matches!(chars.get(*i), Some(c) if c.is_ascii_digit()) {
+                    Some(read_number(chars, i)) // $N-M
+                } else {
+                    None // $N- (to end)
+                }
+            } else {
+                Some(start) // $N (single)
+            };
+            let val = self.params_range(start, end);
+            if require && val.is_empty() {
+                self.halted = true;
             }
-            let mut to_end = false;
-            if chars.get(*i) == Some(&'-') {
-                to_end = true;
-                *i += 1;
-            }
-            return self.param(num.parse().unwrap_or(0), to_end);
+            return val;
         }
         // Identifier name.
         let name = read_name(chars, i);
@@ -969,19 +986,26 @@ impl<'a> Runtime<'a> {
         ident::eval_ident(self, &name, &args)
     }
 
-    fn param(&self, n: usize, to_end: bool) -> String {
-        if n == 0 {
+    /// Resolves a parameter spec: `$N` (`end = Some(N)`), `$N-` (`end = None`,
+    /// to the last param) or `$N-M` (`end = Some(M)`, inclusive). `$0` returns
+    /// the parameter count. Indices are 1-based; out-of-range yields "".
+    fn params_range(&self, start: usize, end: Option<usize>) -> String {
+        if start == 0 {
             return self.event.params.len().to_string();
         }
-        if to_end {
-            self.event
-                .params
-                .get(n - 1..)
-                .map(|s| s.join(" "))
-                .unwrap_or_default()
-        } else {
-            self.event.params.get(n - 1).cloned().unwrap_or_default()
+        let params = &self.event.params;
+        let lo = start - 1;
+        if lo >= params.len() {
+            return String::new();
         }
+        let hi = match end {
+            None => params.len(),
+            Some(e) => e.min(params.len()),
+        };
+        if hi <= lo {
+            return String::new();
+        }
+        params[lo..hi].join(" ")
     }
 
     // ---- conditions ----
@@ -993,6 +1017,16 @@ impl<'a> Runtime<'a> {
         let state = self.state.clone();
         eval_bool_with(&expanded, &|term| state_op(&state, term))
     }
+}
+
+/// Reads consecutive ASCII digits as a number (0 if none / on overflow).
+fn read_number(chars: &[char], i: &mut usize) -> usize {
+    let mut num = String::new();
+    while matches!(chars.get(*i), Some(c) if c.is_ascii_digit()) {
+        num.push(chars[*i]);
+        *i += 1;
+    }
+    num.parse().unwrap_or(0)
 }
 
 fn read_name(chars: &[char], i: &mut usize) -> String {
