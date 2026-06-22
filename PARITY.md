@@ -151,9 +151,9 @@ out of scope.
 - [ ] `$eventparms`
 - [x] `$exists`
 - [ ] `$exiting`
-- [ ] `$feof`
-- [ ] `$ferr`
-- [ ] `$fgetc`
+- [x] `$feof`
+- [x] `$ferr`
+- [x] `$fgetc`
 - [ ] `$file`
 - [ ] `$filename`
 - [ ] `$filtered`
@@ -166,8 +166,8 @@ out of scope.
 - [ ] `$flinen`
 - [x] `$floor`
 - [ ] `$font`
-- [ ] `$fopen`
-- [ ] `$fread`
+- [x] `$fopen`
+- [x] `$fread`
 - [ ] `$fromeditbox`
 - [ ] `$fserve`
 - [x] `$fulladdress`
@@ -524,7 +524,7 @@ out of scope.
 - [ ] `/enable`
 - [ ] `/events`
 - [x] `/exit`
-- [ ] `/fclose` · [ ] `/fopen` · [ ] `/fseek` · [ ] `/fwrite` *(file-handle I/O family)*
+- [x] `/fclose` · [x] `/fopen` · [x] `/fseek` · [x] `/fwrite` *(byte/line/wildcard/regex seek)*
 - [x] `/filter` *(verify coverage of switches)*
 - [ ] `/findtext`
 - [ ] `/firewall`
@@ -767,7 +767,7 @@ individually.)*
 ### Media / misc
 - [ ] sounds / `/splay` · [ ] speech (`/speak`) · [ ] MIDI/MP3/WAV playback · [ ] agents
 - [ ] COM/ActiveX · [ ] DLL support · [ ] DDE · [ ] hash/crypto identifiers · [ ] binary vars / `$bvar`
-- [x] `.ini` file family (`$readini`/`$ini`/`/writeini`/`/remini`) · [ ] file-handle I/O (`/fopen` family)
+- [x] `.ini` file family (`$readini`/`$ini`/`/writeini`/`/remini`) · [x] file-handle I/O (`/fopen` family)
 
 ### Customization (jIRC's cross-platform answer to DCX)
 - [x] themes · [x] self-nick colour · [x] `:emoji:` + custom packs · [x] nicklist icons · [x] custom CSS
