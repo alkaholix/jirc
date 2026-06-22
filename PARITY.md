@@ -103,7 +103,7 @@ out of scope.
 - [x] `$cosh`
 - [x] `$count`
 - [x] `$cr`
-- [ ] `$crc`
+- [x] `$crc`
 - [ ] `$crc64`
 - [ ] `$creq`
 - [x] `$crlf`
@@ -269,7 +269,7 @@ out of scope.
 - [ ] `$maxlenl`
 - [ ] `$maxlenm`
 - [ ] `$maxlens`
-- [ ] `$md5`
+- [x] `$md5`
 - [x] `$me`
 - [ ] `$menu`
 - [ ] `$menubar`
@@ -373,10 +373,10 @@ out of scope.
 - [ ] `$serverip`
 - [ ] `$servertarget`
 - [ ] `$sfile`
-- [ ] `$sha1`
-- [ ] `$sha256`
-- [ ] `$sha384`
-- [ ] `$sha512`
+- [x] `$sha1`
+- [x] `$sha256`
+- [x] `$sha384`
+- [x] `$sha512`
 - [x] `$shortfn` *(pass-through)*
 - [ ] `$show`
 - [ ] `$signal`
