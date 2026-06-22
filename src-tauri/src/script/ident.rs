@@ -378,6 +378,40 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             }
         })
         .to_string(),
+        // $day -> current weekday name; $ord -> English ordinal (2 -> 2nd).
+        "day" => chrono::Local::now().format("%A").to_string(),
+        "ord" => {
+            let n = a(0).trim().parse::<i64>().unwrap_or(0);
+            let m = n.unsigned_abs() % 100;
+            let suffix = if (11..=13).contains(&m) {
+                "th"
+            } else {
+                match m % 10 {
+                    1 => "st",
+                    2 => "nd",
+                    3 => "rd",
+                    _ => "th",
+                }
+            };
+            format!("{n}{suffix}")
+        }
+        // $longip — IP string <-> 32-bit number (direction follows the input).
+        "longip" => {
+            let arg = a(0);
+            if arg.contains('.') {
+                let parts: Vec<u32> = arg.split('.').map(|p| p.trim().parse().unwrap_or(0)).collect();
+                if parts.len() == 4 {
+                    parts.iter().fold(0u32, |acc, &p| (acc << 8) | (p & 0xFF)).to_string()
+                } else {
+                    String::new()
+                }
+            } else {
+                let n: u32 = arg.trim().parse().unwrap_or(0);
+                format!("{}.{}.{}.{}", (n >> 24) & 0xFF, (n >> 16) & 0xFF, (n >> 8) & 0xFF, n & 0xFF)
+            }
+        }
+        // $os — OS family. mIRC returns a Windows version; we are cross-platform.
+        "os" => std::env::consts::OS.to_string(),
         "gettok" => {
             let sep = sep_code(&a(2));
             let text = a(0);
@@ -1502,6 +1536,15 @@ mod tests {
         assert_eq!(id("isbit", &["5", "2"]), "0");
         assert_eq!(id("gcd", &["12", "18", "24"]), "6");
         assert_eq!(id("lcm", &["4", "6", "8"]), "24");
+        // misc: ordinal, longip (both directions), day/os non-empty
+        assert_eq!(id("ord", &["1"]), "1st");
+        assert_eq!(id("ord", &["2"]), "2nd");
+        assert_eq!(id("ord", &["11"]), "11th");
+        assert_eq!(id("ord", &["22"]), "22nd");
+        assert_eq!(id("longip", &["192.168.0.1"]), "3232235521");
+        assert_eq!(id("longip", &["3232235521"]), "192.168.0.1");
+        assert!(!id("day", &[]).is_empty());
+        assert!(!id("os", &[]).is_empty());
         // `.deg` needs the property, so call eval_ident directly — this is after
         // the `id` closure's final use, so its borrow of `rt` has ended.
         assert_eq!(eval_ident(&mut rt, "sin", &["90".into()], "deg"), "1");
