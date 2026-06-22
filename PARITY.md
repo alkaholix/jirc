@@ -624,13 +624,13 @@ out of scope.
 - [ ] `/sline` *(stub)*
 - [x] `/sockaccept`
 - [x] `/sockclose` *(incl. wildcard)*
-- [ ] `/socklist`
+- [x] `/socklist`
 - [x] `/socklisten` *(binds synchronously; `$sock(name).port` inline)*
 - [x] `/sockmark`
 - [x] `/sockopen` *(plain + TLS)*
-- [ ] `/sockpause`
+- [x] `/sockpause`
 - [x] `/sockread`
-- [ ] `/sockrename`
+- [x] `/sockrename`
 - [ ] `/sockudp`
 - [x] `/sockwrite` *(incl. wildcard)*
 - [ ] `/sound` *(stub)*
