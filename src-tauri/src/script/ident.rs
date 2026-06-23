@@ -343,6 +343,28 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             }
         }
         "crc" => format!("{:08x}", crc32fast::hash(&hash_input(rt, &a(0), &a(1)))),
+        // $hmac(text, key, hash, N) — keyed hash; hash default sha1, N text/binvar/file.
+        "hmac" => {
+            let data = hash_input(rt, &a(0), &a(3));
+            hex_of(hmac_raw(&a(2), a(1).as_bytes(), &data))
+        }
+        // $hotp(key, count, hash, digits) — RFC 4226. Key auto-detected hex/base32/plain.
+        "hotp" => {
+            let key = decode_otp_key(&a(0));
+            let count: u64 = a(1).trim().parse().unwrap_or(0);
+            hotp(&a(2), &key, count, otp_digits(&a(3)))
+        }
+        // $totp(key, time, hash, digits, timestep) — RFC 6238 (time default now, step 30).
+        "totp" => {
+            let key = decode_otp_key(&a(0));
+            let time: u64 = if a(1).trim().is_empty() {
+                now_secs()
+            } else {
+                a(1).trim().parse().unwrap_or_else(|_| now_secs())
+            };
+            let step: u64 = a(4).trim().parse().ok().filter(|&s| s >= 1).unwrap_or(30);
+            hotp(&a(2), &key, time / step, otp_digits(&a(3)))
+        }
         // Bitwise (binary) operators on integers.
         "and" => (uint(&a(0)) & uint(&a(1))).to_string(),
         "or" => (uint(&a(0)) | uint(&a(1))).to_string(),
@@ -1550,6 +1572,82 @@ fn hex_of(bytes: impl AsRef<[u8]>) -> String {
     bytes.as_ref().iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Raw HMAC bytes for the given algorithm (sha1 is mIRC's default).
+fn hmac_raw(algo: &str, key: &[u8], data: &[u8]) -> Vec<u8> {
+    use hmac::{Hmac, Mac};
+    macro_rules! go {
+        ($t:ty) => {{
+            let mut m = <Hmac<$t>>::new_from_slice(key).expect("HMAC accepts any key length");
+            m.update(data);
+            m.finalize().into_bytes().to_vec()
+        }};
+    }
+    match algo.to_ascii_lowercase().as_str() {
+        "md5" => go!(md5::Md5),
+        "sha256" => go!(sha2::Sha256),
+        "sha384" => go!(sha2::Sha384),
+        "sha512" => go!(sha2::Sha512),
+        _ => go!(sha1::Sha1),
+    }
+}
+
+/// One HOTP/TOTP code (RFC 4226 dynamic truncation).
+fn hotp(algo: &str, key: &[u8], counter: u64, digits: u32) -> String {
+    let mac = hmac_raw(algo, key, &counter.to_be_bytes());
+    let offset = ((mac[mac.len() - 1] & 0x0f) as usize).min(mac.len() - 4);
+    let bin = ((mac[offset] as u32 & 0x7f) << 24)
+        | ((mac[offset + 1] as u32) << 16)
+        | ((mac[offset + 2] as u32) << 8)
+        | (mac[offset + 3] as u32);
+    format!("{:0width$}", bin % 10u32.pow(digits), width = digits as usize)
+}
+
+/// HOTP/TOTP digit count: 3-10, default 6.
+fn otp_digits(s: &str) -> u32 {
+    s.trim().parse().ok().filter(|d| (3..=10).contains(d)).unwrap_or(6)
+}
+
+fn hex_decode(s: &str) -> Vec<u8> {
+    (0..s.len() / 2)
+        .filter_map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok())
+        .collect()
+}
+
+fn base32_decode(s: &str) -> Option<Vec<u8>> {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    let (mut bits, mut nbits) = (0u32, 0u32);
+    let mut out = Vec::new();
+    for c in s.bytes() {
+        let c = c.to_ascii_uppercase();
+        if c == b'=' {
+            break;
+        }
+        let val = ALPHABET.iter().position(|&x| x == c)? as u32;
+        bits = (bits << 5) | val;
+        nbits += 5;
+        if nbits >= 8 {
+            nbits -= 8;
+            out.push((bits >> nbits) as u8);
+        }
+    }
+    Some(out)
+}
+
+/// A TOTP/HOTP key: hex (40/64/128/256 chars), base32 (16/26/32), else plain text.
+fn decode_otp_key(s: &str) -> Vec<u8> {
+    let t: String = s.split_whitespace().collect();
+    let len = t.len();
+    if matches!(len, 40 | 64 | 128 | 256) && t.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return hex_decode(&t);
+    }
+    if matches!(len, 16 | 26 | 32) && t.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        if let Some(d) = base32_decode(&t) {
+            return d;
+        }
+    }
+    t.into_bytes()
+}
+
 /// Percent-encode per RFC 3986 (keep unreserved A-Za-z0-9 - . _ ~).
 fn percent_encode(s: &str) -> String {
     let mut out = String::new();
@@ -1838,6 +1936,15 @@ mod tests {
         // $modinv (3*4 = 12 ≡ 1 mod 11); $mircpid numeric
         assert_eq!(id("modinv", &["3", "11"]), "4");
         assert!(id("mircpid", &[]).parse::<u32>().is_ok());
+        // HMAC / HOTP / TOTP — canonical RFC 2104 / 4226 / 6238 vectors
+        assert_eq!(
+            id("hmac", &["The quick brown fox jumps over the lazy dog", "key", "sha256"]),
+            "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
+        );
+        assert_eq!(id("hotp", &["12345678901234567890", "0"]), "755224");
+        assert_eq!(id("hotp", &["12345678901234567890", "1"]), "287082");
+        // TOTP at t=59 with step 30 -> counter 1 -> same as hotp(...,1)
+        assert_eq!(id("totp", &["12345678901234567890", "59"]), "287082");
         // `.deg` needs the property, so call eval_ident directly — this is after
         // the `id` closure's final use, so its borrow of `rt` has ended.
         assert_eq!(eval_ident(&mut rt, "sin", &["90".into()], "deg"), "1");

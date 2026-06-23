@@ -1901,6 +1901,7 @@ dependencies = [
  "chrono",
  "crc32fast",
  "futures-util",
+ "hmac",
  "irc-proto",
  "keyring",
  "md-5",
