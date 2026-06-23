@@ -1475,6 +1475,33 @@ mod tests {
     }
 
     #[test]
+    fn connection_identifiers_from_snapshot() {
+        use crate::irc::state::StateSnapshot;
+        let snap = StateSnapshot {
+            nick: "me".into(),
+            server_port: 6697,
+            tls: true,
+            alt_nick: "me_".into(),
+            realname: "Real Name".into(),
+            ..Default::default()
+        };
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "irc.x",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(snap),
+        };
+        let engine = ScriptEngine::new();
+        engine.load("alias n { /msg #c $port $+ / $+ $ssl $+ / $+ $anick $+ / $+ $fullname }");
+        let actions = engine.run_alias(&rctx, "#c", "n", "");
+        assert_eq!(
+            actions,
+            vec![Action::Send("PRIVMSG #c :6697/$true/me_/Real Name".into())]
+        );
+    }
+
+    #[test]
     fn socket_commands_produce_actions() {
         let engine = ScriptEngine::new();
         engine.load(
@@ -1629,6 +1656,7 @@ mod tests {
                 ("bob".into(), "bob!~bob@host.example.com".into()),
                 ("alice".into(), "alice!ali@other.net".into()),
             ],
+            ..Default::default()
         };
         let rctx = RunCtx {
             my_nick: "me",
@@ -1659,6 +1687,7 @@ mod tests {
             isupport: Default::default(),
             channels: vec![],
             ial: vec![("bob".into(), "bob!~bob@host.example.com".into())],
+            ..Default::default()
         };
         let rctx = RunCtx {
             my_nick: "me",
@@ -1708,6 +1737,7 @@ mod tests {
                 ..Default::default()
             }],
             ial: vec![],
+            ..Default::default()
         };
         let rctx = RunCtx {
             my_nick: "me",
@@ -1763,6 +1793,7 @@ mod tests {
                 ..Default::default()
             }],
             ial: vec![],
+            ..Default::default()
         };
         let rctx = RunCtx {
             my_nick: "me",

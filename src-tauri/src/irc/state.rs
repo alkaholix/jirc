@@ -157,6 +157,11 @@ pub struct SessionState {
     pub nick: String,
     pub channels: BTreeMap<String, ChannelState>,
     pub isupport: Isupport,
+    /// Connection facts (seeded from the profile) for $port/$ssl/$anick/$fullname.
+    pub server_port: u16,
+    pub tls: bool,
+    pub alt_nick: String,
+    pub realname: String,
     /// Set once RPL_WELCOME is received.
     pub registered: bool,
     /// How many alternative nicks we've tried during registration.
@@ -260,6 +265,11 @@ pub struct StateSnapshot {
     pub ial: Vec<(String, String)>,
     /// ISUPPORT tokens for `$prefix` / `$chanmodes` / `$chantypes`.
     pub isupport: Isupport,
+    /// Connection facts for `$port` / `$ssl` / `$anick` / `$fullname`.
+    pub server_port: u16,
+    pub tls: bool,
+    pub alt_nick: String,
+    pub realname: String,
 }
 
 impl SessionState {
@@ -279,6 +289,10 @@ impl SessionState {
                 .collect(),
             ial: self.ial.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
             isupport: self.isupport.clone(),
+            server_port: self.server_port,
+            tls: self.tls,
+            alt_nick: self.alt_nick.clone(),
+            realname: self.realname.clone(),
         }
     }
 }

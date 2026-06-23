@@ -185,6 +185,10 @@ async fn run_once(
 
     let mut state = SessionState {
         nick: profile.nick.clone(),
+        server_port: profile.port,
+        tls: profile.tls,
+        alt_nick: profile.alt_nick.clone().unwrap_or_default(),
+        realname: profile.realname.clone().unwrap_or_default(),
         ..Default::default()
     };
     let mut names_accum: HashMap<String, Vec<String>> = HashMap::new();

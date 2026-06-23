@@ -473,6 +473,18 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         }
         // $mircpid — the client process id.
         "mircpid" => std::process::id().to_string(),
+        // Connection facts (seeded from the profile, via the snapshot).
+        "port" => {
+            let p = rt.state.server_port;
+            if p == 0 {
+                String::new()
+            } else {
+                p.to_string()
+            }
+        }
+        "ssl" => bool_str(rt.state.tls),
+        "anick" => rt.state.alt_nick.clone(),
+        "fullname" => rt.state.realname.clone(),
         // $replacex (single-pass, non-recursive replace of from/to pairs).
         "replacex" => {
             let s = a(0);
