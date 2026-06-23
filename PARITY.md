@@ -436,7 +436,7 @@ out of scope.
 - [ ] `$uptime`
 - [ ] `$url`
 - [ ] `$urlget`
-- [ ] `$usermode`
+- [x] `$usermode`
 - [x] `$utfdecode`
 - [x] `$utfencode`
 - [ ] `$v1`
