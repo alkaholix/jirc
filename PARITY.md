@@ -64,13 +64,13 @@ out of scope.
 - [ ] `$awaytime`
 - [ ] `$banmask`
 - [x] `$base`
-- [ ] `$bfind`
+- [x] `$bfind`
 - [ ] `$bigfloat`
 - [ ] `$bindip`
 - [x] `$bitoff`
 - [x] `$biton`
 - [x] `$bnick`
-- [ ] `$bvar`
+- [x] `$bvar`
 - [x] `$bytes` *(comma-formatted; `.suf` human-readable)*
 - [x] `$calc`
 - [ ] `$caller`
@@ -482,9 +482,9 @@ out of scope.
 - [ ] `/bread`
 - [ ] `/break`
 - [ ] `/breplace`
-- [ ] `/bset`
+- [x] `/bset`
 - [ ] `/btrunc`
-- [ ] `/bunset`
+- [x] `/bunset`
 - [ ] `/bwrite`
 - [x] `/channel` *(Channel Central UI)*
 - [ ] `/clear` *(stub)*
@@ -766,7 +766,7 @@ individually.)*
 
 ### Media / misc
 - [ ] sounds / `/splay` · [ ] speech (`/speak`) · [ ] MIDI/MP3/WAV playback · [ ] agents
-- [ ] COM/ActiveX · [ ] DLL support · [ ] DDE · [ ] hash/crypto identifiers · [ ] binary vars / `$bvar`
+- [ ] COM/ActiveX · [ ] DLL support · [ ] DDE · [x] hash/crypto identifiers · [x] binary vars / `$bvar` *(core; file-I/O variants pending)*
 - [x] `.ini` file family (`$readini`/`$ini`/`/writeini`/`/remini`) · [x] file-handle I/O (`/fopen` family)
 
 ### Customization (jIRC's cross-platform answer to DCX)
