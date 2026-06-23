@@ -104,7 +104,7 @@ out of scope.
 - [x] `$count`
 - [x] `$cr`
 - [x] `$crc`
-- [ ] `$crc64`
+- [x] `$crc64`
 - [ ] `$creq`
 - [x] `$crlf`
 - [x] `$ctime`
