@@ -152,6 +152,8 @@ pub struct Runtime<'a> {
     pub sockets: std::sync::Arc<dyn ScriptSockets>,
     /// Open file handles for `/fopen`/`/fwrite`/`$fread`/`$fopen(...)`.
     pub files: &'a mut crate::script::files::FileStore,
+    /// Binary variables for `/bset`/`/bunset`/`$bvar`/`$bfind`/`&binvar`.
+    pub bins: &'a mut crate::script::binvar::BinStore,
 }
 
 impl<'a> Runtime<'a> {
@@ -400,6 +402,8 @@ impl<'a> Runtime<'a> {
             "fwrite" => self.cmd_fwrite(raw_args),
             "fclose" => self.cmd_fclose(raw_args),
             "fseek" => self.cmd_fseek(raw_args),
+            "bset" => self.cmd_bset(raw_args),
+            "bunset" => self.cmd_bunset(raw_args),
             "mkdir" => {
                 let dir = self.expand(raw_args);
                 if !dir.trim().is_empty() {
@@ -847,6 +851,49 @@ impl<'a> Runtime<'a> {
             SeekMode::Byte(arg.parse().unwrap_or(0))
         };
         self.files.seek(name, mode);
+    }
+
+    /// `/bset [-tacz] <&binvar> <N> <value…>` — write bytes at 1-based position N
+    /// (`-t` = the values are plain text, `-z` = empty the var first).
+    fn cmd_bset(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        let mut rest = expanded.trim();
+        let (mut text, mut zero) = (false, false);
+        while let Some(stripped) = rest.strip_prefix('-') {
+            let (sw, more) = stripped.split_once(char::is_whitespace).unwrap_or((stripped, ""));
+            if sw.contains('t') {
+                text = true;
+            }
+            if sw.contains('z') {
+                zero = true;
+            }
+            // -a (no UTF-8) / -c (chop) accepted but not specially handled.
+            rest = more.trim();
+        }
+        let mut parts = rest.splitn(3, char::is_whitespace);
+        let (Some(name), Some(npart)) = (parts.next(), parts.next()) else {
+            return;
+        };
+        let pos: i64 = npart.trim().parse().unwrap_or(1);
+        let valstr = parts.next().unwrap_or("");
+        let bytes: Vec<u8> = if text {
+            valstr.as_bytes().to_vec()
+        } else {
+            valstr
+                .split_whitespace()
+                .filter_map(|t| t.parse::<u16>().ok())
+                .map(|n| n as u8)
+                .collect()
+        };
+        self.bins.set(name, pos, &bytes, zero);
+    }
+
+    /// `/bunset <&binvar> [&binvar…]` — unset binary variables.
+    fn cmd_bunset(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        for name in expanded.split_whitespace() {
+            self.bins.unset(name);
+        }
     }
 
     /// `/sockopen [-e] <name> <host> <port>` — open a TCP socket; `-e` uses TLS.

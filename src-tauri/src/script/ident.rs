@@ -523,6 +523,25 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "fullname" => rt.state.realname.clone(),
         "usermode" => rt.state.user_mode.clone(),
         "away" => bool_str(rt.state.away),
+        // $bvar(&v,N[,M]) — ASCII byte values from 1-based N (N=0 = length);
+        // the .text property returns the bytes as text.
+        "bvar" => {
+            let n: i64 = a(1).trim().parse().unwrap_or(0);
+            let m: Option<i64> = a(2).trim().parse().ok();
+            if prop == "text" {
+                rt.bins.text(&a(0), n, m)
+            } else {
+                rt.bins.bvar(&a(0), n, m)
+            }
+        }
+        // $bfind(&v,N,M) — 1-based position of byte value M (or text) at/after N.
+        "bfind" => {
+            let n: i64 = a(1).trim().parse().unwrap_or(1);
+            match a(2).trim().parse::<u16>() {
+                Ok(v) if v <= 255 => rt.bins.bfind(&a(0), n, v as u8).to_string(),
+                _ => rt.bins.bfind_text(&a(0), n, a(2).as_bytes()).to_string(),
+            }
+        }
         // $replacex (single-pass, non-recursive replace of from/to pairs).
         "replacex" => {
             let s = a(0);
@@ -1574,10 +1593,10 @@ fn fmt_round6(n: f64) -> String {
 /// Input bytes for $md5/$sha*/$crc: N=2 reads file contents (sandboxed); any
 /// other N treats `value` as plain text.
 fn hash_input(rt: &Runtime, value: &str, n: &str) -> Vec<u8> {
-    if n == "2" {
-        std::fs::read(super::eval::sandbox_path(&rt.data_dir, value)).unwrap_or_default()
-    } else {
-        value.as_bytes().to_vec()
+    match n {
+        "2" => std::fs::read(super::eval::sandbox_path(&rt.data_dir, value)).unwrap_or_default(),
+        "1" => rt.bins.get(value).cloned().unwrap_or_default(),
+        _ => value.as_bytes().to_vec(),
     }
 }
 
@@ -1840,6 +1859,7 @@ mod tests {
         let mut vars = HashMap::new();
         let mut hashes = HashMap::new();
         let mut files = crate::script::files::FileStore::default();
+        let mut bins = crate::script::binvar::BinStore::default();
         let mut rt = Runtime {
             script: &script,
             my_nick: "me",
@@ -1848,6 +1868,7 @@ mod tests {
             vars: &mut vars,
             hashes: &mut hashes,
             files: &mut files,
+            bins: &mut bins,
             event: EventVars::default(),
             actions: vec![],
             halted: false,
@@ -2003,6 +2024,7 @@ mod tests {
         vars: &'a mut std::collections::HashMap<String, String>,
         hashes: &'a mut std::collections::HashMap<String, std::collections::HashMap<String, String>>,
         files: &'a mut crate::script::files::FileStore,
+        bins: &'a mut crate::script::binvar::BinStore,
     ) -> Runtime<'a> {
         use crate::script::eval::EventVars;
         Runtime {
@@ -2013,6 +2035,7 @@ mod tests {
             vars,
             hashes,
             files,
+            bins,
             event: EventVars::default(),
             actions: vec![],
             halted: false,
@@ -2034,7 +2057,8 @@ mod tests {
         let mut vars = HashMap::new();
         let mut hashes = HashMap::new();
         let mut files = crate::script::files::FileStore::default();
-        let mut rt = rt_for(&script, &mut vars, &mut hashes, &mut files);
+        let mut bins = crate::script::binvar::BinStore::default();
+        let mut rt = rt_for(&script, &mut vars, &mut hashes, &mut files, &mut bins);
         let mut e = |n: &str, args: &[&str]| {
             eval_ident(&mut rt, n, &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "")
         };
@@ -2091,7 +2115,8 @@ mod tests {
         let mut vars = HashMap::new();
         let mut hashes = HashMap::new();
         let mut files = crate::script::files::FileStore::default();
-        let mut rt = rt_for(&script, &mut vars, &mut hashes, &mut files);
+        let mut bins = crate::script::binvar::BinStore::default();
+        let mut rt = rt_for(&script, &mut vars, &mut hashes, &mut files, &mut bins);
         let mut e = |n: &str, args: &[&str]| {
             eval_ident(&mut rt, n, &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "")
         };

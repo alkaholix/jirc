@@ -6,6 +6,7 @@
 //! not a 100% mIRC-compatible implementation.
 
 pub mod ast;
+pub mod binvar;
 pub mod eval;
 pub mod files;
 pub mod ident;
@@ -36,6 +37,7 @@ struct Inner {
     vars: HashMap<String, String>,
     hashes: HashMap<String, HashMap<String, String>>,
     files: files::FileStore,
+    bins: binvar::BinStore,
     sockets: std::sync::Arc<dyn ScriptSockets>,
 }
 
@@ -46,6 +48,7 @@ impl Inner {
             vars: HashMap::new(),
             hashes: HashMap::new(),
             files: files::FileStore::default(),
+            bins: binvar::BinStore::default(),
             sockets: std::sync::Arc::new(NoSockets),
         }
     }
@@ -120,6 +123,7 @@ impl ScriptEngine {
             vars: &mut g.vars,
             hashes: &mut g.hashes,
             files: &mut g.files,
+            bins: &mut g.bins,
             event,
             actions: Vec::new(),
             halted: false,
@@ -159,6 +163,7 @@ impl ScriptEngine {
             vars: &mut g.vars,
             hashes: &mut g.hashes,
             files: &mut g.files,
+            bins: &mut g.bins,
             event,
             actions: Vec::new(),
             halted: false,
@@ -207,6 +212,7 @@ impl ScriptEngine {
             vars: &mut g.vars,
             hashes: &mut g.hashes,
             files: &mut g.files,
+            bins: &mut g.bins,
             event,
             actions: Vec::new(),
             halted: false,
@@ -244,6 +250,7 @@ impl ScriptEngine {
         let vars = &mut g.vars;
         let hashes = &mut g.hashes;
         let files = &mut g.files;
+        let bins = &mut g.bins;
         let mut actions = Vec::new();
         let mut halted = false;
         for ev in script.events_of(kind) {
@@ -258,6 +265,7 @@ impl ScriptEngine {
                 vars: &mut *vars,
                 hashes: &mut *hashes,
                 files: &mut *files,
+                bins: &mut *bins,
                 event: event.clone(),
                 actions: Vec::new(),
                 halted: false,
@@ -1472,6 +1480,22 @@ mod tests {
         let actions = engine.run_alias(&rctx, "#c", "n", "");
         assert_eq!(actions, vec![Action::Send("PRIVMSG #c :files=3 dirs=1".into())]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn binvar_bset_bvar_and_hash() {
+        let engine = ScriptEngine::new();
+        // Build "abc" (97 98 99) in &v, read it back, and hash the binvar (N=1).
+        engine.load(
+            "alias n { /bset &v 1 97 98 99 | /msg #c $bvar(&v,0) $+ / $+ $bvar(&v,1,3) $+ / $+ $bvar(&v).text $+ / $+ $sha256(&v,1) }",
+        );
+        let actions = engine.run_alias(&ctx(), "#c", "n", "");
+        assert_eq!(
+            actions,
+            vec![Action::Send(
+                "PRIVMSG #c :3/97 98 99/abc/ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into()
+            )]
+        );
     }
 
     #[test]
