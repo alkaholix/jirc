@@ -29,13 +29,13 @@ Full rationale: `C:\Users\John\.claude\plans\reactive-kindling-lemon.md`.
   `npm run tauri build -- --no-bundle` → `src-tauri/target/release/jirc.exe`.
 
 ## Verified green
-- 114 backend tests, 29 frontend tests pass; `cargo check` + full debug + release build clean.
+- 115 backend tests, 29 frontend tests pass; `cargo check` + full debug + release build clean.
 - Build gotcha learned: a `SocketManager::rename` self-deadlock (re-locking a Mutex through an
   `if let` guard) hung `cargo test` — looked like an "environment hang". If a test hangs, suspect
   a double-lock, and check `Get-Process cargo,rustc` CPU (idle = deadlocked, not compiling).
 - Listening-socket async accept/connect I/O still needs a **live-network** test (relay sockbot).
 
-## Done 2026-06-23 (autonomous PARITY run — 114 tests green, PARITY 204→267 done)
+## Done 2026-06-23 (autonomous PARITY run — 115 tests green, PARITY 204→271 done)
 Worked through `PARITY.md` in batches, reading the mirc.com per-topic help page before each. One commit per
 batch (+ a PARITY checkbox commit); build green at every step. New identifiers/commands all have unit/e2e tests.
 - **File-handle I/O** (new `script/files.rs`): `/fopen /fwrite /fclose /fseek` + `$fopen/$fread/$fgetc/$feof/$ferr`.
@@ -45,10 +45,11 @@ batch (+ a PARITY checkbox commit); build green at every step. New identifiers/c
 - **Hashing:** `$md5 $sha1 $sha256 $sha384 $sha512 $crc` — added md-5/sha1/sha2/crc32fast (pure-Rust, no C deps).
 - **Bitwise/int:** `$and $or $xor $not $biton $bitoff $isbit $gcd $lcm`.
 - **Misc identifiers:** `$day $ord $longip $os`; `$prefix $chanmodes $chantypes` (added ISUPPORT to `StateSnapshot`);
-  `$replacex $powmod $utfencode $utfdecode $ticksqpc`. Local-time `$time/$date/$asctime/...` via chrono (carried from 06-22).
+  `$replacex $powmod $utfencode $utfdecode $ticksqpc`; `$encode/$decode` (base64 `m` + percent `x`). Local-time via chrono (06-22).
 - **Commands:** protocol `/kick /invite /hop /knock /away /omsg /onotice /ctcpreply /nickserv|/chanserv|/memoserv`
   (the generic raw fallback got trailing-text `:` wrong); sandboxed file `/mkdir /rmdir /copy /rename /remove`.
-- **Deferred (deliberate):** `$encode/$decode` (switch semantics not on the fetched page), `$hash` (mIRC private algo),
+- **Events:** `on RAWMODE` (channel, raw `$1-`) and `on USERMODE` (your own user mode) in `drive_event`'s Mode branch.
+- **Deferred (deliberate):** `$hash` (mIRC private algo),
   `$maxlenl/m/s`/`$ip`/`$rands` (need exact values / client state), `$eval`/`$v1`/`$v2` (engine pre-expands identifier args).
 
 ### Remaining PARITY (≈445 open) — what each bucket needs
