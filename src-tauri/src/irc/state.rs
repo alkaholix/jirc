@@ -164,6 +164,8 @@ pub struct SessionState {
     pub realname: String,
     /// Our own user modes (e.g. "iwx"), tracked from MODE messages on our nick.
     pub user_mode: String,
+    /// Whether we are marked away (from RPL_UNAWAY/RPL_NOWAWAY).
+    pub away: bool,
     /// Set once RPL_WELCOME is received.
     pub registered: bool,
     /// How many alternative nicks we've tried during registration.
@@ -274,6 +276,8 @@ pub struct StateSnapshot {
     pub realname: String,
     /// Our own user modes (e.g. "iwx") for `$usermode`.
     pub user_mode: String,
+    /// Whether we are marked away, for `$away`.
+    pub away: bool,
 }
 
 impl SessionState {
@@ -298,6 +302,7 @@ impl SessionState {
             alt_nick: self.alt_nick.clone(),
             realname: self.realname.clone(),
             user_mode: self.user_mode.clone(),
+            away: self.away,
         }
     }
 }

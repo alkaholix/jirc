@@ -1484,6 +1484,7 @@ mod tests {
             alt_nick: "me_".into(),
             realname: "Real Name".into(),
             user_mode: "ix".into(),
+            away: true,
             ..Default::default()
         };
         let rctx = RunCtx {
@@ -1495,12 +1496,12 @@ mod tests {
         };
         let engine = ScriptEngine::new();
         engine.load(
-            "alias n { /msg #c $port $+ / $+ $ssl $+ / $+ $anick $+ / $+ $fullname $+ / $+ $usermode }",
+            "alias n { /msg #c $port $+ / $+ $ssl $+ / $+ $anick $+ / $+ $fullname $+ / $+ $usermode $+ / $+ $away }",
         );
         let actions = engine.run_alias(&rctx, "#c", "n", "");
         assert_eq!(
             actions,
-            vec![Action::Send("PRIVMSG #c :6697/$true/me_/Real Name/ix".into())]
+            vec![Action::Send("PRIVMSG #c :6697/$true/me_/Real Name/ix/$true".into())]
         );
     }
 

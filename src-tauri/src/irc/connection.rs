@@ -991,8 +991,14 @@ fn handle_numeric(ctx: &mut Context, fx: &mut Effects, resp: Response, args: &[S
                 ctx.whois_accum.entry(nick).or_default().push(line);
             }
         }
-        Response::RPL_NOWAWAY => fx.events.push(UiEvent::SelfAway { server_id, away: true }),
-        Response::RPL_UNAWAY => fx.events.push(UiEvent::SelfAway { server_id, away: false }),
+        Response::RPL_NOWAWAY => {
+            ctx.state.away = true;
+            fx.events.push(UiEvent::SelfAway { server_id, away: true });
+        }
+        Response::RPL_UNAWAY => {
+            ctx.state.away = false;
+            fx.events.push(UiEvent::SelfAway { server_id, away: false });
+        }
         Response::RPL_ENDOFWHOIS => {
             if let Some(nick) = args.get(1).cloned() {
                 let lines = ctx.whois_accum.remove(&nick).unwrap_or_default();
