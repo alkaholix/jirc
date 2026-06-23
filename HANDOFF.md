@@ -29,13 +29,13 @@ Full rationale: `C:\Users\John\.claude\plans\reactive-kindling-lemon.md`.
   `npm run tauri build -- --no-bundle` → `src-tauri/target/release/jirc.exe`.
 
 ## Verified green
-- 115 backend tests, 29 frontend tests pass; `cargo check` + full debug + release build clean.
+- 116 backend tests, 29 frontend tests pass; `cargo check` + full debug + release build clean.
 - Build gotcha learned: a `SocketManager::rename` self-deadlock (re-locking a Mutex through an
   `if let` guard) hung `cargo test` — looked like an "environment hang". If a test hangs, suspect
   a double-lock, and check `Get-Process cargo,rustc` CPU (idle = deadlocked, not compiling).
 - Listening-socket async accept/connect I/O still needs a **live-network** test (relay sockbot).
 
-## Done 2026-06-23 (autonomous PARITY run — 115 tests green, PARITY 204→271 done)
+## Done 2026-06-23 (autonomous PARITY run — 116 tests green, PARITY 204→275 done)
 Worked through `PARITY.md` in batches, reading the mirc.com per-topic help page before each. One commit per
 batch (+ a PARITY checkbox commit); build green at every step. New identifiers/commands all have unit/e2e tests.
 - **File-handle I/O** (new `script/files.rs`): `/fopen /fwrite /fclose /fseek` + `$fopen/$fread/$fgetc/$feof/$ferr`.
@@ -48,6 +48,8 @@ batch (+ a PARITY checkbox commit); build green at every step. New identifiers/c
   `$replacex $powmod $utfencode $utfdecode $ticksqpc`; `$encode/$decode` (base64 `m` + percent `x`). Local-time via chrono (06-22).
 - **Commands:** protocol `/kick /invite /hop /knock /away /omsg /onotice /ctcpreply /nickserv|/chanserv|/memoserv`
   (the generic raw fallback got trailing-text `:` wrong); sandboxed file `/mkdir /rmdir /copy /rename /remove`.
+- **File/path identifiers:** `$findfile`/`$finddir(dir,wild,N[,depth])` (sandboxed recursive walk, N=0 = count),
+  `$tempfn`, `$mircexe`.
 - **Events:** `on RAWMODE` (channel, raw `$1-`) and `on USERMODE` (your own user mode) in `drive_event`'s Mode branch.
 - **Deferred (deliberate):** `$hash` (mIRC private algo),
   `$maxlenl/m/s`/`$ip`/`$rands` (need exact values / client state), `$eval`/`$v1`/`$v2` (engine pre-expands identifier args).
