@@ -29,13 +29,13 @@ Full rationale: `C:\Users\John\.claude\plans\reactive-kindling-lemon.md`.
   `npm run tauri build -- --no-bundle` → `src-tauri/target/release/jirc.exe`.
 
 ## Verified green
-- 116 backend tests, 29 frontend tests pass; `cargo check` + full debug + release build clean.
+- 118 backend tests, 29 frontend tests pass; `cargo check` + full debug + release build clean.
 - Build gotcha learned: a `SocketManager::rename` self-deadlock (re-locking a Mutex through an
   `if let` guard) hung `cargo test` — looked like an "environment hang". If a test hangs, suspect
   a double-lock, and check `Get-Process cargo,rustc` CPU (idle = deadlocked, not compiling).
 - Listening-socket async accept/connect I/O still needs a **live-network** test (relay sockbot).
 
-## Done 2026-06-23 (autonomous PARITY run — 116 tests green, PARITY 204→275 done)
+## Done 2026-06-23 (autonomous PARITY run — 118 tests green, PARITY 204→285 done)
 Worked through `PARITY.md` in batches, reading the mirc.com per-topic help page before each. One commit per
 batch (+ a PARITY checkbox commit); build green at every step. New identifiers/commands all have unit/e2e tests.
 - **File-handle I/O** (new `script/files.rs`): `/fopen /fwrite /fclose /fseek` + `$fopen/$fread/$fgetc/$feof/$ferr`.
@@ -51,21 +51,25 @@ batch (+ a PARITY checkbox commit); build green at every step. New identifiers/c
 - **File/path identifiers:** `$findfile`/`$finddir(dir,wild,N[,depth])` (sandboxed recursive walk, N=0 = count),
   `$tempfn`, `$mircexe`.
 - **Events:** `on RAWMODE` (channel, raw `$1-`) and `on USERMODE` (your own user mode) in `drive_event`'s Mode branch.
-- **Deferred (deliberate):** `$hash` (mIRC private algo),
-  `$maxlenl/m/s`/`$ip`/`$rands` (need exact values / client state), `$eval`/`$v1`/`$v2` (engine pre-expands identifier args).
+- **More identifiers:** `$isalias $rands $modinv $mircpid`; connection/self-state `$port $ssl $anick $fullname $usermode $away`
+  — added connection facts to `SessionState`→`StateSnapshot` + `user_mode`/`away` tracking in `process_message`, so the
+  snapshot now carries them (this is the pattern for the rest of the connection/self-state tail).
+- **Deferred (deliberate):** `$hash` (mIRC private algo), `$maxlenl/m/s`/`$ip` (need exact values), `$eval`/`$v1`/`$v2`
+  (engine pre-expands identifier args), crypto-auth `$hmac/$totp/$hotp/$crc64` (exact signatures/vectors not pinned down online).
 
-### Remaining PARITY (≈445 open) — what each bucket needs
+### Remaining PARITY (≈427 open) — what each bucket needs
 Most open items are **subsystem-blocked**, not quick wins:
 - **Custom windows / display** (`/window`, `$window`, `$line`, `aline/rline/dline/cline/...`, `/draw*`): a custom-`@window` subsystem.
 - **DCC** (`/dcc *`, `$dcc*`, `on FILERCVD/SENDFAIL/CHAT/...`): a DCC subsystem (file transfer + chat).
 - **Dialogs** (`$dialog`, `/dialog`, `$did*` beyond `$did`): a custom-dialog GUI.
 - **COM / DDE / DLL / agent** (`$com*`, `$dde*`, `$dll*`, `$agent*`, `/g*`): FFI/COM/automation — likely *(skip)* off-Windows.
 - **Media** (`$sound/$play/$insong/$inwave/...`, `/splay`): audio playback.
-- **Client/connection state** (`$active`, `$away`, `$port`, `$serverip`, `$ssl`, `$usermode`, `$idle`, ...): some are feasible
-  by threading connection metadata into `RunCtx` (the StateSnapshot only carries nick/channels/ial/isupport today).
-- **Feasible next (no big subsystem):** crypto `$hmac/$totp/$hotp/$pbkdf2/$argon2/$crc64` (add hmac/pbkdf2/argon2 crates);
-  binary-var family (`/bset/$bvar/&binvar/...`); `$encode/$decode` base64 once switches are confirmed; and a quick audit of
-  PARITY identifier checkmarks vs `ident.rs` (the socket commands were implemented-but-unmarked — there may be more).
+- **Client/connection state:** `$port/$ssl/$anick/$fullname/$usermode/$away` are **done** (via `SessionState`→`StateSnapshot`,
+  which now carries connection facts + user_mode/away). Open by the **same snapshot pattern**: `$serverip` (needs the resolved
+  IP), `$awaymsg/$awaytime`, `$idle`, `$online`. GUI/window-state ones (`$active`, `$mouse`, ...) still need the window subsystem.
+- **Feasible next (no big subsystem):** crypto `$hmac/$totp/$hotp/$pbkdf2/$argon2/$crc64` (add hmac/pbkdf2/argon2 crates — needs
+  the help file's exact param order + test vectors to match mIRC); the binary-var family (`/bset/$bvar/&binvar/...`); the
+  connection/self-state tail above via the now-established snapshot pattern.
 
 ## Done 2026-06-22 (mirc.com docs audit — parity round, 109 tests green)
 Read the official per-topic mirc.com help pages first, then implemented/fixed against them. All committed.
