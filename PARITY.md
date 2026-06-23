@@ -710,7 +710,7 @@ out of scope.
 - [ ] `on PING` · [ ] `on PONG`
 - [x] `on QUIT`
 - [x] `on RAW` *(numeric/command, `$numeric`)*
-- [ ] `on RAWMODE`
+- [x] `on RAWMODE`
 - [ ] `on SERV` · [ ] `on SERVERMODE` · [ ] `on SERVEROP`
 - [ ] `on SIGNAL`
 - [ ] `on SNOTICE`
@@ -724,7 +724,7 @@ out of scope.
 - [x] `on TOPIC`
 - [ ] `on UDPREAD`
 - [x] `on UNBAN`
-- [ ] `on USERMODE`
+- [x] `on USERMODE`
 - [ ] `on VCMD`
 - [x] `on VOICE`
 - [ ] `on WALLOPS`
