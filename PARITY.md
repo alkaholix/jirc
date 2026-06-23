@@ -47,7 +47,7 @@ out of scope.
 - [ ] `$agentver`
 - [ ] `$alias`
 - [x] `$and`
-- [ ] `$anick`
+- [x] `$anick`
 - [ ] `$ansi2mirc`
 - [ ] `$aop`
 - [ ] `$appactive`
@@ -172,7 +172,7 @@ out of scope.
 - [ ] `$fserve`
 - [x] `$fulladdress`
 - [x] `$fulldate`
-- [ ] `$fullname`
+- [x] `$fullname`
 - [ ] `$fullscreen`
 - [x] `$gcd`
 - [ ] `$get`
@@ -327,7 +327,7 @@ out of scope.
 - [ ] `$pic`
 - [ ] `$play`
 - [ ] `$pnick`
-- [ ] `$port`
+- [x] `$port`
 - [ ] `$portable`
 - [ ] `$portfree`
 - [x] `$pos`
@@ -395,7 +395,7 @@ out of scope.
 - [ ] `$speak`
 - [x] `$sqrt`
 - [ ] `$sreq`
-- [ ] `$ssl`
+- [x] `$ssl`
 - [ ] `$sslcertvalid`
 - [ ] `$ssldll`
 - [ ] `$sslhash`
