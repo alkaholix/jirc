@@ -448,6 +448,34 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "utfencode" | "utfdecode" => a(0),
         // $ticksqpc — high-resolution counter (process-relative nanoseconds).
         "ticksqpc" => process_start().elapsed().as_nanos().to_string(),
+        // $encode/$decode — m = base64 (MIME), x = percent-encode (RFC3986). The
+        // other switches (a/u/v/y = base32/uucode/z85/puny, b = &binvar) aren't
+        // supported yet, so the text passes through unchanged.
+        "encode" | "decode" => {
+            let text = a(0);
+            let sw = a(1);
+            let is_enc = name == "encode";
+            if sw.contains('m') {
+                use base64::{engine::general_purpose::STANDARD, Engine};
+                if is_enc {
+                    STANDARD.encode(text.as_bytes())
+                } else {
+                    STANDARD
+                        .decode(text.as_bytes())
+                        .ok()
+                        .map(|b| String::from_utf8_lossy(&b).into_owned())
+                        .unwrap_or_default()
+                }
+            } else if sw.contains('x') {
+                if is_enc {
+                    percent_encode(&text)
+                } else {
+                    percent_decode(&text)
+                }
+            } else {
+                text
+            }
+        }
         "gettok" => {
             let sep = sep_code(&a(2));
             let text = a(0);
@@ -1432,6 +1460,37 @@ fn hex_of(bytes: impl AsRef<[u8]>) -> String {
     bytes.as_ref().iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Percent-encode per RFC 3986 (keep unreserved A-Za-z0-9 - . _ ~).
+fn percent_encode(s: &str) -> String {
+    let mut out = String::new();
+    for &b in s.as_bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Parse an integer for the bitwise identifiers (non-numeric -> 0).
 fn uint(s: &str) -> u64 {
     s.trim().parse::<i64>().map(|n| n as u64).unwrap_or(0)
@@ -1674,6 +1733,11 @@ mod tests {
         assert_eq!(id("powmod", &["4", "13", "497"]), "445");
         assert_eq!(id("utfencode", &["hi"]), "hi");
         assert!(id("ticksqpc", &[]).parse::<u64>().is_ok());
+        // $encode/$decode — base64 (m) and percent-encode (x)
+        assert_eq!(id("encode", &["Man", "m"]), "TWFu");
+        assert_eq!(id("decode", &["TWFu", "m"]), "Man");
+        assert_eq!(id("encode", &["a b&c", "x"]), "a%20b%26c");
+        assert_eq!(id("decode", &["a%20b%26c", "x"]), "a b&c");
         // `.deg` needs the property, so call eval_ident directly — this is after
         // the `id` closure's final use, so its borrow of `rt` has ended.
         assert_eq!(eval_ident(&mut rt, "sin", &["90".into()], "deg"), "1");
