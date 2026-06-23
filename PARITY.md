@@ -220,7 +220,7 @@ out of scope.
 - [ ] `$ip`
 - [ ] `$iptype`
 - [ ] `$isadmin` *(client-admin check; distinct from the `isadmin` operator)*
-- [ ] `$isalias`
+- [x] `$isalias`
 - [x] `$isbit`
 - [ ] `$isdde`
 - [x] `$isdir`
@@ -281,7 +281,7 @@ out of scope.
 - [x] `$mircdir`
 - [x] `$mircexe`
 - [ ] `$mircini`
-- [ ] `$mircpid`
+- [x] `$mircpid`
 - [ ] `$mkfn`
 - [ ] `$mklogfn`
 - [ ] `$mknickfn`
@@ -290,7 +290,7 @@ out of scope.
 - [ ] `$modefirst`
 - [ ] `$modelast`
 - [ ] `$modespl`
-- [ ] `$modinv`
+- [x] `$modinv`
 - [ ] `$mouse`
 - [ ] `$msfile`
 - [ ] `$msgstamp`
@@ -339,7 +339,7 @@ out of scope.
 - [x] `$qt`
 - [ ] `$query`
 - [x] `$rand` *(+`$r`)*
-- [ ] `$rands`
+- [x] `$rands`
 - [ ] `$rawbytes`
 - [ ] `$rawmsg`
 - [x] `$read`
