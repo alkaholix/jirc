@@ -255,6 +255,28 @@ pub enum UiEvent {
         target: String,
         text: String,
     },
+
+    // ---- Script-driven custom windows (@window) ----
+    /// Open/create a custom window.
+    WindowOpen {
+        server_id: String,
+        name: String,
+        kind: String,
+        title: String,
+    },
+    /// Close a custom window.
+    WindowClose {
+        server_id: String,
+        name: String,
+    },
+    /// A line operation on a custom window: `op` = add/insert/replace/delete/clear.
+    WindowLine {
+        server_id: String,
+        name: String,
+        op: String,
+        n: u32,
+        text: String,
+    },
 }
 
 #[cfg(test)]

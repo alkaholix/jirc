@@ -52,6 +52,12 @@ pub enum Action {
     },
     /// Set (or clear, if empty) a nick-list icon for a nick (`/nickicon`).
     NickIcon { nick: String, icon: String },
+    /// Open a custom `@window` (`/window`).
+    WindowOpen { name: String, kind: String, title: String },
+    /// Close a custom `@window` (`/window -c`).
+    WindowClose { name: String },
+    /// A line op on a custom `@window`: `op` = add/insert/replace/delete/clear.
+    WindowLine { name: String, op: String, n: u32, text: String },
 }
 
 /// Reserved `%var` key holding the byte count of the last `/sockread` (read by
@@ -154,6 +160,8 @@ pub struct Runtime<'a> {
     pub files: &'a mut crate::script::files::FileStore,
     /// Binary variables for `/bset`/`/bunset`/`$bvar`/`$bfind`/`&binvar`.
     pub bins: &'a mut crate::script::binvar::BinStore,
+    /// Custom `@windows` for `/window`/`/aline`/`/rline`/`$window`/`$line`.
+    pub windows: &'a mut crate::script::window::WindowStore,
 }
 
 impl<'a> Runtime<'a> {
@@ -404,6 +412,12 @@ impl<'a> Runtime<'a> {
             "fseek" => self.cmd_fseek(raw_args),
             "bset" => self.cmd_bset(raw_args),
             "bunset" => self.cmd_bunset(raw_args),
+            "window" => self.cmd_window(raw_args),
+            "aline" => self.cmd_window_line(raw_args, "add"),
+            "rline" => self.cmd_window_line(raw_args, "replace"),
+            "iline" => self.cmd_window_line(raw_args, "insert"),
+            "dline" => self.cmd_window_line(raw_args, "delete"),
+            "clear" => self.cmd_window_clear(raw_args),
             "mkdir" => {
                 let dir = self.expand(raw_args);
                 if !dir.trim().is_empty() {
@@ -530,8 +544,8 @@ impl<'a> Runtime<'a> {
             // sent to the server as raw IRC (that produces "421 Unknown command").
             // We evaluate any parameters (for identifier side effects) and stop.
             // `/run` is deliberately a no-op — jIRC never launches programs.
-            "clear" | "clearall" | "close" | "window" | "aline" | "rline" | "sline" | "dline"
-            | "cline" | "iline" | "fline" | "renwin" | "titlebar" | "editbox" | "linesep"
+            "clearall" | "close" | "sline" | "cline" | "fline" | "renwin"
+            | "titlebar" | "editbox" | "linesep"
             | "background" | "color" | "font" | "flash" | "beep" | "ebeeps" | "speak" | "splay"
             | "play" | "sound" | "run" | "url" | "dns" | "debug" | "log" | "logview"
             | "timestamp" | "donotdisturb" | "toolbar" | "menubar" | "switchbar" | "treebar"
@@ -893,6 +907,108 @@ impl<'a> Runtime<'a> {
         let expanded = self.expand(raw);
         for name in expanded.split_whitespace() {
             self.bins.unset(name);
+        }
+    }
+
+    /// `/window [-celp] @name [...]` — create a custom `@window` (`-c` closes,
+    /// `-e` editbox, `-p` picture; default listbox).
+    fn cmd_window(&mut self, raw: &str) {
+        use super::window::WindowKind;
+        let expanded = self.expand(raw);
+        let mut rest = expanded.trim();
+        let mut close = false;
+        let mut kind = WindowKind::Listbox;
+        while let Some(stripped) = rest.strip_prefix('-') {
+            let (sw, more) = stripped.split_once(char::is_whitespace).unwrap_or((stripped, ""));
+            if sw.contains('c') {
+                close = true;
+            }
+            if sw.contains('e') {
+                kind = WindowKind::Editbox;
+            } else if sw.contains('p') {
+                kind = WindowKind::Picture;
+            }
+            rest = more.trim();
+        }
+        let Some(name) = rest.split_whitespace().next() else {
+            return;
+        };
+        if !name.starts_with('@') {
+            return;
+        }
+        if close {
+            self.windows.close(name);
+            self.actions.push(Action::WindowClose { name: name.to_string() });
+        } else {
+            self.windows.open(name, kind, name);
+            self.actions.push(Action::WindowOpen {
+                name: name.to_string(),
+                kind: kind.as_str().to_string(),
+                title: name.to_string(),
+            });
+        }
+    }
+
+    /// `/aline @w text`, `/rline @w N text`, `/iline @w N text`, `/dline @w N`.
+    fn cmd_window_line(&mut self, raw: &str, op: &str) {
+        let expanded = self.expand(raw);
+        let mut rest = expanded.trim();
+        // Skip a leading switch (e.g. `/aline -p @w text` colour switch).
+        if rest.starts_with('-') {
+            rest = rest.split_once(char::is_whitespace).map(|(_, r)| r.trim()).unwrap_or("");
+        }
+        let mut parts = rest.splitn(2, char::is_whitespace);
+        let Some(name) = parts.next() else {
+            return;
+        };
+        if !name.starts_with('@') || !self.windows.exists(name) {
+            return;
+        }
+        let arg = parts.next().unwrap_or("");
+        let (n, text) = match op {
+            "add" => {
+                self.windows.aline(name, arg);
+                (0u32, arg.to_string())
+            }
+            "delete" => {
+                let n: u32 = arg.trim().parse().unwrap_or(0);
+                self.windows.dline(name, n as usize);
+                (n, String::new())
+            }
+            _ => {
+                // replace / insert: <N> <text>
+                let mut p2 = arg.splitn(2, char::is_whitespace);
+                let n: u32 = p2.next().unwrap_or("").trim().parse().unwrap_or(0);
+                let text = p2.next().unwrap_or("");
+                if op == "replace" {
+                    self.windows.rline(name, n as usize, text);
+                } else {
+                    self.windows.iline(name, n as usize, text);
+                }
+                (n, text.to_string())
+            }
+        };
+        self.actions.push(Action::WindowLine {
+            name: name.to_string(),
+            op: op.to_string(),
+            n,
+            text,
+        });
+    }
+
+    /// `/clear @window` — clear a custom window's lines (channel-buffer clear is
+    /// a frontend concern, deferred).
+    fn cmd_window_clear(&mut self, raw: &str) {
+        let name = self.expand(raw);
+        let name = name.trim();
+        if name.starts_with('@') && self.windows.exists(name) {
+            self.windows.clear(name);
+            self.actions.push(Action::WindowLine {
+                name: name.to_string(),
+                op: "clear".to_string(),
+                n: 0,
+                text: String::new(),
+            });
         }
     }
 

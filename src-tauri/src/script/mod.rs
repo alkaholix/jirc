@@ -14,6 +14,7 @@ pub mod ini;
 pub mod parser;
 pub mod socket;
 pub mod timer;
+pub mod window;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -38,6 +39,7 @@ struct Inner {
     hashes: HashMap<String, HashMap<String, String>>,
     files: files::FileStore,
     bins: binvar::BinStore,
+    windows: window::WindowStore,
     sockets: std::sync::Arc<dyn ScriptSockets>,
 }
 
@@ -49,6 +51,7 @@ impl Inner {
             hashes: HashMap::new(),
             files: files::FileStore::default(),
             bins: binvar::BinStore::default(),
+            windows: window::WindowStore::default(),
             sockets: std::sync::Arc::new(NoSockets),
         }
     }
@@ -124,6 +127,7 @@ impl ScriptEngine {
             hashes: &mut g.hashes,
             files: &mut g.files,
             bins: &mut g.bins,
+            windows: &mut g.windows,
             event,
             actions: Vec::new(),
             halted: false,
@@ -164,6 +168,7 @@ impl ScriptEngine {
             hashes: &mut g.hashes,
             files: &mut g.files,
             bins: &mut g.bins,
+            windows: &mut g.windows,
             event,
             actions: Vec::new(),
             halted: false,
@@ -213,6 +218,7 @@ impl ScriptEngine {
             hashes: &mut g.hashes,
             files: &mut g.files,
             bins: &mut g.bins,
+            windows: &mut g.windows,
             event,
             actions: Vec::new(),
             halted: false,
@@ -251,6 +257,7 @@ impl ScriptEngine {
         let hashes = &mut g.hashes;
         let files = &mut g.files;
         let bins = &mut g.bins;
+        let windows = &mut g.windows;
         let mut actions = Vec::new();
         let mut halted = false;
         for ev in script.events_of(kind) {
@@ -266,6 +273,7 @@ impl ScriptEngine {
                 hashes: &mut *hashes,
                 files: &mut *files,
                 bins: &mut *bins,
+                windows: &mut *windows,
                 event: event.clone(),
                 actions: Vec::new(),
                 halted: false,
@@ -673,6 +681,35 @@ pub fn apply_actions(
                     UiEvent::Echo {
                         server_id: server_id.to_string(),
                         target,
+                        text,
+                    },
+                );
+            }
+            Action::WindowOpen { name, kind, title } => {
+                let _ = app.emit(
+                    IRC_EVENT,
+                    UiEvent::WindowOpen {
+                        server_id: server_id.to_string(),
+                        name,
+                        kind,
+                        title,
+                    },
+                );
+            }
+            Action::WindowClose { name } => {
+                let _ = app.emit(
+                    IRC_EVENT,
+                    UiEvent::WindowClose { server_id: server_id.to_string(), name },
+                );
+            }
+            Action::WindowLine { name, op, n, text } => {
+                let _ = app.emit(
+                    IRC_EVENT,
+                    UiEvent::WindowLine {
+                        server_id: server_id.to_string(),
+                        name,
+                        op,
+                        n,
                         text,
                     },
                 );
@@ -1531,6 +1568,24 @@ mod tests {
     }
 
     #[test]
+    fn custom_window_lines() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias n { /window @list | /aline @list one | /aline @list two | /rline @list 1 ONE | /msg #c $window(@list).lines $+ / $+ $line(@list,1) $+ / $+ $line(@list,2) }",
+        );
+        let actions = engine.run_alias(&ctx(), "#c", "n", "");
+        // The window ops also emit WindowOpen/WindowLine actions; check the /msg.
+        let sends: Vec<&str> = actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::Send(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sends, vec!["PRIVMSG #c :2/ONE/two"]);
+    }
+
+    #[test]
     fn connection_identifiers_from_snapshot() {
         use crate::irc::state::StateSnapshot;
         let snap = StateSnapshot {
@@ -2217,8 +2272,9 @@ mod tests {
     #[test]
     fn unknown_client_command_does_not_leak_to_server() {
         // /clear etc. are client-side: they must NOT become a raw IRC line.
+        // (`/window` is now a real command — covered by custom_window_lines.)
         let engine = ScriptEngine::new();
-        engine.load("alias t { clear | window @x | beep 1 100 | /msg #c done }");
+        engine.load("alias t { clear | beep 1 100 | /msg #c done }");
         assert_eq!(
             engine.run_alias(&ctx(), "#c", "t", ""),
             vec![Action::Send("PRIVMSG #c :done".into())]

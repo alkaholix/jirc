@@ -559,6 +559,34 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 _ => rt.bins.bfind_text(&a(0), n, a(2).as_bytes()).to_string(),
             }
         }
+        // $window(@name|N) — info about a custom window (N=0 = count); properties
+        // .lines / .title / .type.
+        "window" => {
+            let key = a(0);
+            let name = match key.parse::<usize>() {
+                Ok(0) => return rt.windows.names().len().to_string(),
+                Ok(n) => rt.windows.names().get(n - 1).cloned().unwrap_or_default(),
+                Err(_) => key,
+            };
+            match prop {
+                "" => {
+                    if rt.windows.exists(&name) {
+                        name
+                    } else {
+                        String::new()
+                    }
+                }
+                "lines" => rt.windows.count(&name).to_string(),
+                "title" => rt.windows.get(&name).map(|w| w.title.clone()).unwrap_or_default(),
+                "type" => rt.windows.get(&name).map(|w| w.kind.as_str().to_string()).unwrap_or_default(),
+                _ => String::new(),
+            }
+        }
+        // $line(@name, N) — the Nth line of a custom window (1-based).
+        "line" => {
+            let n: usize = a(1).trim().parse().unwrap_or(0);
+            rt.windows.line(&a(0), n)
+        }
         // $replacex (single-pass, non-recursive replace of from/to pairs).
         "replacex" => {
             let s = a(0);
@@ -1877,6 +1905,7 @@ mod tests {
         let mut hashes = HashMap::new();
         let mut files = crate::script::files::FileStore::default();
         let mut bins = crate::script::binvar::BinStore::default();
+        let mut windows = crate::script::window::WindowStore::default();
         let mut rt = Runtime {
             script: &script,
             my_nick: "me",
@@ -1886,6 +1915,7 @@ mod tests {
             hashes: &mut hashes,
             files: &mut files,
             bins: &mut bins,
+            windows: &mut windows,
             event: EventVars::default(),
             actions: vec![],
             halted: false,
@@ -2042,6 +2072,7 @@ mod tests {
         hashes: &'a mut std::collections::HashMap<String, std::collections::HashMap<String, String>>,
         files: &'a mut crate::script::files::FileStore,
         bins: &'a mut crate::script::binvar::BinStore,
+        windows: &'a mut crate::script::window::WindowStore,
     ) -> Runtime<'a> {
         use crate::script::eval::EventVars;
         Runtime {
@@ -2053,6 +2084,7 @@ mod tests {
             hashes,
             files,
             bins,
+            windows,
             event: EventVars::default(),
             actions: vec![],
             halted: false,
@@ -2075,7 +2107,8 @@ mod tests {
         let mut hashes = HashMap::new();
         let mut files = crate::script::files::FileStore::default();
         let mut bins = crate::script::binvar::BinStore::default();
-        let mut rt = rt_for(&script, &mut vars, &mut hashes, &mut files, &mut bins);
+        let mut windows = crate::script::window::WindowStore::default();
+        let mut rt = rt_for(&script, &mut vars, &mut hashes, &mut files, &mut bins, &mut windows);
         let mut e = |n: &str, args: &[&str]| {
             eval_ident(&mut rt, n, &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "")
         };
@@ -2133,7 +2166,8 @@ mod tests {
         let mut hashes = HashMap::new();
         let mut files = crate::script::files::FileStore::default();
         let mut bins = crate::script::binvar::BinStore::default();
-        let mut rt = rt_for(&script, &mut vars, &mut hashes, &mut files, &mut bins);
+        let mut windows = crate::script::window::WindowStore::default();
+        let mut rt = rt_for(&script, &mut vars, &mut hashes, &mut files, &mut bins, &mut windows);
         let mut e = |n: &str, args: &[&str]| {
             eval_ident(&mut rt, n, &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "")
         };
