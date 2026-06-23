@@ -29,13 +29,13 @@ Full rationale: `C:\Users\John\.claude\plans\reactive-kindling-lemon.md`.
   `npm run tauri build -- --no-bundle` → `src-tauri/target/release/jirc.exe`.
 
 ## Verified green
-- 118 backend tests, 29 frontend tests pass; `cargo check` + full debug + release build clean.
+- 120 backend tests, 29 frontend tests pass; `cargo check` + full debug + release build clean.
 - Build gotcha learned: a `SocketManager::rename` self-deadlock (re-locking a Mutex through an
   `if let` guard) hung `cargo test` — looked like an "environment hang". If a test hangs, suspect
   a double-lock, and check `Get-Process cargo,rustc` CPU (idle = deadlocked, not compiling).
 - Listening-socket async accept/connect I/O still needs a **live-network** test (relay sockbot).
 
-## Done 2026-06-23 (autonomous PARITY run — 118 tests green, PARITY 204→290 done)
+## Done 2026-06-23/24 (autonomous PARITY run — 120 tests green, PARITY 204→294 done)
 Worked through `PARITY.md` in batches, reading the mirc.com per-topic help page before each. One commit per
 batch (+ a PARITY checkbox commit); build green at every step. New identifiers/commands all have unit/e2e tests.
 - **File-handle I/O** (new `script/files.rs`): `/fopen /fwrite /fclose /fseek` + `$fopen/$fread/$fgetc/$feof/$ferr`.
@@ -58,6 +58,9 @@ batch (+ a PARITY checkbox commit); build green at every step. New identifiers/c
   hex/base32/plain), `$pbkdf2` (RFC 8018) — added the hmac + pbkdf2 crates; each checked against the canonical RFC test vectors.
   Plus `$crc64` = CRC-64/XZ, matched to the user's `$crc64(abc,0)`=`2CD8094A1A277627` vector (crc crate). Signatures came from
   the keyword index. **NB: mIRC renders CRC in UPPERCASE**, so `$crc`/`$crc64` are uppercase (the `$md5`/`$sha*` family is lowercase).
+- **Binary variables (core):** new `script/binvar.rs` `BinStore` (threaded through `Runtime` like `FileStore`). `/bset`/`/bunset`,
+  `$bvar(&v,N[,M])` (+ `.text`, `N=0`=length), `$bfind`; and `&binvar` is the `N=1` input to the hash identifiers (`$sha256(&v,1)`,
+  etc.). The file-I/O variants (`/bread`/`/bwrite`/`/bcopy`/`/btrunc`) are the pending follow-up.
 - **Deferred (deliberate):** `$hash` (mIRC private algo), `$maxlenl/m/s`/`$ip` (need exact values), `$eval`/`$v1`/`$v2`
   (engine pre-expands identifier args), `$argon2` (no test vector to confirm the variant/output matches mIRC).
 
