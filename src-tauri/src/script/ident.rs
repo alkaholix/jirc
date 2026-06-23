@@ -412,6 +412,38 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         }
         // $os — OS family. mIRC returns a Windows version; we are cross-platform.
         "os" => std::env::consts::OS.to_string(),
+        // $mircexe — full path to the jIRC executable.
+        "mircexe" => std::env::current_exe()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        // $tempfn[(path)] — a unique temp filename (in the script data dir by default).
+        "tempfn" => {
+            let base = if a(0).trim().is_empty() {
+                rt.data_dir.clone()
+            } else {
+                super::eval::sandbox_path(&rt.data_dir, a(0).trim())
+            };
+            base.join(format!("tmp{}_{}", std::process::id(), process_start().elapsed().as_nanos()))
+                .to_string_lossy()
+                .into_owned()
+        }
+        // $findfile/$finddir(dir, wildcard, N[, depth]) — the Nth matching file/dir
+        // (N=0 returns the count). Recurses fully by default; an optional depth
+        // limits how deep. The N=0 command-callback form is not supported.
+        "findfile" | "finddir" => {
+            let base = super::eval::sandbox_path(&rt.data_dir, &a(0));
+            let wild = a(1);
+            let n: usize = a(2).trim().parse().unwrap_or(0);
+            let depth: Option<usize> = a(3).trim().parse().ok().filter(|&d| d > 0);
+            let mut out = Vec::new();
+            find_entries(&base, &wild, name == "finddir", depth, 1, &mut out);
+            out.sort();
+            if n == 0 {
+                out.len().to_string()
+            } else {
+                out.get(n - 1).cloned().unwrap_or_default()
+            }
+        }
         // ISUPPORT-derived: $prefix "(modes)chars", $chanmodes "A,B,C,D".
         "prefix" => {
             let is = &rt.state.isupport;
@@ -1239,6 +1271,33 @@ fn ticks() -> u64 {
     process_start().elapsed().as_millis() as u64
 }
 
+/// Recursively collect matching file or directory paths under `base` for
+/// $findfile/$finddir. `depth` starts at 1 (base level); `max_depth` (if set)
+/// caps how many levels deep to search.
+fn find_entries(
+    base: &std::path::Path,
+    wild: &str,
+    want_dirs: bool,
+    max_depth: Option<usize>,
+    depth: usize,
+    out: &mut Vec<String>,
+) {
+    let Ok(entries) = std::fs::read_dir(base) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_dir = path.is_dir();
+        let fname = entry.file_name().to_string_lossy().into_owned();
+        if is_dir == want_dirs && wildcard_match(wild, &fname) {
+            out.push(path.to_string_lossy().into_owned());
+        }
+        if is_dir && max_depth.map_or(true, |d| depth < d) {
+            find_entries(&path, wild, want_dirs, max_depth, depth + 1, out);
+        }
+    }
+}
+
 fn replacex(s: &str, pairs: &[(String, String)]) -> String {
     if pairs.is_empty() {
         return s.to_string();
@@ -1738,6 +1797,9 @@ mod tests {
         assert_eq!(id("decode", &["TWFu", "m"]), "Man");
         assert_eq!(id("encode", &["a b&c", "x"]), "a%20b%26c");
         assert_eq!(id("decode", &["a%20b%26c", "x"]), "a b&c");
+        // $mircexe non-empty; $tempfn contains a "tmp" component
+        assert!(!id("mircexe", &[]).is_empty());
+        assert!(id("tempfn", &[]).contains("tmp"));
         // `.deg` needs the property, so call eval_ident directly — this is after
         // the `id` closure's final use, so its borrow of `rt` has ended.
         assert_eq!(eval_ident(&mut rt, "sin", &["90".into()], "deg"), "1");

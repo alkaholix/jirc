@@ -1451,6 +1451,30 @@ mod tests {
     }
 
     #[test]
+    fn findfile_counts_matches() {
+        let dir = std::env::temp_dir().join(format!("jirc-ff-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("data/sub")).unwrap();
+        std::fs::write(dir.join("data/a.txt"), "x").unwrap();
+        std::fs::write(dir.join("data/b.txt"), "y").unwrap();
+        std::fs::write(dir.join("data/sub/c.txt"), "z").unwrap();
+        std::fs::write(dir.join("data/note.log"), "n").unwrap();
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: dir.clone(),
+            state: std::sync::Arc::new(Default::default()),
+        };
+        let engine = ScriptEngine::new();
+        // recursive: *.txt under data/ = a,b,sub/c = 3; dirs = sub = 1.
+        engine.load("alias n { /msg #c files= $+ $findfile(data, *.txt, 0) dirs= $+ $finddir(data, *, 0) }");
+        let actions = engine.run_alias(&rctx, "#c", "n", "");
+        assert_eq!(actions, vec![Action::Send("PRIVMSG #c :files=3 dirs=1".into())]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn socket_commands_produce_actions() {
         let engine = ScriptEngine::new();
         engine.load(
