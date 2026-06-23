@@ -245,7 +245,7 @@ out of scope.
 - [x] `$len`
 - [ ] `$level`
 - [x] `$lf`
-- [ ] `$line`
+- [x] `$line` *(backend; UI pending)*
 - [x] `$lines`
 - [ ] `$link`
 - [ ] `$lock`
@@ -452,7 +452,7 @@ out of scope.
 - [ ] `$width`
 - [x] `$wildsite`
 - [x] `$wildtok`
-- [ ] `$window`
+- [x] `$window` *(backend; UI pending)*
 - [ ] `$wrap`
 - [x] `$xor`
 - [ ] `$zip`
@@ -464,7 +464,7 @@ out of scope.
 - [ ] `/abook`
 - [ ] `/ajinvite`
 - [ ] `/alias` *(runtime alias define; aliases are loaded from scripts)*
-- [ ] `/aline` *(stub)*
+- [x] `/aline` *(backend; UI pending)*
 - [x] `/ame`
 - [x] `/amsg`
 - [ ] `/anick`
@@ -487,7 +487,7 @@ out of scope.
 - [x] `/bunset`
 - [ ] `/bwrite`
 - [x] `/channel` *(Channel Central UI)*
-- [ ] `/clear` *(stub)*
+- [x] `/clear` *(backend; UI pending)*
 - [ ] `/clearall` *(stub)*
 - [ ] `/cline` *(stub)*
 - [ ] `/clipboard` *(stub)*
@@ -511,7 +511,7 @@ out of scope.
 - [ ] `/disable`
 - [x] `/disconnect`
 - [ ] `/dlevel`
-- [ ] `/dline` *(stub)*
+- [x] `/dline` *(backend; UI pending)*
 - [ ] `/dll`
 - [x] `/dns`
 - [ ] `/donotdisturb` *(stub)*
@@ -554,7 +554,7 @@ out of scope.
 - [ ] `/identd`
 - [x] `/if`
 - [ ] `/ignore` *(client ignore list exists in UI; verify `/ignore` command)*
-- [ ] `/iline` *(stub)*
+- [x] `/iline` *(backend; UI pending)*
 - [x] `/inc`
 - [x] `/invite`
 - [ ] `/iuser`
@@ -608,7 +608,7 @@ out of scope.
 - [ ] `/resetidle` *(stub)*
 - [x] `/return`
 - [ ] `/rlevel`
-- [ ] `/rline` *(stub)*
+- [x] `/rline` *(backend; UI pending)*
 - [x] `/rmdir`
 - [x] `/run`
 - [ ] `/ruser`
@@ -660,7 +660,7 @@ out of scope.
 - [ ] `/vol`
 - [x] `/while`
 - [x] `/whois`
-- [ ] `/window` *(stub — custom `@windows`)*
+- [x] `/window` *(backend; UI pending)*
 - [ ] `/winhelp`
 - [x] `/write` · [x] `/writeini`
 
