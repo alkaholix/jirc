@@ -187,12 +187,12 @@ out of scope.
 - [x] `$hfind`
 - [x] `$hget`
 - [ ] `$highlight`
-- [ ] `$hmac`
+- [x] `$hmac`
 - [x] `$hnick`
 - [ ] `$host`
 - [ ] `$hotline`
 - [ ] `$hotlinepos`
-- [ ] `$hotp`
+- [x] `$hotp`
 - [x] `$hypot`
 - [x] `$ial`
 - [ ] `$ialchan`
@@ -426,7 +426,7 @@ out of scope.
 - [ ] `$tips`
 - [ ] `$titlebar`
 - [ ] `$toolbar`
-- [ ] `$totp`
+- [x] `$totp`
 - [ ] `$treebar`
 - [ ] `$trust`
 - [ ] `$ulevel`
