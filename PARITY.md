@@ -322,7 +322,7 @@ out of scope.
 - [ ] `$parsetype`
 - [ ] `$parseutf`
 - [ ] `$passivedcc`
-- [ ] `$pbkdf2`
+- [x] `$pbkdf2`
 - [x] `$pi`
 - [ ] `$pic`
 - [ ] `$play`
