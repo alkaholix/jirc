@@ -35,7 +35,7 @@ Full rationale: `C:\Users\John\.claude\plans\reactive-kindling-lemon.md`.
   a double-lock, and check `Get-Process cargo,rustc` CPU (idle = deadlocked, not compiling).
 - Listening-socket async accept/connect I/O still needs a **live-network** test (relay sockbot).
 
-## Done 2026-06-23 (autonomous PARITY run — 118 tests green, PARITY 204→289 done)
+## Done 2026-06-23 (autonomous PARITY run — 118 tests green, PARITY 204→290 done)
 Worked through `PARITY.md` in batches, reading the mirc.com per-topic help page before each. One commit per
 batch (+ a PARITY checkbox commit); build green at every step. New identifiers/commands all have unit/e2e tests.
 - **File-handle I/O** (new `script/files.rs`): `/fopen /fwrite /fclose /fseek` + `$fopen/$fread/$fgetc/$feof/$ferr`.
@@ -56,9 +56,10 @@ batch (+ a PARITY checkbox commit); build green at every step. New identifiers/c
   snapshot now carries them (this is the pattern for the rest of the connection/self-state tail).
 - **Crypto (RFC-verified, so it matches mIRC):** `$hmac` (RFC 2104), `$hotp`/`$totp` (RFC 4226/6238, key auto-detected as
   hex/base32/plain), `$pbkdf2` (RFC 8018) — added the hmac + pbkdf2 crates; each checked against the canonical RFC test vectors.
-  Signatures came from the keyword index (`mirc_kwindex_dyn.html` → `other_identifiers.html#id_hmac`, etc.).
+  Plus `$crc64` = CRC-64/XZ, matched to the user's `$crc64(abc,0)`=`2CD8094A1A277627` vector (crc crate). Signatures came from
+  the keyword index. **NB: mIRC renders CRC in UPPERCASE**, so `$crc`/`$crc64` are uppercase (the `$md5`/`$sha*` family is lowercase).
 - **Deferred (deliberate):** `$hash` (mIRC private algo), `$maxlenl/m/s`/`$ip` (need exact values), `$eval`/`$v1`/`$v2`
-  (engine pre-expands identifier args), `$argon2`/`$crc64` (no test vector to confirm the variant/output matches mIRC).
+  (engine pre-expands identifier args), `$argon2` (no test vector to confirm the variant/output matches mIRC).
 
 ### Remaining PARITY (≈427 open) — what each bucket needs
 Most open items are **subsystem-blocked**, not quick wins:
@@ -71,8 +72,8 @@ Most open items are **subsystem-blocked**, not quick wins:
   which now carries connection facts + user_mode/away). Open by the **same snapshot pattern**: `$serverip` (needs the resolved
   IP), `$awaymsg/$awaytime`, `$idle`, `$online`. GUI/window-state ones (`$active`, `$mouse`, ...) still need the window subsystem.
 - **Feasible next (no big subsystem):** the binary-var family (`/bset`/`$bvar`/`&binvar`/...); the connection/self-state tail
-  (`$serverip`/`$awaymsg`/`$awaytime`/`$idle`/`$online`) via the now-established snapshot pattern; `$argon2`/`$crc64` once a
-  mIRC test vector turns up to confirm the variant.
+  (`$serverip`/`$awaymsg`/`$awaytime`/`$idle`/`$online`) via the now-established snapshot pattern; `$argon2` once a mIRC
+  test vector turns up to confirm the variant/output.
 
 ## Done 2026-06-22 (mirc.com docs audit — parity round, 109 tests green)
 Read the official per-topic mirc.com help pages first, then implemented/fixed against them. All committed.
