@@ -157,9 +157,9 @@ out of scope.
 - [ ] `$file`
 - [ ] `$filename`
 - [ ] `$filtered`
-- [ ] `$finddir`
+- [x] `$finddir`
 - [ ] `$finddirn`
-- [ ] `$findfile`
+- [x] `$findfile`
 - [ ] `$findfilen`
 - [x] `$findtok`
 - [ ] `$fline`
@@ -279,7 +279,7 @@ out of scope.
 - [ ] `$mididir`
 - [x] `$min`
 - [x] `$mircdir`
-- [ ] `$mircexe`
+- [x] `$mircexe`
 - [ ] `$mircini`
 - [ ] `$mircpid`
 - [ ] `$mkfn`
@@ -414,7 +414,7 @@ out of scope.
 - [x] `$tan`
 - [x] `$tanh`
 - [x] `$target`
-- [ ] `$tempfn`
+- [x] `$tempfn`
 - [x] `$ticks` *(ms since process start)*
 - [x] `$ticksqpc`
 - [x] `$time`
