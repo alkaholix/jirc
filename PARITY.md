@@ -121,7 +121,7 @@ out of scope.
 - [ ] `$dde`
 - [ ] `$ddename`
 - [ ] `$debug`
-- [ ] `$decode`
+- [x] `$decode` *(base64 + percent; other switches passthrough)*
 - [ ] `$decompress`
 - [x] `$deltok`
 - [ ] `$devent`
@@ -142,7 +142,7 @@ out of scope.
 - [ ] `$ebeeps`
 - [ ] `$editbox`
 - [ ] `$emailaddr`
-- [ ] `$encode`
+- [x] `$encode` *(base64 + percent; other switches passthrough)*
 - [x] `$envvar`
 - [ ] `$error`
 - [ ] `$eval`
