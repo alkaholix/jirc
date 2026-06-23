@@ -752,7 +752,8 @@ fn handle_mode(
     let mut args = params.get(i + 3..).map(|s| s.to_vec()).unwrap_or_default().into_iter();
 
     if !ctx.state.isupport.is_channel(&target) {
-        // User mode: render the modestring with explicit signs.
+        // User mode (only ever our own): track it for $usermode, then render.
+        apply_user_modes(&mut ctx.state.user_mode, &modestring);
         fx.events.push(UiEvent::Mode {
             server_id: server_id.to_string(),
             target,
@@ -826,6 +827,27 @@ fn render_modestring(modestring: &str) -> String {
         }
     }
     out
+}
+
+/// Apply a user-mode change string (e.g. "+i-w") to our tracked mode set.
+fn apply_user_modes(current: &mut String, modes: &str) {
+    let mut adding = true;
+    for c in modes.chars() {
+        match c {
+            '+' => adding = true,
+            '-' => adding = false,
+            _ if c.is_ascii_alphanumeric() => {
+                if adding {
+                    if !current.contains(c) {
+                        current.push(c);
+                    }
+                } else {
+                    current.retain(|x| x != c);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn handle_numeric(ctx: &mut Context, fx: &mut Effects, resp: Response, args: &[String]) {
@@ -1144,6 +1166,17 @@ fn whois_line(code: u16, args: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_modes_accumulate() {
+        let mut m = String::new();
+        apply_user_modes(&mut m, "+ix");
+        assert_eq!(m, "ix");
+        apply_user_modes(&mut m, "+w-i");
+        assert_eq!(m, "xw");
+        apply_user_modes(&mut m, "-xw");
+        assert_eq!(m, "");
+    }
 
     fn profile() -> ServerProfile {
         ServerProfile {

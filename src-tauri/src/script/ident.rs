@@ -485,6 +485,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "ssl" => bool_str(rt.state.tls),
         "anick" => rt.state.alt_nick.clone(),
         "fullname" => rt.state.realname.clone(),
+        "usermode" => rt.state.user_mode.clone(),
         // $replacex (single-pass, non-recursive replace of from/to pairs).
         "replacex" => {
             let s = a(0);

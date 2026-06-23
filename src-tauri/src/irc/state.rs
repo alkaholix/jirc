@@ -162,6 +162,8 @@ pub struct SessionState {
     pub tls: bool,
     pub alt_nick: String,
     pub realname: String,
+    /// Our own user modes (e.g. "iwx"), tracked from MODE messages on our nick.
+    pub user_mode: String,
     /// Set once RPL_WELCOME is received.
     pub registered: bool,
     /// How many alternative nicks we've tried during registration.
@@ -270,6 +272,8 @@ pub struct StateSnapshot {
     pub tls: bool,
     pub alt_nick: String,
     pub realname: String,
+    /// Our own user modes (e.g. "iwx") for `$usermode`.
+    pub user_mode: String,
 }
 
 impl SessionState {
@@ -293,6 +297,7 @@ impl SessionState {
             tls: self.tls,
             alt_nick: self.alt_nick.clone(),
             realname: self.realname.clone(),
+            user_mode: self.user_mode.clone(),
         }
     }
 }
