@@ -1119,8 +1119,19 @@ pub fn drive_event(
         ),
         UiEvent::Mode { target, modes, by, .. } => {
             let setter = by.clone().unwrap_or_default();
-            let chan = if is_channel(target) { target.clone() } else { String::new() };
-            // Generic `on MODE` ($1- = the whole change).
+            if !is_channel(target) {
+                // A user-mode change (only ever your own) fires `on USERMODE`.
+                let vars = EventVars {
+                    nick: setter,
+                    target: target.clone(),
+                    params: words(modes),
+                    text: modes.clone(),
+                    ..Default::default()
+                };
+                return engine.dispatch_event(ctx, "USERMODE", vars);
+            }
+            let chan = target.clone();
+            // Generic `on MODE` and raw `on RAWMODE` ($1- = the whole change).
             let generic = EventVars {
                 nick: setter.clone(),
                 chan: chan.clone(),
@@ -1129,7 +1140,8 @@ pub fn drive_event(
                 text: modes.clone(),
                 ..Default::default()
             };
-            let mut actions = engine.dispatch_event(ctx, "MODE", generic);
+            let mut actions = engine.dispatch_event(ctx, "MODE", generic.clone());
+            actions.extend(engine.dispatch_event(ctx, "RAWMODE", generic));
             // Plus a specific event per prefix/ban change (on OP/DEOP/BAN/…),
             // with the affected nick/mask as $1 and $knick/$opnick/$bnick/…
             for (kind, affected) in split_mode_events(modes) {
@@ -2172,6 +2184,36 @@ mod tests {
         };
         let actions = drive_event(&engine, &ctx(), &ev);
         assert_eq!(actions, vec![Action::Send("PRIVMSG #test :op set +o bob".into())]);
+    }
+
+    #[test]
+    fn rawmode_and_usermode_events() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "on *:RAWMODE:#:{ /msg $chan raw $1- }\non *:USERMODE:{ /msg me umode $1- }",
+        );
+        // A channel mode fires on RAWMODE (and on MODE, no handler here).
+        let ch = UiEvent::Mode {
+            server_id: "s".into(),
+            target: "#c".into(),
+            modes: "+nt".into(),
+            by: Some("op".into()),
+        };
+        assert_eq!(
+            drive_event(&engine, &ctx(), &ch),
+            vec![Action::Send("PRIVMSG #c :raw +nt".into())]
+        );
+        // A user mode (non-channel target) fires on USERMODE.
+        let um = UiEvent::Mode {
+            server_id: "s".into(),
+            target: "me".into(),
+            modes: "+ix".into(),
+            by: Some("me".into()),
+        };
+        assert_eq!(
+            drive_event(&engine, &ctx(), &um),
+            vec![Action::Send("PRIVMSG me :umode +ix".into())]
+        );
     }
 
     #[test]
