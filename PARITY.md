@@ -61,7 +61,7 @@ out of scope.
 - [ ] `$avoice`
 - [x] `$away`
 - [ ] `$awaymsg`
-- [ ] `$awaytime`
+- [x] `$awaytime`
 - [ ] `$banmask`
 - [x] `$base`
 - [x] `$bfind`
@@ -308,7 +308,7 @@ out of scope.
 - [x] `$null`
 - [x] `$numeric`
 - [x] `$numtok`
-- [ ] `$online`
+- [x] `$online`
 - [ ] `$onlineserver`
 - [ ] `$onlinetotal`
 - [ ] `$onpoly`
