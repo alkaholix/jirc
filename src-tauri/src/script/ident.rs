@@ -216,7 +216,9 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             let n: usize = a(1).parse().unwrap_or(0);
             a(0).repeat(n)
         }
-        "rand" | "r" => {
+        // $rands is the cryptographically-secure variant; the output (a random
+        // value in range) is indistinguishable, so it shares $rand's logic.
+        "rand" | "r" | "rands" => {
             let (lo, hi) = (a(0), a(1));
             match (lo.parse::<i64>(), hi.parse::<i64>()) {
                 (Ok(x), Ok(y)) => rand_range(x, y).to_string(),
@@ -456,6 +458,21 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             format!("{},{},{},{}", is.chanmodes_a, is.chanmodes_b, is.chanmodes_c, is.chanmodes_d)
         }
         "chantypes" => rt.state.isupport.chan_types.clone(),
+        // $isalias(name) — $true if a user alias by that name is defined.
+        "isalias" => bool_str(rt.script.find_alias(&a(0)).is_some()),
+        // $modinv(a, m) — modular multiplicative inverse (empty if none exists).
+        "modinv" => {
+            let m: i128 = a(1).trim().parse().unwrap_or(0);
+            if m <= 0 {
+                String::new()
+            } else {
+                modinv(a(0).trim().parse().unwrap_or(0), m)
+                    .map(|v| v.to_string())
+                    .unwrap_or_default()
+            }
+        }
+        // $mircpid — the client process id.
+        "mircpid" => std::process::id().to_string(),
         // $replacex (single-pass, non-recursive replace of from/to pairs).
         "replacex" => {
             let s = a(0);
@@ -1800,6 +1817,13 @@ mod tests {
         // $mircexe non-empty; $tempfn contains a "tmp" component
         assert!(!id("mircexe", &[]).is_empty());
         assert!(id("tempfn", &[]).contains("tmp"));
+        // $rands in range; $isalias false with no aliases loaded
+        let rv: i64 = id("rands", &["1", "3"]).parse().unwrap();
+        assert!((1..=3).contains(&rv));
+        assert_eq!(id("isalias", &["nope"]), "$false");
+        // $modinv (3*4 = 12 ≡ 1 mod 11); $mircpid numeric
+        assert_eq!(id("modinv", &["3", "11"]), "4");
+        assert!(id("mircpid", &[]).parse::<u32>().is_ok());
         // `.deg` needs the property, so call eval_ident directly — this is after
         // the `id` closure's final use, so its borrow of `rt` has ended.
         assert_eq!(eval_ident(&mut rt, "sin", &["90".into()], "deg"), "1");
