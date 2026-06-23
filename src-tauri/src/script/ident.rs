@@ -523,6 +523,23 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "fullname" => rt.state.realname.clone(),
         "usermode" => rt.state.user_mode.clone(),
         "away" => bool_str(rt.state.away),
+        // $online — seconds connected so far; $awaytime — unix time you went away.
+        "online" => {
+            let c = rt.state.connect_time;
+            if c == 0 {
+                String::new()
+            } else {
+                now_secs().saturating_sub(c).to_string()
+            }
+        }
+        "awaytime" => {
+            let t = rt.state.away_time;
+            if t == 0 {
+                String::new()
+            } else {
+                t.to_string()
+            }
+        }
         // $bvar(&v,N[,M]) — ASCII byte values from 1-based N (N=0 = length);
         // the .text property returns the bytes as text.
         "bvar" => {

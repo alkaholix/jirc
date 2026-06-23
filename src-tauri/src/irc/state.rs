@@ -166,6 +166,9 @@ pub struct SessionState {
     pub user_mode: String,
     /// Whether we are marked away (from RPL_UNAWAY/RPL_NOWAWAY).
     pub away: bool,
+    /// Unix time we connected (RPL_WELCOME) / went away, for $online / $awaytime.
+    pub connect_time: u64,
+    pub away_time: u64,
     /// Set once RPL_WELCOME is received.
     pub registered: bool,
     /// How many alternative nicks we've tried during registration.
@@ -278,6 +281,9 @@ pub struct StateSnapshot {
     pub user_mode: String,
     /// Whether we are marked away, for `$away`.
     pub away: bool,
+    /// Unix times for `$online` (connect) and `$awaytime`.
+    pub connect_time: u64,
+    pub away_time: u64,
 }
 
 impl SessionState {
@@ -303,6 +309,8 @@ impl SessionState {
             realname: self.realname.clone(),
             user_mode: self.user_mode.clone(),
             away: self.away,
+            connect_time: self.connect_time,
+            away_time: self.away_time,
         }
     }
 }

@@ -829,6 +829,14 @@ fn render_modestring(modestring: &str) -> String {
     out
 }
 
+/// Current unix time in seconds.
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 /// Apply a user-mode change string (e.g. "+i-w") to our tracked mode set.
 fn apply_user_modes(current: &mut String, modes: &str) {
     let mut adding = true;
@@ -856,6 +864,7 @@ fn handle_numeric(ctx: &mut Context, fx: &mut Effects, resp: Response, args: &[S
     match resp {
         Response::RPL_WELCOME => {
             ctx.state.registered = true;
+            ctx.state.connect_time = now_secs();
             if let Some(nick) = args.first() {
                 ctx.state.nick = nick.clone();
             }
@@ -993,10 +1002,12 @@ fn handle_numeric(ctx: &mut Context, fx: &mut Effects, resp: Response, args: &[S
         }
         Response::RPL_NOWAWAY => {
             ctx.state.away = true;
+            ctx.state.away_time = now_secs();
             fx.events.push(UiEvent::SelfAway { server_id, away: true });
         }
         Response::RPL_UNAWAY => {
             ctx.state.away = false;
+            ctx.state.away_time = 0;
             fx.events.push(UiEvent::SelfAway { server_id, away: false });
         }
         Response::RPL_ENDOFWHOIS => {

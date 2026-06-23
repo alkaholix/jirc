@@ -1499,6 +1499,38 @@ mod tests {
     }
 
     #[test]
+    fn awaytime_and_online() {
+        use crate::irc::state::StateSnapshot;
+        let engine = ScriptEngine::new();
+        // Not connected / not away -> both empty.
+        let r0 = RunCtx {
+            my_nick: "me",
+            network: "N",
+            server: "s",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(StateSnapshot::default()),
+        };
+        engine.load("alias t { /msg #c [ $+ $awaytime $+ ][ $+ $online $+ ] }");
+        assert_eq!(
+            engine.run_alias(&r0, "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :[][]".into())]
+        );
+        // away_time set -> $awaytime returns it verbatim.
+        let r1 = RunCtx {
+            my_nick: "me",
+            network: "N",
+            server: "s",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(StateSnapshot { away_time: 1_700_000_500, ..Default::default() }),
+        };
+        engine.load("alias t { /msg #c $awaytime }");
+        assert_eq!(
+            engine.run_alias(&r1, "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :1700000500".into())]
+        );
+    }
+
+    #[test]
     fn connection_identifiers_from_snapshot() {
         use crate::irc::state::StateSnapshot;
         let snap = StateSnapshot {
