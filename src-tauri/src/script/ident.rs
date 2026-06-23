@@ -365,6 +365,12 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             let step: u64 = a(4).trim().parse().ok().filter(|&s| s >= 1).unwrap_or(30);
             hotp(&a(2), &key, time / step, otp_digits(&a(3)))
         }
+        // $pbkdf2(text, salt, hash, length, iterations) — RFC 8018, hex output.
+        "pbkdf2" => {
+            let length: usize = a(3).trim().parse().unwrap_or(0);
+            let iters: u32 = a(4).trim().parse().unwrap_or(1).max(1);
+            pbkdf2_hex(&a(2), a(0).as_bytes(), a(1).as_bytes(), iters, length)
+        }
         // Bitwise (binary) operators on integers.
         "and" => (uint(&a(0)) & uint(&a(1))).to_string(),
         "or" => (uint(&a(0)) | uint(&a(1))).to_string(),
@@ -1648,6 +1654,20 @@ fn decode_otp_key(s: &str) -> Vec<u8> {
     t.into_bytes()
 }
 
+/// PBKDF2-HMAC derived key as hex (sha1 default, like mIRC's hash family).
+fn pbkdf2_hex(algo: &str, pass: &[u8], salt: &[u8], iters: u32, length: usize) -> String {
+    use pbkdf2::pbkdf2_hmac;
+    let mut out = vec![0u8; length];
+    match algo.to_ascii_lowercase().as_str() {
+        "md5" => pbkdf2_hmac::<md5::Md5>(pass, salt, iters, &mut out),
+        "sha256" => pbkdf2_hmac::<sha2::Sha256>(pass, salt, iters, &mut out),
+        "sha384" => pbkdf2_hmac::<sha2::Sha384>(pass, salt, iters, &mut out),
+        "sha512" => pbkdf2_hmac::<sha2::Sha512>(pass, salt, iters, &mut out),
+        _ => pbkdf2_hmac::<sha1::Sha1>(pass, salt, iters, &mut out),
+    }
+    hex_of(&out)
+}
+
 /// Percent-encode per RFC 3986 (keep unreserved A-Za-z0-9 - . _ ~).
 fn percent_encode(s: &str) -> String {
     let mut out = String::new();
@@ -1945,6 +1965,15 @@ mod tests {
         assert_eq!(id("hotp", &["12345678901234567890", "1"]), "287082");
         // TOTP at t=59 with step 30 -> counter 1 -> same as hotp(...,1)
         assert_eq!(id("totp", &["12345678901234567890", "59"]), "287082");
+        // PBKDF2-HMAC-SHA1 — RFC 6070 vectors
+        assert_eq!(
+            id("pbkdf2", &["password", "salt", "sha1", "20", "1"]),
+            "0c60c80f961f0e71f3a9b524af6012062fe037a6"
+        );
+        assert_eq!(
+            id("pbkdf2", &["password", "salt", "sha1", "20", "4096"]),
+            "4b007901b765489abead49d926f721d065a429c1"
+        );
         // `.deg` needs the property, so call eval_ident directly — this is after
         // the `id` closure's final use, so its borrow of `rt` has ended.
         assert_eq!(eval_ident(&mut rt, "sin", &["90".into()], "deg"), "1");

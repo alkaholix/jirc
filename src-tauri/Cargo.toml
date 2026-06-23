@@ -43,6 +43,7 @@ sha1 = "0.10"
 sha2 = "0.10"
 crc32fast = "1"
 hmac = "0.12" # $hmac, and the HMAC core of $totp/$hotp
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] } # $pbkdf2
 tokio-socks = "0.5"
 tauri-plugin-notification = "2.3.3"
 tauri-plugin-opener = "2.5.4"
