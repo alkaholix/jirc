@@ -342,7 +342,15 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 _ => hex_of(sha2::Sha512::digest(&data)),
             }
         }
-        "crc" => format!("{:08x}", crc32fast::hash(&hash_input(rt, &a(0), &a(1)))),
+        // mIRC renders CRC in uppercase hex (confirmed via $crc64("abc",0)).
+        "crc" => format!("{:08X}", crc32fast::hash(&hash_input(rt, &a(0), &a(1)))),
+        // $crc64 is CRC-64/XZ, 16 uppercase hex chars.
+        "crc64" => {
+            use std::sync::OnceLock;
+            static CRC64: OnceLock<crc::Crc<u64>> = OnceLock::new();
+            let crc = CRC64.get_or_init(|| crc::Crc::<u64>::new(&crc::CRC_64_XZ));
+            format!("{:016X}", crc.checksum(&hash_input(rt, &a(0), &a(1))))
+        }
         // $hmac(text, key, hash, N) — keyed hash; hash default sha1, N text/binvar/file.
         "hmac" => {
             let data = hash_input(rt, &a(0), &a(3));
@@ -1910,7 +1918,8 @@ mod tests {
             id("sha256", &["abc"]),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
-        assert_eq!(id("crc", &["123456789"]), "cbf43926");
+        assert_eq!(id("crc", &["123456789"]), "CBF43926");
+        assert_eq!(id("crc64", &["abc", "0"]), "2CD8094A1A277627");
         // bitwise / integer math
         assert_eq!(id("and", &["12", "10"]), "8");
         assert_eq!(id("or", &["12", "10"]), "14");
