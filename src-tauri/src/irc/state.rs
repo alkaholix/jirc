@@ -168,6 +168,8 @@ pub struct SessionState {
     pub server_port: u16,
     pub tls: bool,
     pub alt_nick: String,
+    /// Our configured main (primary) nick, for `$mnick`.
+    pub main_nick: String,
     pub realname: String,
     /// Our own user modes (e.g. "iwx"), tracked from MODE messages on our nick.
     pub user_mode: String,
@@ -285,6 +287,8 @@ pub struct StateSnapshot {
     pub server_port: u16,
     pub tls: bool,
     pub alt_nick: String,
+    /// Our configured main (primary) nick, for `$mnick`.
+    pub main_nick: String,
     pub realname: String,
     /// Our own user modes (e.g. "iwx") for `$usermode`.
     pub user_mode: String,
@@ -317,6 +321,7 @@ impl SessionState {
             server_port: self.server_port,
             tls: self.tls,
             alt_nick: self.alt_nick.clone(),
+            main_nick: self.main_nick.clone(),
             realname: self.realname.clone(),
             user_mode: self.user_mode.clone(),
             away: self.away,

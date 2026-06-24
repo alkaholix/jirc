@@ -11,6 +11,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
     let a = |i: usize| args.get(i).cloned().unwrap_or_default();
     match name.to_ascii_lowercase().as_str() {
         "me" => rt.my_nick.to_string(),
+        "mnick" => rt.state.main_nick.clone(),
         "nick" => {
             // $nick = event nick; $nick(#chan, N) = Nth member (N=0 → count).
             if args.len() >= 2 {

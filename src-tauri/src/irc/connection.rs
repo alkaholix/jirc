@@ -188,6 +188,7 @@ async fn run_once(
         server_port: profile.port,
         tls: profile.tls,
         alt_nick: profile.alt_nick.clone().unwrap_or_default(),
+        main_nick: profile.nick.clone(),
         realname: profile.realname.clone().unwrap_or_default(),
         ..Default::default()
     };

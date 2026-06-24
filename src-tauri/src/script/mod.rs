@@ -1601,6 +1601,7 @@ mod tests {
             user_mode: "ix".into(),
             away: true,
             away_msg: "Gone fishing".into(),
+            main_nick: "MainNick".into(),
             ..Default::default()
         };
         let rctx = RunCtx {
@@ -1612,12 +1613,14 @@ mod tests {
         };
         let engine = ScriptEngine::new();
         engine.load(
-            "alias n { /msg #c $port $+ / $+ $ssl $+ / $+ $anick $+ / $+ $fullname $+ / $+ $usermode $+ / $+ $away $+ / $+ $awaymsg }",
+            "alias n { /msg #c $port $+ / $+ $ssl $+ / $+ $anick $+ / $+ $fullname $+ / $+ $usermode $+ / $+ $away $+ / $+ $awaymsg $+ / $+ $mnick }",
         );
         let actions = engine.run_alias(&rctx, "#c", "n", "");
         assert_eq!(
             actions,
-            vec![Action::Send("PRIVMSG #c :6697/$true/me_/Real Name/ix/$true/Gone fishing".into())]
+            vec![Action::Send(
+                "PRIVMSG #c :6697/$true/me_/Real Name/ix/$true/Gone fishing/MainNick".into()
+            )]
         );
     }
 

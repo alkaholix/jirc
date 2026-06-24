@@ -293,7 +293,7 @@ out of scope.
 - [x] `$mkfn`
 - [ ] `$mklogfn`
 - [x] `$mknickfn`
-- [ ] `$mnick`
+- [x] `$mnick`
 - [x] `$mode` *(verify — exposed in MODE events)*
 - [ ] `$modefirst`
 - [ ] `$modelast`
