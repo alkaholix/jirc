@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, ServerProfile } from "../lib/api";
+import { useStore } from "../state/store";
 
 interface Props {
   onClose: () => void;
@@ -15,6 +16,12 @@ export function AutoJoinDialog({ onClose }: Props) {
   const [newChan, setNewChan] = useState("");
   const [dirty, setDirty] = useState(false);
   const [savedMsg, setSavedMsg] = useState("");
+  const servers = useStore((s) => s.servers);
+
+  // The live connection (if any) for the selected network — enables "Join now".
+  const liveServerId = Object.entries(servers).find(
+    ([, srv]) => srv.name === selected && srv.connected,
+  )?.[0];
 
   useEffect(() => {
     api
@@ -96,13 +103,27 @@ export function AutoJoinDialog({ onClose }: Props) {
                 {channels.map((c) => (
                   <li key={c}>
                     <span>{c}</span>
-                    <button
-                      className="ghost danger-text"
-                      onClick={() => remove(c)}
-                      title={`Remove ${c}`}
-                    >
-                      ✕
-                    </button>
+                    <span className="autojoin-row-actions">
+                      <button
+                        className="ghost"
+                        onClick={() => liveServerId && api.join(liveServerId, c).catch(() => {})}
+                        disabled={!liveServerId}
+                        title={
+                          liveServerId
+                            ? `Join ${c} now`
+                            : `Connect to ${selected} first to join now`
+                        }
+                      >
+                        Join
+                      </button>
+                      <button
+                        className="ghost danger-text"
+                        onClick={() => remove(c)}
+                        title={`Remove ${c}`}
+                      >
+                        ✕
+                      </button>
+                    </span>
                   </li>
                 ))}
               </ul>

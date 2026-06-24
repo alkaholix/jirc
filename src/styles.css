@@ -1009,6 +1009,11 @@ label.inline {
   padding: 0 0.4rem;
   line-height: 1.4;
 }
+.autojoin-row-actions {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+}
 .saved-row {
   display: flex;
   gap: 0.5rem;
