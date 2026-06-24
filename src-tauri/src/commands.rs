@@ -45,8 +45,19 @@ pub fn open_url(app: AppHandle, url: String) -> Result<(), String> {
 /// The URL deliberately carries **no `#route` fragment**: in a release build a
 /// fragment in `WebviewUrl::App` is treated as part of the asset path and 404s to
 /// a blank ("white box") window. So we load `index.html` cleanly and route by label.
+///
+/// This command is **async on purpose.** A *synchronous* Tauri command runs on the
+/// main (event-loop) thread, and calling `WebviewWindowBuilder::build()` there
+/// blocks the loop that WebView2 needs to finish initializing — the native frame
+/// appears but the webview never loads its page (a blank, unresponsive window).
+/// Running async moves the blocking build off the main thread so the webview can
+/// initialize.
 #[tauri::command]
-pub fn open_detached_window(app: AppHandle, label: String, title: String) -> Result<(), String> {
+pub async fn open_detached_window(
+    app: AppHandle,
+    label: String,
+    title: String,
+) -> Result<(), String> {
     use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
     if let Some(w) = app.get_webview_window(&label) {
         let _ = w.set_focus();
