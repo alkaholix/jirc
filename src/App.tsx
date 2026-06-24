@@ -16,6 +16,8 @@ import { ChannelCentral } from "./components/ChannelCentral";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { PromptDialog } from "./components/PromptDialog";
 import { UserDialogs } from "./components/UserDialogs";
+import { DetachedView } from "./components/DetachedView";
+import { parseDetachedRoute, popOutBuffer, dockBackBuffer, detachedLabel } from "./lib/detach";
 import { routeDialogEvent } from "./state/dialogs";
 import { routeNickIconEvent } from "./state/nickIcons";
 import { routeAwayEvent } from "./state/away";
@@ -28,6 +30,7 @@ function App() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [scriptOpen, setScriptOpen] = useState(false);
+  const [detachedKey] = useState(() => parseDetachedRoute(window.location.hash));
   const theme = useSettings((s) => s.theme);
   const customCss = useSettings((s) => s.customCss);
   const layout = useSettings((s) => s.layout);
@@ -39,6 +42,7 @@ function App() {
   const setActive = useStore((s) => s.setActive);
   const appendLine = useStore((s) => s.appendLine);
   const active = useStore((s) => (s.active ? s.buffers[s.active] : null));
+  const activePoppedOut = useStore((s) => (s.active ? !!s.poppedOut[s.active] : false));
   const hasServers = useStore((s) => Object.keys(s.servers).length > 0);
 
   useEffect(() => {
@@ -55,6 +59,19 @@ function App() {
       unlisten.then((f) => f());
     };
   }, [handleEvent]);
+
+  // A detached window asked to dock back in: clear its popped-out flag and show it.
+  useEffect(() => {
+    const unlisten = listen<string>("win-dock", (e) => {
+      const key = e.payload;
+      const st = useStore.getState();
+      st.setPoppedOut(key, false);
+      if (st.buffers[key]) st.setActive(key);
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
 
   // Poll the notify/watch list (ISON) every 30s.
   useEffect(() => {
@@ -74,6 +91,11 @@ function App() {
   useEffect(() => {
     applyChatFont(chatFont, chatFontSize);
   }, [chatFont, chatFontSize]);
+
+  // Detached single-window mode: render just one buffer in its own OS window.
+  if (detachedKey) {
+    return <DetachedView bufferKey={detachedKey} />;
+  }
 
   const onConnect = async (profile: ServerProfile) => {
     // Every connect opens a NEW server window with a fresh connection id, so
@@ -126,16 +148,34 @@ function App() {
       {layout === "tree" ? <Sidebar {...actions} /> : <SwitchBar {...actions} />}
       <main className="main">
         {active ? (
-          <>
-            <TopicBar buffer={active} />
-            <div className="main-body">
-              <div className="chat-pane">
-                <MessageList buffer={active} />
-                <InputBar buffer={active} />
+          activePoppedOut ? (
+            <div className="welcome">
+              <h1>Popped out</h1>
+              <p>
+                {active.kind === "status" ? "This server window" : active.name} is open in its own
+                window.
+              </p>
+              <div className="welcome-actions">
+                <button onClick={() => api.focusWindow(detachedLabel(active.key)).catch(() => {})}>
+                  Focus its window
+                </button>
+                <button className="ghost" onClick={() => dockBackBuffer(active.key)}>
+                  ⧈ Dock back into jIRC
+                </button>
               </div>
-              {active.kind === "channel" && <NickList buffer={active} />}
             </div>
-          </>
+          ) : (
+            <>
+              <TopicBar buffer={active} onPopOut={() => popOutBuffer(active.key)} />
+              <div className="main-body">
+                <div className="chat-pane">
+                  <MessageList buffer={active} />
+                  <InputBar buffer={active} />
+                </div>
+                {active.kind === "channel" && <NickList buffer={active} />}
+              </div>
+            </>
+          )
         ) : (
           <div className="welcome">
             <h1>jIRC</h1>

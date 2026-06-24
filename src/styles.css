@@ -620,6 +620,21 @@ select {
   color: var(--yellow);
   border-color: var(--yellow);
 }
+/* Pop-out / dock-back controls in a window header. */
+.win-btn {
+  flex: none;
+  background: var(--panel2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.win-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
 .nick-icon {
   margin-right: 3px;
   font-size: 0.9em;

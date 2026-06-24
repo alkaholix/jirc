@@ -5,7 +5,15 @@ import { ircxDisplay } from "../lib/ircx";
 import { useAway } from "../state/away";
 import { promptDialog } from "../state/prompt";
 
-export function TopicBar({ buffer }: { buffer: Buffer }) {
+export function TopicBar({
+  buffer,
+  onPopOut,
+  onDock,
+}: {
+  buffer: Buffer;
+  onPopOut?: () => void;
+  onDock?: () => void;
+}) {
   const server = useStore((s) => s.servers[buffer.serverId]);
   const away = useAway((s) => !!s.away[buffer.serverId]);
   const title = buffer.kind === "status" ? server?.name ?? "Server" : ircxDisplay(buffer.name);
@@ -58,6 +66,16 @@ export function TopicBar({ buffer }: { buffer: Buffer }) {
       >
         {away ? "● Away" : "Away"}
       </button>
+      {onDock && (
+        <button className="win-btn" onClick={onDock} title="Dock this window back into jIRC">
+          ⧈ Dock
+        </button>
+      )}
+      {onPopOut && (
+        <button className="win-btn" onClick={onPopOut} title="Pop out into its own window">
+          ⧉
+        </button>
+      )}
     </header>
   );
 }
