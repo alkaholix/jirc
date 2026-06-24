@@ -119,6 +119,34 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 hits.get(n - 1).map(|s| s.to_string()).unwrap_or_default()
             }
         }
+        "ialchan" => {
+            // $ialchan(mask, #, N) -> Nth nick on channel # whose address matches the
+            // mask (N=0 -> count). Like $ial, restricted to that channel's members.
+            let members: std::collections::HashSet<String> = rt
+                .state
+                .channels
+                .iter()
+                .find(|c| c.name.eq_ignore_ascii_case(&a(1)))
+                .map(|c| c.nicks.iter().map(|n| n.to_lowercase()).collect())
+                .unwrap_or_default();
+            let mut hits: Vec<&str> = rt
+                .state
+                .ial
+                .iter()
+                .filter(|(nick, full)| {
+                    members.contains(&nick.to_lowercase()) && wildcard_match(&a(0), full)
+                })
+                .filter_map(|(_, full)| full.split('!').next())
+                .collect();
+            hits.sort_unstable();
+            let n: usize = a(2).parse().unwrap_or(0);
+            if n == 0 {
+                hits.len().to_string()
+            } else {
+                hits.get(n - 1).map(|s| s.to_string()).unwrap_or_default()
+            }
+        }
+        "halted" => bool_str(rt.halted),
         "comchan" => {
             // $comchan(nick, N) -> Nth channel you share with nick (N=0 → count).
             let who = a(0).to_lowercase();
@@ -2006,6 +2034,7 @@ mod tests {
         assert_eq!(id("iptype", &["192.168.0.1"]), "ipv4");
         assert_eq!(id("iptype", &["2001:db8::1"]), "ipv6");
         assert_eq!(id("iptype", &["example.com"]), "");
+        assert_eq!(id("halted", &[]), "$false");
         assert_eq!(id("eval", &["hello", "1"]), "hello");
         assert_eq!(id("eval", &["$len(hi)", "2"]), "2"); // N≥2 expands the arg again
         assert!(id("ticks", &[]).parse::<u64>().is_ok());

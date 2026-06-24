@@ -1618,6 +1618,37 @@ mod tests {
     }
 
     #[test]
+    fn ialchan_filters_ial_by_channel() {
+        use crate::irc::state::{ChannelView, StateSnapshot};
+        let snap = StateSnapshot {
+            ial: vec![
+                ("alice".into(), "alice!a@host1.com".into()),
+                ("bob".into(), "bob!b@host2.com".into()),
+                ("carol".into(), "carol!c@host1.com".into()), // host1, but not on #chan
+            ],
+            channels: vec![ChannelView {
+                name: "#chan".into(),
+                nicks: vec!["alice".into(), "bob".into()],
+                members: vec![],
+                bans: vec![],
+            }],
+            ..Default::default()
+        };
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "irc.x",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(snap),
+        };
+        let engine = ScriptEngine::new();
+        // host1 members on #chan = {alice}; all #chan members = {alice, bob}.
+        engine.load("alias n { /msg #c $ialchan(*!*@host1.com,#chan,0) $+ / $+ $ialchan(*!*@*,#chan,0) }");
+        let actions = engine.run_alias(&rctx, "#c", "n", "");
+        assert_eq!(actions, vec![Action::Send("PRIVMSG #c :1/2".into())]);
+    }
+
+    #[test]
     fn socket_commands_produce_actions() {
         let engine = ScriptEngine::new();
         engine.load(

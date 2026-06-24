@@ -190,7 +190,7 @@ out of scope.
 - [x] `$gettok` *(incl. ranges)*
 - [x] `$gmt`
 - [ ] `$group`
-- [ ] `$halted`
+- [x] `$halted`
 - [ ] `$hash`
 - [ ] `$height`
 - [x] `$hfind`
@@ -204,7 +204,7 @@ out of scope.
 - [x] `$hotp`
 - [x] `$hypot`
 - [x] `$ial`
-- [ ] `$ialchan`
+- [x] `$ialchan`
 - [ ] `$ialmark`
 - [ ] `$ibl`
 - [ ] `$idle`
