@@ -88,13 +88,12 @@ impl ScriptEngine {
     }
 
     pub fn has_alias(&self, name: &str) -> bool {
-        // Local (`-l`) aliases aren't user-callable as `/commands`.
-        self.inner
-            .lock()
-            .unwrap()
-            .script
+        // Local (`-l`) aliases aren't user-callable as `/commands`, and a disabled
+        // `#group` makes its aliases uncallable too.
+        let g = self.inner.lock().unwrap();
+        g.script
             .find_alias(name)
-            .is_some_and(|a| !a.local)
+            .is_some_and(|a| !a.local && g.script.group_enabled(&g.vars, &a.group))
     }
 
     /// Returns the user-defined popup items for a context (nicklist, channel, …).
@@ -150,6 +149,10 @@ impl ScriptEngine {
         let Some(alias) = script.find_alias(name).filter(|a| !a.local) else {
             return Vec::new();
         };
+        // A disabled `#group` makes its aliases uncallable.
+        if !script.group_enabled(&g.vars, &alias.group) {
+            return Vec::new();
+        }
         let chan = if is_channel(target) { target.to_string() } else { String::new() };
         let event = EventVars {
             nick: ctx.my_nick.to_string(),
@@ -265,6 +268,10 @@ impl ScriptEngine {
         let mut halted = false;
         for ev in script.events_of(kind) {
             if !matches(&event, &ev.pattern, &ev.target, kind) {
+                continue;
+            }
+            // A disabled `#group` suppresses its event handlers.
+            if !script.group_enabled(vars, &ev.group) {
                 continue;
             }
             let mut rt = Runtime {
@@ -1342,6 +1349,67 @@ mod tests {
         assert_eq!(
             engine.dispatch_event(&ctx(), "TEXT", mk("!hi")),
             vec![Action::Send("PRIVMSG #c :yo".into())]
+        );
+    }
+
+    #[test]
+    fn script_groups_toggle_aliases() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "#g off\nalias gg { msg #c hi }\n#g end\n\
+             alias en { enable #g }\nalias dis { disable #g }",
+        );
+        // Declared `#g off` → the grouped alias is silent.
+        assert_eq!(engine.run_alias(&ctx(), "#c", "gg", ""), vec![]);
+        // /enable #g activates it.
+        engine.run_alias(&ctx(), "#c", "en", "");
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "gg", ""),
+            vec![Action::Send("PRIVMSG #c :hi".into())]
+        );
+        // /disable #g silences it again.
+        engine.run_alias(&ctx(), "#c", "dis", "");
+        assert_eq!(engine.run_alias(&ctx(), "#c", "gg", ""), vec![]);
+    }
+
+    #[test]
+    fn script_groups_suppress_events() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "#g off\non *:TEXT:*:#:{ msg #c got }\n#g end\nalias en { enable #g }",
+        );
+        let ev = EventVars {
+            nick: "bob".into(),
+            chan: "#c".into(),
+            target: "#c".into(),
+            text: "hello".into(),
+            params: vec!["hello".into()],
+            ..Default::default()
+        };
+        // Group off → the handler is suppressed.
+        assert_eq!(engine.dispatch_event(&ctx(), "TEXT", ev.clone()), vec![]);
+        // Enable the group → it fires.
+        engine.run_alias(&ctx(), "#c", "en", "");
+        assert_eq!(
+            engine.dispatch_event(&ctx(), "TEXT", ev),
+            vec![Action::Send("PRIVMSG #c :got".into())]
+        );
+    }
+
+    #[test]
+    fn group_identifier_reports_count_name_and_status() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "#a on\nalias x { echo a }\n#a end\n#b off\nalias y { echo b }\n#b end\n\
+             alias info { echo $group(0) $group(1) $group(#b).status }",
+        );
+        // $group(0) = 2 groups; $group(1) = #a; $group(#b).status = off.
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "info", ""),
+            vec![Action::Echo {
+                target: "#c".into(),
+                text: "2 #a off".into(),
+            }]
         );
     }
 

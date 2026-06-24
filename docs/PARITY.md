@@ -189,7 +189,7 @@ out of scope.
 - [ ] `$getdot`
 - [x] `$gettok` *(incl. ranges)*
 - [x] `$gmt`
-- [ ] `$group`
+- [x] `$group` *(`$group(0)` count, `$group(N)`/`$group(#name)`, `.status`)*
 - [x] `$halted`
 - [ ] `$hash`
 - [ ] `$height`
@@ -513,7 +513,7 @@ out of scope.
 - [x] `/describe`
 - [x] `/dialog` *(custom dialogs — partial control set)*
 - [x] `/did` *(+`/didtok`)*
-- [ ] `/disable`
+- [x] `/disable` *(wildcards, e.g. `#help*` / `#*`)*
 - [x] `/disconnect`
 - [ ] `/dlevel`
 - [x] `/dline`- [ ] `/dll`
@@ -525,7 +525,7 @@ out of scope.
 - [x] `/echo`
 - [ ] `/editbox` *(stub)*
 - [ ] `/emailaddr`
-- [ ] `/enable`
+- [x] `/enable` *(wildcards, e.g. `#help*` / `#*`)*
 - [ ] `/events`
 - [x] `/exit`
 - [x] `/fclose` · [x] `/fopen` · [x] `/fseek` · [x] `/fwrite` *(byte/line/wildcard/regex seek)*
@@ -542,7 +542,7 @@ out of scope.
 - [ ] `/fullname`
 - [ ] `/ghide` · [ ] `/gload` · [ ] `/gmove` · [ ] `/gopts` · [ ] `/gplay` · [ ] `/gpoint` · [ ] `/gqreq` · [ ] `/gshow` · [ ] `/gsize` · [ ] `/gstop` · [ ] `/gtalk` · [ ] `/gunload` *(agent/animation family)*
 - [x] `/goto`
-- [ ] `/groups`
+- [x] `/groups` *(`-e`/`-d` filters)*
 - [ ] `/guser`
 - [x] `/hadd`
 - [x] `/halt` · [x] `/haltdef`
@@ -784,7 +784,9 @@ wildcard `/sockwrite`; no-space + mixed-paren `if` conditions; **`.property` suf
 parsing** (`$hget(t,N).item/.data`, `$sock().port`); **full socket section**
 (`/socklisten`, `/sockaccept`, `/socklist`, `/sockrename`, `/sockpause`, `/sockmark`,
 `on SOCKLISTEN`/`on SOCKWRITE`, `$sock(name).*` properties) — async accept/connect I/O
-pending live-network verification.
+pending live-network verification. **Script groups** (`#name on|off … #name end`):
+`/enable`/`/disable` (wildcards `#help*`/`#*`), `/groups [-e|-d]`, and `$group` —
+aliases and events in a disabled group don't fire.
 
 ### mIRC syntax-compatibility audit (verified against mirc.com/help)
 - **Verified correct:** token separator = ASCII code (`$gettok`/`$addtok`/…); `$left`/`$right`

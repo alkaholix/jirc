@@ -92,6 +92,8 @@ Status: ✅ done · 🟡 partial · ❌ missing · ⭐ jIRC-only (modern extra)
 - **Condition operators** ✅ `== === != < > <= >= // \\ isin isincs iswm iswmcs isnum
   (incl. range) isletter isalpha isalnum islower isupper`, `&&`/`||`, and `!` negation
 - **Named/stoppable timers** ✅ `/timer[name]`, `/timer name off`, `/timers`, `/timers off`
+- **Script groups** ✅ `#name on|off … #name end` + `/enable`/`/disable` (wildcards
+  `#help*`/`#*`), `/groups [-e|-d]`, `$group` — disabled groups' aliases/events don't fire
 - **Hash tables** ✅ incl. persistence (`/hmake /hfree /hclear /hadd /hdel /hinc /hdec
   /hsave /hload`, `$hget $hfind`) — `-m`/`-w` switches honoured
 - **Sockets** ✅ `/sockopen [-e] /sockwrite /sockread /sockclose`,

@@ -528,6 +528,40 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "modespl" => rt.state.isupport.modes.to_string(),
         // $isalias(name) — $true if a user alias by that name is defined.
         "isalias" => bool_str(rt.script.find_alias(&a(0)).is_some()),
+        // $group(N|#name)[.status] — script groups. $group(0) = count;
+        // $group(N) = the Nth group's name (#-prefixed); $group(#name) = that
+        // name if it exists; the `.status` property is `on` or `off`.
+        "group" => {
+            let sel = a(0);
+            if sel == "0" {
+                rt.script.groups.len().to_string()
+            } else {
+                let found = if let Ok(n) = sel.parse::<usize>() {
+                    rt.script
+                        .groups
+                        .get(n.wrapping_sub(1))
+                        .map(|(name, _)| name.clone())
+                } else {
+                    let want = sel.trim_start_matches('#');
+                    rt.script
+                        .groups
+                        .iter()
+                        .find(|(name, _)| name.eq_ignore_ascii_case(want))
+                        .map(|(name, _)| name.clone())
+                };
+                match found {
+                    None => String::new(),
+                    Some(name) if prop.eq_ignore_ascii_case("status") => {
+                        if rt.script.group_enabled(rt.vars, &Some(name)) {
+                            "on".into()
+                        } else {
+                            "off".into()
+                        }
+                    }
+                    Some(name) => format!("#{name}"),
+                }
+            }
+        }
         // $modinv(a, m) — modular multiplicative inverse (empty if none exists).
         "modinv" => {
             let m: i128 = a(1).trim().parse().unwrap_or(0);
@@ -1224,7 +1258,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         // A user-defined alias used as an identifier ($myalias): run it and use
         // its `/return` value.
         other => {
-            if let Some(alias) = rt.script.find_alias(other) {
+            if let Some(alias) = rt.script.find_active_alias(other, rt.vars) {
                 let body = alias.body.clone();
                 // This alias is being used as an identifier — flag it for
                 // $caller/$isid for the duration of the call.

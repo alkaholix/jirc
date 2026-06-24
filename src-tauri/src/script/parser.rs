@@ -155,10 +155,30 @@ impl Cursor {
 pub fn parse(src: &str) -> Script {
     let mut script = Script::default();
     let mut cur = Cursor::new(src);
+    // The `#group` the following top-level defs belong to (a range set by
+    // `#name on|off` and cleared by `#name end`).
+    let mut current_group: Option<String> = None;
     loop {
         cur.skip_trivia();
         if cur.eof() {
             break;
+        }
+        // `#name on|off|end` — a group marker (a range, not a braced block).
+        if cur.peek() == Some('#') {
+            cur.pos += 1;
+            let name = cur.read_word();
+            cur.skip_inline_ws();
+            let state = cur.read_nonspace().to_ascii_lowercase();
+            if state == "end" {
+                current_group = None;
+            } else if !name.is_empty() {
+                let on = state != "off";
+                if !script.groups.iter().any(|(n, _)| *n == name) {
+                    script.groups.push((name.clone(), on));
+                }
+                current_group = Some(name);
+            }
+            continue;
         }
         let word = cur.read_word();
         match word.to_ascii_lowercase().as_str() {
@@ -181,6 +201,7 @@ pub fn parse(src: &str) -> Script {
                         name,
                         body: parse_stmts(&body),
                         local,
+                        group: current_group.clone(),
                     });
                 }
             }
@@ -202,11 +223,13 @@ pub fn parse(src: &str) -> Script {
                 }
                 if hit_brace {
                     let body = cur.read_block();
-                    if let Some(ev) = parse_event_header(&header, parse_stmts(&body)) {
+                    if let Some(mut ev) = parse_event_header(&header, parse_stmts(&body)) {
+                        ev.group = current_group.clone();
                         script.events.push(ev);
                     }
-                } else if let Some(ev) = parse_braceless_event(&header) {
+                } else if let Some(mut ev) = parse_braceless_event(&header) {
                     // A one-liner: `on *:TEXT:!cmd:#:/msg $chan hi`.
+                    ev.group = current_group.clone();
                     script.events.push(ev);
                 } else {
                     // No command tail and no brace on this line: the body's `{`
@@ -222,7 +245,8 @@ pub fn parse(src: &str) -> Script {
                     }
                     if cur.peek() == Some('{') {
                         let body = cur.read_block();
-                        if let Some(ev) = parse_event_header(&header, parse_stmts(&body)) {
+                        if let Some(mut ev) = parse_event_header(&header, parse_stmts(&body)) {
+                            ev.group = current_group.clone();
                             script.events.push(ev);
                         }
                     }
@@ -324,6 +348,7 @@ fn parse_event_header(header: &str, body: Vec<Stmt>) -> Option<Event> {
         pattern,
         target,
         body,
+        group: None,
     })
 }
 
@@ -368,6 +393,7 @@ fn parse_braceless_event(header: &str) -> Option<Event> {
         pattern,
         target,
         body: parse_body(&command),
+        group: None,
     })
 }
 

@@ -1,6 +1,7 @@
 //! Abstract syntax tree for the mIRC scripting language (mSL) subset.
 
 use serde::Serialize;
+use std::collections::HashMap;
 
 /// A single statement within a script body.
 #[derive(Debug, Clone)]
@@ -26,6 +27,8 @@ pub struct Alias {
     /// `alias -l name`: a local alias — callable from within scripts (other
     /// aliases/events) but not as a user `/command` from the input box.
     pub local: bool,
+    /// The `#group` this alias belongs to (if any), for `/enable`/`/disable`.
+    pub group: Option<String>,
 }
 
 /// An event handler, e.g. `on *:TEXT:*:#:{ .. }`.
@@ -38,6 +41,8 @@ pub struct Event {
     /// Target pattern, e.g. `#` (any channel), `#chan`, `?` (query). Empty if absent.
     pub target: String,
     pub body: Vec<Stmt>,
+    /// The `#group` this handler belongs to (if any), for `/enable`/`/disable`.
+    pub group: Option<String>,
 }
 
 /// A single item in a popup menu (mIRC `menu` blocks).
@@ -91,6 +96,8 @@ pub struct Script {
     pub events: Vec<Event>,
     pub popups: Vec<Popup>,
     pub dialogs: Vec<Dialog>,
+    /// Declared `#name on/off` script groups: (name, default-enabled).
+    pub groups: Vec<(String, bool)>,
 }
 
 impl Script {
@@ -98,6 +105,29 @@ impl Script {
         self.aliases
             .iter()
             .find(|a| a.name.eq_ignore_ascii_case(name))
+    }
+
+    /// Like [`find_alias`], but only matches when the alias's `#group` (if any) is
+    /// currently enabled — a disabled-group alias isn't callable.
+    pub fn find_active_alias(&self, name: &str, vars: &HashMap<String, String>) -> Option<&Alias> {
+        self.find_alias(name)
+            .filter(|a| self.group_enabled(vars, &a.group))
+    }
+
+    /// Whether a def's `#group` is currently enabled. A runtime `/enable`/`/disable`
+    /// override (stored in `vars` under a reserved key) wins over the group's
+    /// declared `on`/`off` default; ungrouped defs are always enabled.
+    pub fn group_enabled(&self, vars: &HashMap<String, String>, group: &Option<String>) -> bool {
+        let Some(name) = group else {
+            return true;
+        };
+        if let Some(v) = vars.get(&group_var_key(name)) {
+            return v != "0";
+        }
+        self.groups
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map_or(true, |(_, on)| *on)
     }
 
     pub fn find_dialog(&self, name: &str) -> Option<&Dialog> {
@@ -124,4 +154,11 @@ impl Script {
         }
         items
     }
+}
+
+/// The reserved `vars` key holding a group's runtime enabled-state (set by
+/// `/enable`/`/disable`). The NUL bytes keep it from colliding with a user `%var`,
+/// which can't contain them.
+pub fn group_var_key(name: &str) -> String {
+    format!("\u{0}grp\u{0}{}", name.to_ascii_lowercase())
 }

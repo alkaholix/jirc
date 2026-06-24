@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use super::ast::{Script, Stmt};
+use super::ast::{group_var_key, Script, Stmt};
 use super::ident;
 
 /// A side effect produced by running a script.
@@ -423,6 +423,9 @@ impl<'a> Runtime<'a> {
             "set" => self.cmd_set(raw_args, false),
             "var" => self.cmd_set(raw_args, true),
             "unset" => self.cmd_unset(raw_args),
+            "enable" => self.cmd_set_group(raw_args, true),
+            "disable" => self.cmd_set_group(raw_args, false),
+            "groups" => self.cmd_groups(raw_args),
             "inc" => self.cmd_incdec(raw_args, 1),
             "dec" => self.cmd_incdec(raw_args, -1),
             "write" => self.cmd_write(raw_args),
@@ -582,8 +585,8 @@ impl<'a> Runtime<'a> {
                 let _ = self.expand(raw_args);
             }
             _ => {
-                // A user-defined alias?
-                if let Some(alias) = self.script.find_alias(&lname) {
+                // A user-defined alias? (skipped when its `#group` is disabled)
+                if let Some(alias) = self.script.find_active_alias(&lname, self.vars) {
                     let body = alias.body.clone();
                     let params = split_params(&self.expand(raw_args));
                     // Invoked via the command syntax (/alias) — flag for $caller.
@@ -684,6 +687,55 @@ impl<'a> Runtime<'a> {
         }
         let text = self.expand(rest);
         self.actions.push(Action::Echo { target, text });
+    }
+
+    /// `/enable <#group ...>` / `/disable <#group ...>` — toggle one or more
+    /// script groups on/off. Names may be wildcards (`#help*`, or `#*` for all);
+    /// a leading `#` is optional. The state is stored under a reserved `%var`.
+    fn cmd_set_group(&mut self, raw: &str, on: bool) {
+        let expanded = self.expand(raw);
+        let patterns: Vec<String> = expanded.split_whitespace().map(String::from).collect();
+        if patterns.is_empty() {
+            return;
+        }
+        // Resolve matching group names first so we don't hold a `self.script`
+        // borrow across the `self.vars` mutation.
+        let names: Vec<String> = self
+            .script
+            .groups
+            .iter()
+            .filter(|(name, _)| {
+                patterns
+                    .iter()
+                    .any(|p| wildcard_match(p.trim_start_matches('#'), name))
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        let val = if on { "1" } else { "0" };
+        for name in names {
+            self.vars.insert(group_var_key(&name), val.to_string());
+        }
+    }
+
+    /// `/groups [-e|-d]` — list script groups (all, or only enabled `-e` /
+    /// disabled `-d`) in the active window.
+    fn cmd_groups(&mut self, raw: &str) {
+        let flag = raw.split_whitespace().next().unwrap_or("");
+        let only_enabled = flag.eq_ignore_ascii_case("-e");
+        let only_disabled = flag.eq_ignore_ascii_case("-d");
+        let target = self.reply_target();
+        let names: Vec<String> = self.script.groups.iter().map(|(n, _)| n.clone()).collect();
+        for name in names {
+            let on = self.script.group_enabled(self.vars, &Some(name.clone()));
+            if (only_enabled && !on) || (only_disabled && on) {
+                continue;
+            }
+            let text = format!("#{} ({})", name, if on { "on" } else { "off" });
+            self.actions.push(Action::Echo {
+                target: target.clone(),
+                text,
+            });
+        }
     }
 
     /// `/set [-switches] %var value` and `/var [-switches] %var = value`.
