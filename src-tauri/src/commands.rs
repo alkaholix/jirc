@@ -33,6 +33,56 @@ pub fn open_url(app: AppHandle, url: String) -> Result<(), String> {
     app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
 }
 
+// ---- Detachable windows (pop-out / dock-back) ----
+// Spawning/closing is done in Rust so the JS side doesn't need window-create or
+// window-close permissions; the detached window stays live by listening to the
+// app-wide `irc-event` broadcast.
+
+/// Opens (or focuses, if it already exists) a detached OS window showing one
+/// buffer. `label` is a unique window id; `route` is the in-app hash route
+/// (e.g. `win=<serverId>|<bufferKey>`) the frontend reads to render single-window mode.
+#[tauri::command]
+pub fn open_detached_window(
+    app: AppHandle,
+    label: String,
+    route: String,
+    title: String,
+) -> Result<(), String> {
+    use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+    if let Some(w) = app.get_webview_window(&label) {
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    let url = WebviewUrl::App(format!("index.html#{route}").into());
+    WebviewWindowBuilder::new(&app, &label, url)
+        .title(title)
+        .inner_size(640.0, 420.0)
+        .min_inner_size(280.0, 160.0)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Focuses an existing detached window (clicking its popped-out switchbar entry).
+#[tauri::command]
+pub fn focus_window(app: AppHandle, label: String) {
+    use tauri::Manager;
+    if let Some(w) = app.get_webview_window(&label) {
+        let _ = w.set_focus();
+    }
+}
+
+/// Docks a detached window back into jIRC: broadcasts `win-dock` (the main window
+/// re-shows the buffer) and closes the detached OS window.
+#[tauri::command]
+pub fn dock_window(app: AppHandle, label: String, buffer_key: String) {
+    use tauri::{Emitter, Manager};
+    let _ = app.emit("win-dock", buffer_key);
+    if let Some(w) = app.get_webview_window(&label) {
+        let _ = w.close();
+    }
+}
+
 /// Quits the application (the `/exit` command).
 #[tauri::command]
 pub fn exit_app(app: AppHandle) {
