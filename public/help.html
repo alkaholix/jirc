@@ -81,6 +81,7 @@
   <a href="#flow">Control flow</a>
   <h2>Reacting</h2>
   <a href="#events">Events (on …)</a>
+  <a href="#groups">Script groups</a>
   <a href="#popups">Popup menus</a>
   <a href="#dialogs">Dialogs</a>
   <a href="#timers">Timers</a>
@@ -425,6 +426,9 @@ Text-style events also take a <strong>matchtext</strong> pattern before the targ
   <tr><td><code>INVITE</code></td><td>you are invited</td><td><code>$nick</code> (inviter), <code>$chan</code></td></tr>
   <tr><td><code>CONNECT</code></td><td>you finish connecting</td><td>—</td></tr>
   <tr><td><code>DISCONNECT</code></td><td>you disconnect</td><td>—</td></tr>
+  <tr><td><code>RAW</code></td><td>any raw server line arrives</td><td><code>$numeric</code>, <code>$1-</code> (the line)</td></tr>
+  <tr><td><code>CTCP</code></td><td>someone sends a CTCP request</td><td><code>$nick $chan $1-</code></td></tr>
+  <tr><td><code>SIGNAL</code></td><td>a script runs <code>/signal &lt;name&gt;</code></td><td><code>$signal</code> (name), <code>$1-</code> (params)</td></tr>
 </table>
 
 <h3>Examples</h3>
@@ -448,6 +452,45 @@ Text-style events also take a <strong>matchtext</strong> pattern before the targ
 <strong>on INPUT</strong> for your own typed lines. An <code>on INPUT</code> handler can
 call <code>/halt</code> to stop your line from being sent (e.g. to intercept a custom command).
 </div>
+
+<h2 id="groups">Script groups</h2>
+<p>Group related aliases and events so you can switch them on or off together. A group
+is a range opened by <code>#name on</code> (or <code>#name off</code> to start disabled)
+and closed by <code>#name end</code>. Aliases and events inside a <em>disabled</em> group
+don't fire.</p>
+<pre><code><span class="k">#greeter on</span>
+<span class="k">on</span> *:JOIN:#:{ <span class="k">/msg</span> <span class="i">$chan</span> welcome <span class="i">$nick</span> }
+<span class="k">alias</span> hi { <span class="k">/msg</span> <span class="i">$chan</span> hi all }
+<span class="k">#greeter end</span>
+</code></pre>
+<p>Toggle groups at runtime — names may use wildcards (<code>#help*</code>, or <code>#*</code>
+for all):</p>
+<pre><code><span class="k">/disable</span> #greeter      <span class="c">; turn it off</span>
+<span class="k">/enable</span> #greeter       <span class="c">; turn it back on</span>
+<span class="k">/groups</span>               <span class="c">; list groups (-e enabled only, -d disabled only)</span>
+</code></pre>
+<p><code>$group(0)</code> is the number of groups, <code>$group(N)</code> the Nth name, and
+<code>$group(#name).status</code> is <code>on</code> or <code>off</code>.</p>
+
+<h3>Signals — talk between scripts</h3>
+<p><code>/signal &lt;name&gt; [params]</code> fires every <code>on SIGNAL</code> handler whose
+name matches (wildcards allowed). In the handler, <code>$signal</code> is the name and
+<code>$1-</code> are the parameters.</p>
+<pre><code><span class="k">on</span> *:SIGNAL:refresh:{ <span class="k">/echo</span> -s refreshing (<span class="i">$1-</span>) }
+<span class="k">alias</span> go { <span class="k">/signal</span> refresh now }
+</code></pre>
+
+<h3>More commands</h3>
+<ul>
+  <li><code>/alias &lt;name&gt; &lt;commands&gt;</code> defines a single-line alias at runtime;
+      <code>/alias &lt;name&gt;</code> with no commands removes it.</li>
+  <li><code>/anick</code>, <code>/mnick</code>, <code>/fullname</code> set your alternate nick,
+      main nick and full name (read back as <code>$anick</code>/<code>$mnick</code>/<code>$fullname</code>).</li>
+  <li><code>/autojoin -n|-s|-dN</code> — use in <code>on CONNECT</code> to join now, skip, or
+      delay the connect-time autojoin by N seconds. (Manage the channels themselves in the
+      <strong>#</strong> auto-join dialog.)</li>
+  <li><code>/reload</code> recompiles all script files; <code>/unsetall</code> clears every variable.</li>
+</ul>
 
 <h2 id="popups">Popup menus</h2>
 <p>Add items to the right-click menu in the nick list. Leading dots make submenus;
@@ -561,6 +604,12 @@ each time you interact, so <code>$did</code> always reads the current form state
   <tr><td><code>/return value</code></td><td>Return a value from an alias.</td></tr>
   <tr><td><code>/goto label</code></td><td>Jump to a <code>:label</code> (see Control flow).</td></tr>
   <tr><td><code>/halt</code></td><td>Stop the script (in <code>on INPUT</code>, suppresses the line).</td></tr>
+  <tr><td><code>/enable /disable /groups</code></td><td>Turn script groups on/off (wildcards); list them (see Script groups).</td></tr>
+  <tr><td><code>/alias &lt;name&gt; [cmds]</code></td><td>Define — or, with no commands, remove — a single-line alias at runtime.</td></tr>
+  <tr><td><code>/signal &lt;name&gt; [params]</code></td><td>Fire matching <code>on SIGNAL</code> handlers (<code>$signal</code>, <code>$1-</code>).</td></tr>
+  <tr><td><code>/anick /mnick /fullname</code></td><td>Set your alternate nick, main nick, full name.</td></tr>
+  <tr><td><code>/autojoin -n|-s|-dN</code></td><td>In <code>on CONNECT</code>: join now / skip / delay the autojoin.</td></tr>
+  <tr><td><code>/reload</code> · <code>/unsetall</code></td><td>Recompile all scripts · clear all variables.</td></tr>
 </table>
 <div class="note">Unrecognized <em>client-side</em> commands (window/display/sound, e.g.
 <code>/clear</code>, <code>/window</code>, <code>/beep</code>, <code>/run</code>) are quietly ignored
