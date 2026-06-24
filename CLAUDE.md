@@ -118,6 +118,17 @@ speed/simplicity (sync, no startup flash). Secrets use the **OS keyring** (servi
   `lib.rs` `generate_handler!`, and add a typed wrapper in `lib/api.ts`.
 - **Adding a `UiEvent`:** add the variant (camelCase fields), handle it in
   `store.ts handleEvent`, and add it to the `IrcEvent` union in `api.ts`.
+- **Detachable windows (pop-out):** a popped-out buffer/`@window` opens as its own
+  `WebviewWindow` via the `open_detached_window` command — which **must be `async`**.
+  A *sync* command runs on the main/event-loop thread, so calling
+  `WebviewWindowBuilder::build()` there deadlocks WebView2's init and you get a blank,
+  unresponsive window (the frame appears but the page never loads — not even an inline
+  `<script>` in `index.html` runs). Other gotchas learned here: load `index.html`
+  **cleanly** (a URL `#fragment` is treated as part of the asset path and 404s in
+  release builds); the detached window finds which buffer to show from its **own window
+  label** (`detached-*`) via shared same-origin `localStorage`, not a URL route; and it
+  renders with `className="app detached"`, which needs the `.app.detached` flex rule
+  (it has no `layout-*` class to provide `display`). See `docs/FLOATING-WINDOWS-DESIGN.md`.
 - Tests: protocol logic in `process_message`/`script` is pure — prefer unit tests
   there over end-to-end. Verify the real app by building + launching when feasible.
 
