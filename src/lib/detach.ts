@@ -4,23 +4,31 @@
 // `#win/<bufferKey>` route). It stays live off the same app-wide `irc-event`
 // broadcast the main window listens to; its first paint is hydrated from a
 // snapshot the popping window stashes in shared (same-origin) localStorage.
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "./api";
 import { useStore, Server, Buffer } from "../state/store";
 
 const SNAP_PREFIX = "jirc.detached.";
+const ROUTE_PREFIX = "jirc.winroute.";
 
 /** A Tauri window label for a buffer's detached window — only label-safe chars,
  *  and matching the `detached-*` capability glob. */
 export const detachedLabel = (bufferKey: string) =>
   "detached-" + bufferKey.replace(/[^a-zA-Z0-9_-]/g, "_");
 
-/** The in-app hash route a detached window loads to render just this buffer. */
-export const detachedRoute = (bufferKey: string) => "win/" + encodeURIComponent(bufferKey);
-
-/** Parses a detached-window route from a location hash, or null for the main UI. */
-export function parseDetachedRoute(hash: string): string | null {
-  const m = hash.match(/^#win\/(.+)$/);
-  return m ? decodeURIComponent(m[1]) : null;
+/** If the current window is a detached buffer window, the buffer key it should
+ *  render (looked up from its own label); null if this is the main window.
+ *
+ *  Routing by label rather than a URL hash avoids a `#fragment` in the window URL,
+ *  which Tauri treats as part of the asset path in release builds (→ blank window). */
+export function thisWindowBufferKey(): string | null {
+  try {
+    const label = getCurrentWindow().label;
+    if (!label.startsWith("detached-")) return null;
+    return localStorage.getItem(ROUTE_PREFIX + label) ?? "";
+  } catch {
+    return null;
+  }
 }
 
 interface Snapshot {
@@ -35,15 +43,17 @@ export function popOutBuffer(bufferKey: string) {
   const buffer = s.buffers[bufferKey];
   if (!buffer) return;
   const server = s.servers[buffer.serverId];
+  const label = detachedLabel(bufferKey);
   try {
+    // Stash the first-paint snapshot and the label→bufferKey route for the new
+    // window to read back (shared, same-origin localStorage).
     localStorage.setItem(SNAP_PREFIX + bufferKey, JSON.stringify({ server, buffer } as Snapshot));
+    localStorage.setItem(ROUTE_PREFIX + label, bufferKey);
   } catch {
-    // Snapshot is best-effort; the window still goes live via irc-event.
+    // Best-effort; the window still goes live via irc-event.
   }
   s.setPoppedOut(bufferKey, true);
-  api
-    .openDetachedWindow(detachedLabel(bufferKey), detachedRoute(bufferKey), buffer.name)
-    .catch(() => {});
+  api.openDetachedWindow(label, buffer.name).catch(() => {});
 }
 
 /** Reads the snapshot a popping window stashed for this buffer (if any). */

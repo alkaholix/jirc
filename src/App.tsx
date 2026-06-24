@@ -17,7 +17,7 @@ import { ConfirmDialog } from "./components/ConfirmDialog";
 import { PromptDialog } from "./components/PromptDialog";
 import { UserDialogs } from "./components/UserDialogs";
 import { DetachedView } from "./components/DetachedView";
-import { parseDetachedRoute, popOutBuffer, dockBackBuffer, detachedLabel } from "./lib/detach";
+import { thisWindowBufferKey, popOutBuffer, dockBackBuffer, detachedLabel } from "./lib/detach";
 import { routeDialogEvent } from "./state/dialogs";
 import { routeNickIconEvent } from "./state/nickIcons";
 import { routeAwayEvent } from "./state/away";
@@ -30,7 +30,7 @@ function App() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [scriptOpen, setScriptOpen] = useState(false);
-  const [detachedKey] = useState(() => parseDetachedRoute(window.location.hash));
+  const [detachedKey] = useState(() => thisWindowBufferKey());
   const theme = useSettings((s) => s.theme);
   const customCss = useSettings((s) => s.customCss);
   const layout = useSettings((s) => s.layout);
@@ -106,7 +106,8 @@ function App() {
   }, [chatFont, chatFontSize]);
 
   // Detached single-window mode: render just one buffer in its own OS window.
-  if (detachedKey) {
+  // (Empty string = a detached window whose route wasn't found; still not the main UI.)
+  if (detachedKey !== null) {
     return <DetachedView bufferKey={detachedKey} />;
   }
 

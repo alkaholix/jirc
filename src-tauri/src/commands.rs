@@ -39,22 +39,20 @@ pub fn open_url(app: AppHandle, url: String) -> Result<(), String> {
 // app-wide `irc-event` broadcast.
 
 /// Opens (or focuses, if it already exists) a detached OS window showing one
-/// buffer. `label` is a unique window id; `route` is the in-app hash route
-/// (e.g. `win=<serverId>|<bufferKey>`) the frontend reads to render single-window mode.
+/// buffer. `label` is a unique window id; the frontend identifies which buffer to
+/// render from this same label (mapped to a buffer key in shared localStorage).
+///
+/// The URL deliberately carries **no `#route` fragment**: in a release build a
+/// fragment in `WebviewUrl::App` is treated as part of the asset path and 404s to
+/// a blank ("white box") window. So we load `index.html` cleanly and route by label.
 #[tauri::command]
-pub fn open_detached_window(
-    app: AppHandle,
-    label: String,
-    route: String,
-    title: String,
-) -> Result<(), String> {
+pub fn open_detached_window(app: AppHandle, label: String, title: String) -> Result<(), String> {
     use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
     if let Some(w) = app.get_webview_window(&label) {
         let _ = w.set_focus();
         return Ok(());
     }
-    let url = WebviewUrl::App(format!("index.html#{route}").into());
-    WebviewWindowBuilder::new(&app, &label, url)
+    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
         .title(title)
         .inner_size(640.0, 420.0)
         .min_inner_size(280.0, 160.0)

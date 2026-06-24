@@ -34,8 +34,8 @@ export const api = {
   coreVersion: () => invoke<string>("core_version"),
 
   // Detachable windows (pop-out / dock-back).
-  openDetachedWindow: (label: string, route: string, title: string) =>
-    invoke("open_detached_window", { label, route, title }),
+  openDetachedWindow: (label: string, title: string) =>
+    invoke("open_detached_window", { label, title }),
   focusWindow: (label: string) => invoke("focus_window", { label }),
   dockWindow: (label: string, bufferKey: string) =>
     invoke("dock_window", { label, bufferKey }),
