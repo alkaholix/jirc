@@ -1,12 +1,15 @@
 import { Buffer, useStore } from "../state/store";
 import { confirmDialog } from "../state/confirm";
 import { ircxDisplay } from "../lib/ircx";
+import { api } from "../lib/api";
+import { detachedLabel, closeDetachedBuffer } from "../lib/detach";
 
 function Tab({ buffer, active }: { buffer: Buffer; active: boolean }) {
   const setActive = useStore((s) => s.setActive);
   const closeBuffer = useStore((s) => s.closeBuffer);
   const closeServer = useStore((s) => s.closeServer);
   const server = useStore((s) => s.servers[buffer.serverId]);
+  const poppedOut = useStore((s) => !!s.poppedOut[buffer.key]);
 
   const label =
     buffer.kind === "status" ? server?.name ?? "server" : ircxDisplay(buffer.name);
@@ -14,13 +17,16 @@ function Tab({ buffer, active }: { buffer: Buffer; active: boolean }) {
   return (
     <button
       className={`switch-tab${active ? " active" : ""}${buffer.mention ? " mention" : ""}`}
-      onClick={() => setActive(buffer.key)}
-      title={label}
+      onClick={() =>
+        poppedOut ? api.focusWindow(detachedLabel(buffer.key)).catch(() => {}) : setActive(buffer.key)
+      }
+      title={poppedOut ? `${label} — popped out (click to focus its window)` : label}
     >
       {buffer.kind !== "channel" && (
         <span className="switch-icon">{buffer.kind === "query" ? "@" : buffer.kind === "window" ? "▣" : "•"}</span>
       )}
       <span className="switch-label">{label}</span>
+      {poppedOut && <span className="popout-mark">⧉</span>}
       {buffer.unread > 0 && <span className="badge">{buffer.unread}</span>}
       <span
         className="close-x"
@@ -36,6 +42,8 @@ function Tab({ buffer, active }: { buffer: Buffer; active: boolean }) {
               })
             )
               closeServer(buffer.serverId);
+          } else if (poppedOut) {
+            closeDetachedBuffer(buffer.key);
           } else {
             closeBuffer(buffer.key);
           }

@@ -73,6 +73,19 @@ function App() {
     };
   }, []);
 
+  // A detached window was closed via its native ✕: close the buffer and drop the flag.
+  useEffect(() => {
+    const unlisten = listen<string>("win-close-buffer", (e) => {
+      const key = e.payload;
+      const st = useStore.getState();
+      st.setPoppedOut(key, false);
+      st.closeBuffer(key);
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
+
   // Poll the notify/watch list (ISON) every 30s.
   useEffect(() => {
     const id = setInterval(pollNotify, 30000);

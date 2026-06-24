@@ -61,3 +61,9 @@ export function readSnapshot(bufferKey: string): Snapshot | null {
 export function dockBackBuffer(bufferKey: string) {
   api.dockWindow(detachedLabel(bufferKey), bufferKey).catch(() => {});
 }
+
+/** Closes a buffer's detached window *and* the buffer (the native ✕ behaviour):
+ *  the backend broadcasts `win-close-buffer` and closes the OS window. */
+export function closeDetachedBuffer(bufferKey: string) {
+  api.closeDetached(detachedLabel(bufferKey), bufferKey).catch(() => {});
+}

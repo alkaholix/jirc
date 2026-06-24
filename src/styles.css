@@ -635,6 +635,13 @@ select {
   color: var(--text);
   border-color: var(--accent);
 }
+/* Marker on a popped-out buffer's sidebar/switchbar entry. */
+.popout-mark {
+  color: var(--accent);
+  font-size: 0.85em;
+  margin: 0 2px;
+  flex: none;
+}
 .nick-icon {
   margin-right: 3px;
   font-size: 0.9em;

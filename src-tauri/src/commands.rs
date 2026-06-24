@@ -83,6 +83,18 @@ pub fn dock_window(app: AppHandle, label: String, buffer_key: String) {
     }
 }
 
+/// Closes a detached window *and* its buffer (the native ✕ behaviour, distinct from
+/// dock-back): broadcasts `win-close-buffer` (the main window closes the buffer) and
+/// closes the detached OS window.
+#[tauri::command]
+pub fn close_detached(app: AppHandle, label: String, buffer_key: String) {
+    use tauri::{Emitter, Manager};
+    let _ = app.emit("win-close-buffer", buffer_key);
+    if let Some(w) = app.get_webview_window(&label) {
+        let _ = w.close();
+    }
+}
+
 /// Quits the application (the `/exit` command).
 #[tauri::command]
 pub fn exit_app(app: AppHandle) {

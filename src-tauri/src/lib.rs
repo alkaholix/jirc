@@ -49,6 +49,7 @@ pub fn run() {
             commands::open_detached_window,
             commands::focus_window,
             commands::dock_window,
+            commands::close_detached,
             commands::exit_app,
             commands::dns_lookup,
             commands::irc_connect,

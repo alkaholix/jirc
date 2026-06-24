@@ -3,15 +3,20 @@ import { Buffer, Server, useStore } from "../state/store";
 import { confirmDialog } from "../state/confirm";
 import { ircxDisplay } from "../lib/ircx";
 import { useNotify } from "../state/notify";
+import { api } from "../lib/api";
+import { detachedLabel, closeDetachedBuffer } from "../lib/detach";
 
 function BufferItem({ buffer, active }: { buffer: Buffer; active: boolean }) {
   const setActive = useStore((s) => s.setActive);
   const closeBuffer = useStore((s) => s.closeBuffer);
+  const poppedOut = useStore((s) => !!s.poppedOut[buffer.key]);
   const label = buffer.kind === "status" ? "Server console" : ircxDisplay(buffer.name);
   return (
     <div
       className={`buffer-item${active ? " active" : ""}${buffer.mention ? " mention" : ""}`}
-      onClick={() => setActive(buffer.key)}
+      onClick={() =>
+        poppedOut ? api.focusWindow(detachedLabel(buffer.key)).catch(() => {}) : setActive(buffer.key)
+      }
     >
       {buffer.kind !== "channel" && (
         <span className={`buffer-icon ${buffer.kind}`}>
@@ -19,6 +24,11 @@ function BufferItem({ buffer, active }: { buffer: Buffer; active: boolean }) {
         </span>
       )}
       <span className="buffer-name">{label}</span>
+      {poppedOut && (
+        <span className="popout-mark" title="Popped out — click to focus its window">
+          ⧉
+        </span>
+      )}
       {buffer.unread > 0 && <span className="badge">{buffer.unread}</span>}
       {buffer.kind !== "status" && (
         <button
@@ -26,7 +36,8 @@ function BufferItem({ buffer, active }: { buffer: Buffer; active: boolean }) {
           title="Close"
           onClick={(e) => {
             e.stopPropagation();
-            closeBuffer(buffer.key);
+            if (poppedOut) closeDetachedBuffer(buffer.key);
+            else closeBuffer(buffer.key);
           }}
         >
           ×

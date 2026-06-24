@@ -39,6 +39,8 @@ export const api = {
   focusWindow: (label: string) => invoke("focus_window", { label }),
   dockWindow: (label: string, bufferKey: string) =>
     invoke("dock_window", { label, bufferKey }),
+  closeDetached: (label: string, bufferKey: string) =>
+    invoke("close_detached", { label, bufferKey }),
 
   connect: (profile: ServerProfile) => invoke<string>("irc_connect", { profile }),
   disconnect: (serverId: string, quitMessage?: string) =>
