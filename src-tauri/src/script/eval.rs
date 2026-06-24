@@ -162,6 +162,9 @@ pub struct Runtime<'a> {
     pub bins: &'a mut crate::script::binvar::BinStore,
     /// Custom `@windows` for `/window`/`/aline`/`/rline`/`$window`/`$line`.
     pub windows: &'a mut crate::script::window::WindowStore,
+    /// What invoked the current alias frame ("command"/"event"/"menu"/"identifier"),
+    /// for `$caller`/`$isid`. Saved + restored around nested alias calls.
+    pub caller: &'static str,
 }
 
 impl<'a> Runtime<'a> {
@@ -559,7 +562,11 @@ impl<'a> Runtime<'a> {
                 if let Some(alias) = self.script.find_alias(&lname) {
                     let body = alias.body.clone();
                     let params = split_params(&self.expand(raw_args));
+                    // Invoked via the command syntax (/alias) — flag for $caller.
+                    let saved = self.caller;
+                    self.caller = "command";
                     self.call_alias(&body, params);
+                    self.caller = saved;
                 } else {
                     // Fall back to a raw IRC command.
                     let args = self.expand(raw_args);

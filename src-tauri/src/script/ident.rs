@@ -147,6 +147,8 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             }
         }
         "halted" => bool_str(rt.halted),
+        "caller" => rt.caller.to_string(),
+        "isid" => bool_str(rt.caller == "identifier"),
         "comchan" => {
             // $comchan(nick, N) -> Nth channel you share with nick (N=0 → count).
             let who = a(0).to_lowercase();
@@ -1223,7 +1225,13 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         other => {
             if let Some(alias) = rt.script.find_alias(other) {
                 let body = alias.body.clone();
-                return rt.call_alias(&body, args.to_vec());
+                // This alias is being used as an identifier — flag it for
+                // $caller/$isid for the duration of the call.
+                let saved = rt.caller;
+                rt.caller = "identifier";
+                let result = rt.call_alias(&body, args.to_vec());
+                rt.caller = saved;
+                return result;
             }
             // Unknown identifier: render literally so it is visible.
             if args.is_empty() {
@@ -2100,6 +2108,7 @@ mod tests {
             data_dir: std::env::temp_dir(),
             state: std::sync::Arc::new(Default::default()),
             sockets: std::sync::Arc::new(crate::script::eval::NoSockets),
+            caller: "command",
         };
         assert_eq!(eval_ident(&mut rt, "replace", &["abcabc".into(), "b".into(), "X".into()], ""), "aXcaXc");
         assert_eq!(eval_ident(&mut rt, "remove", &["abcabc".into(), "a".into()], ""), "bcbc");
@@ -2291,6 +2300,7 @@ mod tests {
             data_dir: std::env::temp_dir(),
             state: std::sync::Arc::new(Default::default()),
             sockets: std::sync::Arc::new(crate::script::eval::NoSockets),
+            caller: "command",
         }
     }
 

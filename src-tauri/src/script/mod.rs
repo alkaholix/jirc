@@ -138,6 +138,7 @@ impl ScriptEngine {
             data_dir: ctx.data_dir.clone(),
             state: ctx.state.clone(),
             sockets: g.sockets.clone(),
+            caller: "menu",
         };
         eval_popup_labels(&mut rt, &raw)
     }
@@ -179,6 +180,7 @@ impl ScriptEngine {
             data_dir: ctx.data_dir.clone(),
             state: ctx.state.clone(),
             sockets: g.sockets.clone(),
+            caller: "command",
         };
         rt.run(&alias.body);
         rt.actions
@@ -229,6 +231,7 @@ impl ScriptEngine {
             data_dir: ctx.data_dir.clone(),
             state: ctx.state.clone(),
             sockets: g.sockets.clone(),
+            caller: "command",
         };
         rt.run(&body);
         rt.actions
@@ -284,6 +287,7 @@ impl ScriptEngine {
                 data_dir: ctx.data_dir.clone(),
                 state: ctx.state.clone(),
                 sockets: g.sockets.clone(),
+                caller: "event",
             };
             rt.run(&ev.body);
             halted |= rt.halted;
@@ -1663,6 +1667,22 @@ mod tests {
         assert_eq!(
             engine2.run_alias(&ctx(), "#c", "up", ""),
             vec![Action::Send("PRIVMSG #c :AB".into())]
+        );
+    }
+
+    #[test]
+    fn caller_and_isid() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias c { return $caller }\nalias i { return $isid }\nalias top { /msg #c $caller/$c | /msg #c $isid/$i }",
+        );
+        // `top` runs as a command; `$c`/`$i` are invoked as identifiers.
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "top", ""),
+            vec![
+                Action::Send("PRIVMSG #c :command/identifier".into()),
+                Action::Send("PRIVMSG #c :$false/$true".into()),
+            ]
         );
     }
 

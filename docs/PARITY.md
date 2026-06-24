@@ -82,7 +82,7 @@ out of scope.
 - [x] `$bvar`
 - [x] `$bytes` *(comma-formatted; `.suf` human-readable)*
 - [x] `$calc`
-- [ ] `$caller`
+- [x] `$caller`
 - [ ] `$cb`
 - [x] `$cbrt`
 - [ ] `$cd`
@@ -234,7 +234,7 @@ out of scope.
 - [ ] `$isdde`
 - [x] `$isdir`
 - [x] `$isfile`
-- [ ] `$isid`
+- [x] `$isid`
 - [x] `$islower`
 - [x] `$isnum`
 - [x] `$isupper`
