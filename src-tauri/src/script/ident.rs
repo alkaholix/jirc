@@ -1140,6 +1140,17 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         // ---- File-name & misc utility identifiers ----
         "comchar" => "/".to_string(),
         "mkfn" | "mknickfn" => mkfn(&a(0)),
+        "iptype" => {
+            // mIRC: "ipv4" / "ipv6" for a valid address, else $null (empty).
+            let s = a(0);
+            if s.parse::<std::net::Ipv4Addr>().is_ok() {
+                "ipv4".to_string()
+            } else if s.parse::<std::net::Ipv6Addr>().is_ok() {
+                "ipv6".to_string()
+            } else {
+                String::new()
+            }
+        }
         "eval" => {
             // mIRC `$eval(text,N)` evaluates text N times (default 1; N=0 → not
             // evaluated). Args arrive already expanded once, so N≤1 returns it as-is
@@ -1991,6 +2002,9 @@ mod tests {
         assert_eq!(id("comchar", &[]), "/");
         assert_eq!(id("mkfn", &["a/b:c*d?.txt"]), "a_b_c_d_.txt");
         assert_eq!(id("mknickfn", &["ni|ck"]), "ni_ck");
+        assert_eq!(id("iptype", &["192.168.0.1"]), "ipv4");
+        assert_eq!(id("iptype", &["2001:db8::1"]), "ipv6");
+        assert_eq!(id("iptype", &["example.com"]), "");
         assert_eq!(id("eval", &["hello", "1"]), "hello");
         assert_eq!(id("eval", &["$len(hi)", "2"]), "2"); // N≥2 expands the arg again
         assert!(id("ticks", &[]).parse::<u64>().is_ok());

@@ -218,7 +218,7 @@ out of scope.
 - [ ] `$intersect`
 - [ ] `$inwave`
 - [ ] `$ip`
-- [ ] `$iptype`
+- [x] `$iptype` *(`ipv4`/`ipv6`, else $null)*
 - [ ] `$isadmin` *(client-admin check; distinct from the `isadmin` operator)*
 - [x] `$isalias`
 - [x] `$isbit`
