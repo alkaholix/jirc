@@ -1508,6 +1508,12 @@ impl<'a> Runtime<'a> {
         if name.is_empty() {
             return "$".to_string();
         }
+        // $regsubex evaluates its subtext once per match, so its args must NOT be
+        // pre-expanded here — hand the raw args to a dedicated handler.
+        if name.eq_ignore_ascii_case("regsubex") && chars.get(*i) == Some(&'(') {
+            let inner = read_balanced(chars, i);
+            return ident::eval_regsubex(self, &split_args(&inner));
+        }
         // Optional (args).
         let (args, had_parens) = if chars.get(*i) == Some(&'(') {
             let inner = read_balanced(chars, i);

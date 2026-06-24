@@ -1649,6 +1649,24 @@ mod tests {
     }
 
     #[test]
+    fn regsubex_evaluates_subtext_per_match() {
+        // \2\1 swaps each match's two groups (markers only, no eval needed).
+        let engine = ScriptEngine::new();
+        engine.load("alias swap { /msg #c $regsubex(a1 b2,/(\\w)(\\d)/g,\\2\\1) }");
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "swap", ""),
+            vec![Action::Send("PRIVMSG #c :1a 2b".into())]
+        );
+        // The subtext is also evaluated per match: $upper(\t) upper-cases each.
+        let engine2 = ScriptEngine::new();
+        engine2.load("alias up { /msg #c $regsubex(ab,/(\\w)/g,$upper(\\t)) }");
+        assert_eq!(
+            engine2.run_alias(&ctx(), "#c", "up", ""),
+            vec![Action::Send("PRIVMSG #c :AB".into())]
+        );
+    }
+
+    #[test]
     fn socket_commands_produce_actions() {
         let engine = ScriptEngine::new();
         engine.load(

@@ -1323,6 +1323,82 @@ fn mirc_regex(pat: &str) -> Result<regex::Regex, String> {
     regex::Regex::new(&full).map_err(|e| e.to_string())
 }
 
+/// `$regsubex([name,] text, pattern, subtext)` — replace each match of `pattern`
+/// in `text` with the *evaluated* `subtext`. `subtext` arrives RAW (the engine
+/// bypasses pre-expansion for `$regsubex`) and is evaluated once per match, after
+/// its markers are substituted: `\t`=whole match, `\1`..`\9`=capture group,
+/// `\0`=number of groups, `\n`=match number, `\a`/`\A`=all groups (spaced/joined).
+pub fn eval_regsubex(rt: &mut Runtime, raw: &[String]) -> String {
+    let off = usize::from(raw.len() >= 4); // skip an optional leading [name]
+    let text = rt.expand(raw.get(off).map_or("", |s| s));
+    let pat = rt.expand(raw.get(off + 1).map_or("", |s| s));
+    let subtext = raw.get(off + 2).cloned().unwrap_or_default();
+    let re = match mirc_regex(&pat) {
+        Ok(r) => r,
+        Err(e) => {
+            rt.vars.insert(REGERR_KEY.to_string(), e);
+            return text;
+        }
+    };
+    rt.vars.remove(REGERR_KEY);
+    let group_count = re.captures_len().saturating_sub(1);
+    // Collect match spans + groups first (immutable borrow of `text`), then
+    // evaluate each replacement (which needs a mutable borrow of `rt`).
+    let matches: Vec<(usize, usize, Vec<String>)> = re
+        .captures_iter(&text)
+        .map(|caps| {
+            let m = caps.get(0).unwrap();
+            let groups = caps
+                .iter()
+                .map(|g| g.map_or(String::new(), |x| x.as_str().to_string()))
+                .collect();
+            (m.start(), m.end(), groups)
+        })
+        .collect();
+    let mut out = String::new();
+    let mut last = 0;
+    for (n, (start, end, groups)) in matches.iter().enumerate() {
+        out.push_str(&text[last..*start]);
+        out.push_str(&rt.expand(&regsubex_fill(&subtext, groups, n + 1, group_count)));
+        last = *end;
+    }
+    out.push_str(&text[last..]);
+    out
+}
+
+/// Substitutes the `$regsubex` subtext markers for one match.
+fn regsubex_fill(subtext: &str, groups: &[String], match_num: usize, group_count: usize) -> String {
+    let chars: Vec<char> = subtext.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '\\' && i + 1 < chars.len() {
+            let c = chars[i + 1];
+            i += 2;
+            match c {
+                't' => out.push_str(groups.first().map_or("", |s| s)),
+                'n' => out.push_str(&match_num.to_string()),
+                'a' => out.push_str(&groups.iter().skip(1).cloned().collect::<Vec<_>>().join(" ")),
+                'A' => out.push_str(&groups.iter().skip(1).cloned().collect::<String>()),
+                '0'..='9' => {
+                    let idx = c as usize - '0' as usize;
+                    if idx == 0 {
+                        out.push_str(&group_count.to_string());
+                    } else {
+                        out.push_str(groups.get(idx).map_or("", |s| s));
+                    }
+                }
+                '\\' => out.push('\\'),
+                other => out.push(other),
+            }
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
 fn sep_code(s: &str) -> char {
     s.trim().parse::<u32>().ok().and_then(char::from_u32).unwrap_or(' ')
 }

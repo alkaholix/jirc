@@ -358,7 +358,7 @@ out of scope.
 - [x] `$regml`
 - [x] `$regmlex`
 - [x] `$regsub`
-- [ ] `$regsubex`
+- [x] `$regsubex`
 - [ ] `$remote`
 - [x] `$remove`
 - [x] `$remtok`
