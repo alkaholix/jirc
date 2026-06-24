@@ -476,7 +476,7 @@ out of scope.
 - [x] `/anick` *(sets `$anick`)*
 - [ ] `/aop`
 - [ ] `/auser`
-- [ ] `/autojoin` *(mIRC reconnect-rejoin behaviour; the profile `autojoin` list already joins on connect)*
+- [ ] `/autojoin` *(`-n` now / `-s` skip / `-dN` delay, for use in `on CONNECT`; needs jIRC's connect-time autojoin moved to after `on CONNECT` fires)*
 - [ ] `/avoice`
 - [x] `/away`
 - [ ] `/background` *(stub)*
@@ -585,7 +585,7 @@ out of scope.
 - [x] `/notice`
 - [ ] `/notify`
 - [x] `/omsg` · [x] `/onotice`
-- [ ] `/parseline` *(needs injection of a line into incoming `process_message`)*
+- [ ] `/parseline` *(part of the `on PARSELINE` per-line intercept/rewrite system — `-iotbqpnuN`)*
 - [x] `/part`
 - [x] `/partall`
 - [ ] `/pdcc`
