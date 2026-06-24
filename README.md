@@ -6,7 +6,7 @@ Linux) and speaking both **standard IRC** (RFC 1459/2812 + some IRCv3) and
 
 > **Status: usable.** Multi-server chat, TLS/SASL, IRCX, a tabbed/tree UI, a
 > channel browser, scriptable popups, and a working mIRC-scripting (mSL) engine.
-> The main thing still missing is DCC (file transfer). See [ROADMAP.md](./ROADMAP.md).
+> The main thing still missing is DCC (file transfer). See [ROADMAP.md](./docs/ROADMAP.md).
 
 ## Features
 
@@ -18,6 +18,8 @@ Linux) and speaking both **standard IRC** (RFC 1459/2812 + some IRCv3) and
 - **Chat UI** — collapsible **server tree** *or* **switchbar** (tabs) layout,
   nick list with prefix sorting/colours, full mIRC colour/format rendering,
   clickable URLs, per-buffer logging, desktop notifications & highlight words
+- **Detachable windows** — pop any channel, query, or `@window` out into its own
+  OS window and dock it back with one click (beyond mIRC's in-app MDI)
 - **Channel management** — nick right-click menu (whois/op/voice/kick/ban/ignore),
   topic editing, channel-mode commands, **/list & IRCX /listx channel browser**
 - **Alternative nickname** with automatic fallback when your nick is in use
@@ -43,12 +45,14 @@ the **?** button opens it in your browser.
 - **Regex** (`$regex`/`$regml`/`$regsub`) and **sandboxed file I/O** (`$read`/`/write`/`$lines`)
 - **TCP sockets** (`/sockopen`, `on SOCKREAD`, …) — build sockbots and custom clients
 - **Popups**: `menu nicklist { … }` blocks (with submenus) drive the right-click menu
+- **Custom dialogs** (`dialog`/`/did`/`$did`/`on DIALOG`) and **custom `@windows`**
+  (`/window`/`/aline`/`$line`) — rendered natively; `@windows` detach like any window
 - ~55 identifiers (`$me $nick $chan $rand $calc $left/$right/$mid $iif $gettok
   $sorttok $regex $read …`) and commands (`/msg /me /notice /join /mode /set /inc
   /hadd /timer /write …`)
 
-Not 100% mIRC-compatible — custom dialogs, sockets, and DCC are future work; see
-[ROADMAP.md](./ROADMAP.md) and the [help guide](./public/help.html).
+Not 100% mIRC-compatible — DCC (file transfer) is the main remaining gap; see
+[ROADMAP.md](./docs/ROADMAP.md) and the [help guide](./public/help.html).
 
 ## Install / develop
 
@@ -94,7 +98,7 @@ dialog. On Linux, running needs a Secret Service provider installed
 ## Contributing
 
 Architecture, conventions, and build/test details are in [CLAUDE.md](./CLAUDE.md);
-the feature matrix and priorities are in [ROADMAP.md](./ROADMAP.md).
+the feature matrix and priorities are in [ROADMAP.md](./docs/ROADMAP.md).
 
 ## License
 

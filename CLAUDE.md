@@ -123,5 +123,5 @@ speed/simplicity (sync, no startup flash). Secrets use the **OS keyring** (servi
 
 ## Status & roadmap
 
-See `ROADMAP.md` for the mIRC feature matrix and priorities. DCC, deep scripting
+See `docs/ROADMAP.md` for the mIRC feature matrix and priorities. DCC, deep scripting
 (state-aware identifiers, more `on` events, dialogs), and IRCv3 are the big open areas.

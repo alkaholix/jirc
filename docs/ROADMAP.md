@@ -56,7 +56,8 @@ Status: ✅ done · 🟡 partial · ❌ missing · ⭐ jIRC-only (modern extra)
 | Spell check | ❌ | |
 | Themes (dark/light) | ✅ | font picker ❌ |
 | Per-nick colors | ✅ | |
-| Dockable/custom layout | ❌ | fixed layout |
+| Detachable (pop-out) windows | ⭐ | any buffer or `@window` detaches to a **real OS window** and docks back in one click — goes beyond mIRC's in-app MDI |
+| Free-form in-app docking | 🟡 | tree/switchbar layouts + pop-out windows; no draggable MDI panes |
 
 ## 3. DCC & file transfer  (entire bucket ❌)
 
@@ -114,13 +115,15 @@ Status: ✅ done · 🟡 partial · ❌ missing · ⭐ jIRC-only (modern extra)
 - **Popups**: `menu nicklist { … }` with submenus, edge-aware positioning
 - **Custom dialogs** ✅ `dialog name { … }` (text/edit/editbox/button/check/combo/list),
   `/dialog`, `/did`, `$did`, `on DIALOG` — rendered natively in the web UI (auto-layout)
+- **Custom `@windows`** ✅ `/window` (listbox/text), `/aline /iline /rline /dline /clear`,
+  `$window` / `$line` — rendered as buffers (1-based line ops) and **detachable** like any window
 
 **Missing (mIRC has these)**
 
 | Area | Status | Notes |
 | --- | --- | --- |
 | State-aware identifiers | ✅ | `$chan(N) $nick(#,N) $comchan $onchan` + `$address $mask $ial` (internal address list fed by message prefixes / userhost-in-names) |
-| Custom `@windows` / picture windows | ❌ | |
+| Picture / editbox `@windows` | 🟡 | listbox/text `@windows` done (render + poppable); picture/editbox kinds currently render as a text list |
 | `on` OPEN/CLOSE/SNOTICE/NOTIFY/START | ❌ | window/notify lifecycle events |
 | Property suffixes (`$sock(x).status`, `$hget(t,N).item`, `$chan(#).topic`) | ❌ | base identifiers work; `.property` parsing not yet |
 | `$regsubex`, crypto (`$md5 $hmac $sha1`), `$input` dialogs, `.ini` files | ❌ | a long tail of advanced/rarely-used identifiers |
@@ -169,7 +172,7 @@ Status: ✅ done · 🟡 partial · ❌ missing · ⭐ jIRC-only (modern extra)
 > **custom dialogs**.
 
 > Also done since: ✅ buffer search, away UI, notify/watch list, custom emoji,
-> nicklist icons.
+> nicklist icons, **custom `@windows`**, and **detachable (pop-out) windows**.
 
 **Tier 1 — the biggest gap still open**
 1. **DCC Chat + Send/Get** — the single biggest "real mIRC" feature still absent.

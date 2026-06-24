@@ -245,8 +245,7 @@ out of scope.
 - [x] `$len`
 - [ ] `$level`
 - [x] `$lf`
-- [x] `$line` *(backend; UI pending)*
-- [x] `$lines`
+- [x] `$line`- [x] `$lines`
 - [ ] `$link`
 - [ ] `$lock`
 - [ ] `$locked`
@@ -452,8 +451,7 @@ out of scope.
 - [ ] `$width`
 - [x] `$wildsite`
 - [x] `$wildtok`
-- [x] `$window` *(backend; UI pending)*
-- [ ] `$wrap`
+- [x] `$window`- [ ] `$wrap`
 - [x] `$xor`
 - [ ] `$zip`
 
@@ -464,8 +462,7 @@ out of scope.
 - [ ] `/abook`
 - [ ] `/ajinvite`
 - [ ] `/alias` *(runtime alias define; aliases are loaded from scripts)*
-- [x] `/aline` *(backend; UI pending)*
-- [x] `/ame`
+- [x] `/aline`- [x] `/ame`
 - [x] `/amsg`
 - [ ] `/anick`
 - [ ] `/aop`
@@ -487,8 +484,7 @@ out of scope.
 - [x] `/bunset`
 - [ ] `/bwrite`
 - [x] `/channel` *(Channel Central UI)*
-- [x] `/clear` *(backend; UI pending)*
-- [ ] `/clearall` *(stub)*
+- [x] `/clear`- [ ] `/clearall` *(stub)*
 - [ ] `/cline` *(stub)*
 - [ ] `/clipboard` *(stub)*
 - [ ] `/close` *(stub)*
@@ -511,8 +507,7 @@ out of scope.
 - [ ] `/disable`
 - [x] `/disconnect`
 - [ ] `/dlevel`
-- [x] `/dline` *(backend; UI pending)*
-- [ ] `/dll`
+- [x] `/dline`- [ ] `/dll`
 - [x] `/dns`
 - [ ] `/donotdisturb` *(stub)*
 - [ ] `/dqwindow`
@@ -554,8 +549,7 @@ out of scope.
 - [ ] `/identd`
 - [x] `/if`
 - [ ] `/ignore` *(client ignore list exists in UI; verify `/ignore` command)*
-- [x] `/iline` *(backend; UI pending)*
-- [x] `/inc`
+- [x] `/iline`- [x] `/inc`
 - [x] `/invite`
 - [ ] `/iuser`
 - [x] `/join`
@@ -608,8 +602,7 @@ out of scope.
 - [ ] `/resetidle` *(stub)*
 - [x] `/return`
 - [ ] `/rlevel`
-- [x] `/rline` *(backend; UI pending)*
-- [x] `/rmdir`
+- [x] `/rline`- [x] `/rmdir`
 - [x] `/run`
 - [ ] `/ruser`
 - [ ] `/save` *(stub)*
@@ -660,8 +653,7 @@ out of scope.
 - [ ] `/vol`
 - [x] `/while`
 - [x] `/whois`
-- [x] `/window` *(backend; UI pending)*
-- [ ] `/winhelp`
+- [x] `/window`- [ ] `/winhelp`
 - [x] `/write` · [x] `/writeini`
 
 ---
@@ -749,7 +741,7 @@ individually.)*
 ### Windows / UI
 - [x] status/channel/query windows · [x] server tree + switchbar · [x] nicklist · [x] topic bar
 - [x] mIRC colour/format rendering · [x] timestamps/logging · [x] clickable URLs · [x] scrollback search
-- [ ] custom `@windows` / picture windows · [ ] MDI window management (`/window`, tile/cascade)
+- [x] custom `@windows` (listbox/text, **detachable** to their own OS window) · [ ] picture/drawing `@windows` · [ ] MDI tile/cascade
 - [ ] toolbar · [ ] treebar customization · [ ] line marker / line separator · [ ] menubar editing
 - [ ] color/format input toolbar · [ ] font picker · [ ] transparency · [x] dark mode
 
