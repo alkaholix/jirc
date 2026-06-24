@@ -64,6 +64,11 @@ pub enum Action {
     SetIdentity { field: String, value: String },
     /// Recompile every script file from disk (`/reload`).
     ReloadScripts,
+    /// Define/replace (`command` = Some) or remove (`command` = None) a runtime
+    /// alias (`/alias <name> [command]`). Persisted to a `_runtime.mrc` file.
+    DefineAlias { name: String, command: Option<String> },
+    /// Fire `on SIGNAL` handlers matching `name` (`/signal`); `params` become `$1-`.
+    Signal { name: String, params: Vec<String> },
 }
 
 /// Reserved `%var` key holding the byte count of the last `/sockread` (read by
@@ -444,6 +449,46 @@ impl<'a> Runtime<'a> {
                 // No-op: jIRC writes INI/JSON to disk immediately (no cache).
             }
             "reload" => self.actions.push(Action::ReloadScripts),
+            "signal" => {
+                // `/signal [-n] [-d] <name> [parameters]` fires `on *:SIGNAL:<name>`
+                // handlers ($signal = name, $1- = params). Switches are accepted
+                // but the signal is always dispatched after the current run (mIRC's
+                // default, non-`-n`, behaviour).
+                let mut rest = self.expand(raw_args).trim().to_string();
+                while rest.starts_with('-') {
+                    match rest.split_once(char::is_whitespace) {
+                        Some((_, after)) => rest = after.trim().to_string(),
+                        None => {
+                            rest.clear();
+                            break;
+                        }
+                    }
+                }
+                let (name, params) = match rest.split_once(char::is_whitespace) {
+                    Some((n, p)) => (
+                        n.to_string(),
+                        p.split_whitespace().map(String::from).collect(),
+                    ),
+                    None => (rest.clone(), Vec::new()),
+                };
+                if !name.is_empty() {
+                    self.actions.push(Action::Signal { name, params });
+                }
+            }
+            "alias" => {
+                // `/alias <name> <command>` adds/replaces; `/alias <name>` (no
+                // command) removes. Single-line only. The command is stored
+                // unexpanded (identifiers resolve when the alias runs). A leading
+                // [filename] arg (mIRC) isn't supported — jIRC has one script set.
+                let raw = raw_args.trim();
+                let (name, command) = match raw.split_once(char::is_whitespace) {
+                    Some((n, c)) => (n.to_string(), Some(c.trim().to_string())),
+                    None => (raw.to_string(), None),
+                };
+                if !name.is_empty() {
+                    self.actions.push(Action::DefineAlias { name, command });
+                }
+            }
             "inc" => self.cmd_incdec(raw_args, 1),
             "dec" => self.cmd_incdec(raw_args, -1),
             "write" => self.cmd_write(raw_args),

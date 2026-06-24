@@ -470,7 +470,7 @@ out of scope.
 
 - [ ] `/abook`
 - [ ] `/ajinvite`
-- [ ] `/alias` *(runtime alias define; aliases are loaded from scripts)*
+- [x] `/alias` *(runtime define/remove, single-line; persisted to `_runtime.mrc`)*
 - [x] `/aline`- [x] `/ame`
 - [x] `/amsg`
 - [x] `/anick` *(sets `$anick`)*
@@ -622,7 +622,7 @@ out of scope.
 - [x] `/server`
 - [ ] `/setlayer`
 - [ ] `/showmirc` *(stub)*
-- [ ] `/signal`
+- [x] `/signal` *(fires `on SIGNAL`; `-n`/switches accepted, always deferred)*
 - [ ] `/sline` *(stub)*
 - [x] `/sockaccept`
 - [x] `/sockclose` *(incl. wildcard)*
@@ -713,7 +713,7 @@ out of scope.
 - [x] `on RAW` *(numeric/command, `$numeric`)*
 - [x] `on RAWMODE`
 - [ ] `on SERV` · [ ] `on SERVERMODE` · [ ] `on SERVEROP`
-- [ ] `on SIGNAL`
+- [x] `on SIGNAL` *(`$signal` = name, `$1-` = params; wildcard name match)*
 - [ ] `on SNOTICE`
 - [x] `on SOCKCLOSE`
 - [x] `on SOCKLISTEN`

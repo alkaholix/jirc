@@ -531,6 +531,45 @@ fn recompile(app: &AppHandle, engine: &ScriptEngine) {
     engine.load(&combined);
 }
 
+/// Whether a script line defines an alias named `name` (case-insensitive).
+fn alias_line_defines(line: &str, name: &str) -> bool {
+    line.trim_start()
+        .strip_prefix("alias ")
+        .map(|rest| {
+            rest.trim_start()
+                .split([' ', '\t', '{'])
+                .next()
+                .unwrap_or("")
+                .eq_ignore_ascii_case(name)
+        })
+        .unwrap_or(false)
+}
+
+/// Adds/replaces (`command` = Some) or removes (`command` = None) a single-line
+/// runtime alias (`/alias`) in `_runtime.mrc`, then recompiles so it takes effect.
+/// That file sorts first, so a runtime alias overrides a same-named one elsewhere.
+fn update_runtime_alias(app: &AppHandle, name: &str, command: Option<&str>) {
+    let Ok(dir) = scripts_dir(app) else { return };
+    let path = dir.join("_runtime.mrc");
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut lines: Vec<String> = existing
+        .lines()
+        .filter(|l| !alias_line_defines(l, name))
+        .map(String::from)
+        .collect();
+    if let Some(cmd) = command {
+        lines.push(format!("alias {name} {{ {cmd} }}"));
+    }
+    let mut out = lines.join("\n");
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    let _ = std::fs::write(&path, out);
+    if let Some(engine) = app.try_state::<ScriptEngine>() {
+        recompile(app, &engine);
+    }
+}
+
 /// Loads persisted scripts at startup, migrating a legacy single script.mrc and
 /// seeding example scripts on first run.
 pub fn load_persisted(app: &AppHandle, engine: &ScriptEngine) {
@@ -672,6 +711,20 @@ pub fn apply_actions(
     server: &str,
     actions: Vec<Action>,
 ) {
+    apply_actions_depth(app, server_id, my_nick, network, server, actions, 0);
+}
+
+/// `apply_actions` with a recursion `depth`, so `/signal` (which dispatches more
+/// handlers, possibly emitting more signals) can be capped like mIRC's 24-deep limit.
+fn apply_actions_depth(
+    app: &AppHandle,
+    server_id: &str,
+    my_nick: &str,
+    network: &str,
+    server: &str,
+    actions: Vec<Action>,
+    depth: u32,
+) {
     let manager = app.try_state::<ConnectionManager>();
     for action in actions {
         match action {
@@ -709,6 +762,38 @@ pub fn apply_actions(
                 // runs after the engine lock (run_command/dispatch) is released.
                 if let Some(engine) = app.try_state::<ScriptEngine>() {
                     recompile(app, &engine);
+                }
+            }
+            Action::DefineAlias { name, command } => {
+                update_runtime_alias(app, &name, command.as_deref());
+            }
+            Action::Signal { name, params } => {
+                // Dispatch `on SIGNAL` handlers after the current run (so it's safe
+                // re-entrancy-wise). Capped to mIRC's 24-deep signal recursion.
+                if depth < 24 {
+                    if let Some(engine) = app.try_state::<ScriptEngine>() {
+                        let ctx = RunCtx {
+                            my_nick,
+                            network,
+                            server,
+                            data_dir: script_data_dir(app),
+                            state: app
+                                .try_state::<crate::irc::state::StateStore>()
+                                .map(|s| s.get(server_id))
+                                .unwrap_or_default(),
+                        };
+                        let event = EventVars {
+                            nick: my_nick.to_string(),
+                            chan: name.clone(),
+                            target: name,
+                            params,
+                            ..Default::default()
+                        };
+                        let more = engine.dispatch_event(&ctx, "SIGNAL", event);
+                        apply_actions_depth(
+                            app, server_id, my_nick, network, server, more, depth + 1,
+                        );
+                    }
                 }
             }
             Action::WindowOpen { name, kind, title } => {
@@ -1477,6 +1562,53 @@ mod tests {
                     value: "Real Name".into(),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn alias_command_emits_define_then_remove() {
+        let engine = ScriptEngine::new();
+        // `/alias <name> <cmd>` defines (command stored unexpanded); `/alias <name>`
+        // alone removes.
+        engine.load("alias mk { alias greet /msg # hi $nick | alias greet }");
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "mk", ""),
+            vec![
+                Action::DefineAlias {
+                    name: "greet".into(),
+                    command: Some("/msg # hi $nick".into()),
+                },
+                Action::DefineAlias {
+                    name: "greet".into(),
+                    command: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn signal_command_and_on_signal_event() {
+        // /signal emits a Signal action (leading switches skipped, params -> $1-).
+        let engine = ScriptEngine::new();
+        engine.load("alias s { signal -n myevt hello world }");
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "s", ""),
+            vec![Action::Signal {
+                name: "myevt".into(),
+                params: vec!["hello".into(), "world".into()],
+            }]
+        );
+        // on SIGNAL matches the name (wildcard); $signal = name, $1- = params.
+        let engine2 = ScriptEngine::new();
+        engine2.load("on *:SIGNAL:my*:{ msg #c got $1 via $signal }");
+        let ev = EventVars {
+            chan: "myevt".into(),
+            params: vec!["hi".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            engine2.dispatch_event(&ctx(), "SIGNAL", ev),
+            vec![Action::Send("PRIVMSG #c :got hi via myevt".into())]
         );
     }
 

@@ -528,6 +528,14 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "modespl" => rt.state.isupport.modes.to_string(),
         // $isalias(name) — $true if a user alias by that name is defined.
         "isalias" => bool_str(rt.script.find_alias(&a(0)).is_some()),
+        // $signal = the name of the signal currently being handled (on SIGNAL).
+        "signal" => {
+            if rt.event.event == "signal" {
+                rt.event.chan.clone()
+            } else {
+                String::new()
+            }
+        }
         // $group(N|#name)[.status] — script groups. $group(0) = count;
         // $group(N) = the Nth group's name (#-prefixed); $group(#name) = that
         // name if it exists; the `.status` property is `on` or `off`.
