@@ -84,6 +84,11 @@ pub struct EventVars {
 }
 
 const STEP_LIMIT: u32 = 100_000;
+
+/// Sentinel `goto` targets for `/break` and `/continue` — the NUL prefix keeps
+/// them from colliding with any real `:label`. Consumed by `Stmt::While`.
+const LOOP_BREAK: &str = "\u{0}break";
+const LOOP_CONTINUE: &str = "\u{0}continue";
 const STATUS: &str = "(status)";
 
 /// Synchronous socket operations the engine can call *during* a run, so
@@ -197,6 +202,14 @@ impl<'a> Runtime<'a> {
                     self.goto = Some(self.expand(args));
                     // The loop top resolves it (jump here or bubble up).
                 }
+                Stmt::Command { name, .. } if name.eq_ignore_ascii_case("break") => {
+                    // Exit the innermost while loop (sentinel consumed by Stmt::While).
+                    self.goto = Some(LOOP_BREAK.to_string());
+                }
+                Stmt::Command { name, .. } if name.eq_ignore_ascii_case("continue") => {
+                    // Skip to the next iteration of the innermost while loop.
+                    self.goto = Some(LOOP_CONTINUE.to_string());
+                }
                 stmt => {
                     let stmt = stmt.clone();
                     self.exec(&stmt);
@@ -237,8 +250,14 @@ impl<'a> Runtime<'a> {
                     self.steps += 1;
                     let body = body.clone();
                     self.run(&body);
-                    if self.goto.is_some() {
-                        break; // a goto out of the loop body bubbles up
+                    match self.goto.as_deref() {
+                        Some(LOOP_CONTINUE) => self.goto = None, // re-check the condition
+                        Some(LOOP_BREAK) => {
+                            self.goto = None;
+                            break;
+                        }
+                        Some(_) => break, // a real goto out of the loop bubbles up
+                        None => {}
                     }
                 }
             }

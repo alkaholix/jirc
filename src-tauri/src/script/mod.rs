@@ -1690,6 +1690,31 @@ mod tests {
     }
 
     #[test]
+    fn break_and_continue() {
+        // /break exits the loop: msgs 1, 2 then breaks at 3.
+        let engine = ScriptEngine::new();
+        engine.load("alias b { set %i 0 | while (%i < 5) { inc %i | if (%i == 3) break | msg #c %i } }");
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "b", ""),
+            vec![
+                Action::Send("PRIVMSG #c :1".into()),
+                Action::Send("PRIVMSG #c :2".into()),
+            ]
+        );
+        // /continue skips the first two iterations: msgs 3, 4, 5.
+        let engine2 = ScriptEngine::new();
+        engine2.load("alias c { set %i 0 | while (%i < 5) { inc %i | if (%i < 3) continue | msg #c %i } }");
+        assert_eq!(
+            engine2.run_alias(&ctx(), "#c", "c", ""),
+            vec![
+                Action::Send("PRIVMSG #c :3".into()),
+                Action::Send("PRIVMSG #c :4".into()),
+                Action::Send("PRIVMSG #c :5".into()),
+            ]
+        );
+    }
+
+    #[test]
     fn socket_commands_produce_actions() {
         let engine = ScriptEngine::new();
         engine.load(

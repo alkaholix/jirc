@@ -486,7 +486,7 @@ out of scope.
 - [ ] `/bigfloat`
 - [ ] `/bindip`
 - [ ] `/bread`
-- [ ] `/break`
+- [x] `/break`
 - [ ] `/breplace`
 - [x] `/bset`
 - [ ] `/btrunc`
@@ -500,7 +500,7 @@ out of scope.
 - [ ] `/cnick`
 - [ ] `/color` *(stub)*
 - [ ] `/comclose` · [ ] `/comlist` · [ ] `/comopen` · [ ] `/comreg`
-- [ ] `/continue`
+- [x] `/continue`
 - [x] `/copy`
 - [ ] `/creq` *(stub)*
 - [x] `/ctcpreply`
