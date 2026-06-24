@@ -94,7 +94,7 @@ out of scope.
 - [ ] `$com`
 - [ ] `$comcall`
 - [x] `$comchan`
-- [ ] `$comchar`
+- [x] `$comchar` *(command prefix — always `/`)*
 - [ ] `$comerr`
 - [ ] `$compact`
 - [ ] `$compress`
@@ -145,7 +145,7 @@ out of scope.
 - [x] `$encode` *(base64 + percent; other switches passthrough)*
 - [x] `$envvar`
 - [ ] `$error`
-- [ ] `$eval`
+- [x] `$eval` *(`$eval(text,N)`; N≥1 — args arrive pre-expanded once)*
 - [x] `$event`
 - [ ] `$eventid`
 - [ ] `$eventparms`
@@ -281,9 +281,9 @@ out of scope.
 - [x] `$mircexe`
 - [ ] `$mircini`
 - [x] `$mircpid`
-- [ ] `$mkfn`
+- [x] `$mkfn`
 - [ ] `$mklogfn`
-- [ ] `$mknickfn`
+- [x] `$mknickfn`
 - [ ] `$mnick`
 - [x] `$mode` *(verify — exposed in MODE events)*
 - [ ] `$modefirst`

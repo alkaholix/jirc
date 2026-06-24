@@ -1137,6 +1137,20 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 }
             }
         }
+        // ---- File-name & misc utility identifiers ----
+        "comchar" => "/".to_string(),
+        "mkfn" | "mknickfn" => mkfn(&a(0)),
+        "eval" => {
+            // mIRC `$eval(text,N)` evaluates text N times (default 1; N=0 → not
+            // evaluated). Args arrive already expanded once, so N≤1 returns it as-is
+            // and N≥2 expands the remaining N-1 times.
+            let n: i64 = a(1).trim().parse().unwrap_or(1);
+            let mut s = a(0);
+            for _ in 1..n.max(1) {
+                s = rt.expand(&s);
+            }
+            s
+        }
         // A user-defined alias used as an identifier ($myalias): run it and use
         // its `/return` value.
         other => {
@@ -1155,6 +1169,20 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
 }
 
 /// Builds a wildcard hostmask from a `nick!user@host` address, following mIRC's
+/// `$mkfn`/`$mknickfn` — replace characters that are invalid in a filename
+/// (`\ / : * ? " < > |` and control chars) with `_`, so the result is safe on disk.
+fn mkfn(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || (c as u32) < 0x20 {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
 /// `$mask`/`$address` type table (1–10; anything else → `*!*@host`).
 pub(super) fn mask_address(addr: &str, kind: u32) -> String {
     let (nick, rest) = addr.split_once('!').unwrap_or(("*", addr));
@@ -1959,6 +1987,12 @@ mod tests {
         assert_eq!(id("nofile", &["C:\\folder\\file.txt"]), "C:\\folder\\");
         assert_eq!(id("nofile", &["bare.txt"]), "");
         assert_eq!(id("longfn", &["foo.txt"]), "foo.txt");
+        // $comchar / $mkfn / $mknickfn / $eval
+        assert_eq!(id("comchar", &[]), "/");
+        assert_eq!(id("mkfn", &["a/b:c*d?.txt"]), "a_b_c_d_.txt");
+        assert_eq!(id("mknickfn", &["ni|ck"]), "ni_ck");
+        assert_eq!(id("eval", &["hello", "1"]), "hello");
+        assert_eq!(id("eval", &["$len(hi)", "2"]), "2"); // N≥2 expands the arg again
         assert!(id("ticks", &[]).parse::<u64>().is_ok());
         assert!(id("gmt", &[]).parse::<u64>().is_ok());
         assert_eq!(id("noqt", &["\"hello world\""]), "hello world");
