@@ -696,6 +696,14 @@ pub fn apply_actions(
                     },
                 );
             }
+            Action::SetIdentity { field, value } => {
+                // Routed to the connection task as an internal control line: it
+                // updates the live session state (so $anick/$mnick/$fullname
+                // reflect it) and is not forwarded to the server.
+                if let Some(m) = &manager {
+                    let _ = m.send(server_id, format!("\u{0}SETID {field} {value}"));
+                }
+            }
             Action::WindowOpen { name, kind, title } => {
                 let _ = app.emit(
                     IRC_EVENT,
@@ -1410,6 +1418,58 @@ mod tests {
                 target: "#c".into(),
                 text: "2 #a off".into(),
             }]
+        );
+    }
+
+    #[test]
+    fn unsetall_clears_user_vars_but_keeps_group_state() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias t {\n\
+               set %a 1\n\
+               set %b 2\n\
+               unsetall\n\
+               /msg #c a=[ $+ %a $+ ] b=[ $+ %b $+ ]\n\
+             }",
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :a=[] b=[]".into())]
+        );
+        // A group override (a reserved NUL-prefixed key) survives /unsetall.
+        let engine2 = ScriptEngine::new();
+        engine2.load(
+            "#g off\nalias gg { msg #c hi }\n#g end\n\
+             alias en { enable #g }\nalias clr { unsetall }",
+        );
+        engine2.run_alias(&ctx(), "#c", "en", "");
+        engine2.run_alias(&ctx(), "#c", "clr", "");
+        assert_eq!(
+            engine2.run_alias(&ctx(), "#c", "gg", ""),
+            vec![Action::Send("PRIVMSG #c :hi".into())]
+        );
+    }
+
+    #[test]
+    fn identity_commands_emit_set_identity() {
+        let engine = ScriptEngine::new();
+        engine.load("alias setid { anick Backup | mnick Primary | fullname Real Name }");
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "setid", ""),
+            vec![
+                Action::SetIdentity {
+                    field: "anick".into(),
+                    value: "Backup".into(),
+                },
+                Action::SetIdentity {
+                    field: "mnick".into(),
+                    value: "Primary".into(),
+                },
+                Action::SetIdentity {
+                    field: "fullname".into(),
+                    value: "Real Name".into(),
+                },
+            ]
         );
     }
 

@@ -58,6 +58,10 @@ pub enum Action {
     WindowClose { name: String },
     /// A line op on a custom `@window`: `op` = add/insert/replace/delete/clear.
     WindowLine { name: String, op: String, n: u32, text: String },
+    /// Set a stored identity field (`/anick`/`/mnick`/`/fullname`). `field` is
+    /// `anick`/`mnick`/`fullname`; updates the live session state so the matching
+    /// `$anick`/`$mnick`/`$fullname` reflects it.
+    SetIdentity { field: String, value: String },
 }
 
 /// Reserved `%var` key holding the byte count of the last `/sockread` (read by
@@ -426,6 +430,17 @@ impl<'a> Runtime<'a> {
             "enable" => self.cmd_set_group(raw_args, true),
             "disable" => self.cmd_set_group(raw_args, false),
             "groups" => self.cmd_groups(raw_args),
+            "unsetall" => {
+                // Remove all user %variables; engine-internal reserved keys (group
+                // state, etc.) are NUL-prefixed and kept.
+                self.vars.retain(|k, _| k.starts_with('\u{0}'));
+            }
+            "anick" => self.set_identity("anick", raw_args),
+            "mnick" => self.set_identity("mnick", raw_args),
+            "fullname" => self.set_identity("fullname", raw_args),
+            "flushini" | "saveini" => {
+                // No-op: jIRC writes INI/JSON to disk immediately (no cache).
+            }
             "inc" => self.cmd_incdec(raw_args, 1),
             "dec" => self.cmd_incdec(raw_args, -1),
             "write" => self.cmd_write(raw_args),
@@ -579,9 +594,9 @@ impl<'a> Runtime<'a> {
             | "background" | "color" | "font" | "flash" | "beep" | "ebeeps" | "speak" | "splay"
             | "play" | "sound" | "run" | "url" | "dns" | "debug" | "log" | "logview"
             | "timestamp" | "donotdisturb" | "toolbar" | "menubar" | "switchbar" | "treebar"
-            | "mdi" | "save" | "saveini" | "flushini" | "loadbuf"
+            | "mdi" | "save" | "loadbuf"
             | "savebuf" | "filter" | "showmirc" | "maximize" | "minimize" | "ial"
-            | "creq" | "sreq" | "fullname" | "clipboard" | "resetidle" => {
+            | "creq" | "sreq" | "clipboard" | "resetidle" => {
                 let _ = self.expand(raw_args);
             }
             _ => {
@@ -734,6 +749,18 @@ impl<'a> Runtime<'a> {
             self.actions.push(Action::Echo {
                 target: target.clone(),
                 text,
+            });
+        }
+    }
+
+    /// `/anick` / `/mnick` / `/fullname` — update a stored identity field. The
+    /// value is expanded (identifiers/variables resolve); empty values are ignored.
+    fn set_identity(&mut self, field: &str, raw_args: &str) {
+        let value = self.expand(raw_args).trim().to_string();
+        if !value.is_empty() {
+            self.actions.push(Action::SetIdentity {
+                field: field.to_string(),
+                value,
             });
         }
     }

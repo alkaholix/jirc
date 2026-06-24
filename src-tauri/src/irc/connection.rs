@@ -267,18 +267,35 @@ async fn run_once(
             },
             cmd = outgoing_rx.recv() => match cmd {
                 Some(line) => {
-                    // Capture our own away message for $awaymsg: "AWAY :msg" sets it,
-                    // bare "AWAY" clears it. Propagate the snapshot to the engine.
-                    if let Some(rest) = line.strip_prefix("AWAY") {
-                        if rest.is_empty() || rest.starts_with(' ') || rest.starts_with(':') {
-                            let rest = rest.trim_start();
-                            state.away_msg = rest.strip_prefix(':').unwrap_or(rest).to_string();
+                    if let Some(rest) = line.strip_prefix("\u{0}SETID ") {
+                        // Internal control line from /anick /mnick /fullname: update
+                        // our identity in the session state so $anick/$mnick/$fullname
+                        // reflect it, re-publish the snapshot, and don't send it on.
+                        if let Some((field, value)) = rest.split_once(' ') {
+                            match field {
+                                "anick" => state.alt_nick = value.to_string(),
+                                "mnick" => state.main_nick = value.to_string(),
+                                "fullname" => state.realname = value.to_string(),
+                                _ => {}
+                            }
                             if let Some(store) = app.try_state::<crate::irc::state::StateStore>() {
                                 store.set(server_id, state.snapshot());
                             }
                         }
+                    } else {
+                        // Capture our own away message for $awaymsg: "AWAY :msg" sets it,
+                        // bare "AWAY" clears it. Propagate the snapshot to the engine.
+                        if let Some(rest) = line.strip_prefix("AWAY") {
+                            if rest.is_empty() || rest.starts_with(' ') || rest.starts_with(':') {
+                                let rest = rest.trim_start();
+                                state.away_msg = rest.strip_prefix(':').unwrap_or(rest).to_string();
+                                if let Some(store) = app.try_state::<crate::irc::state::StateStore>() {
+                                    store.set(server_id, state.snapshot());
+                                }
+                            }
+                        }
+                        write_line(&mut write_half, app, server_id, &line).await;
                     }
-                    write_line(&mut write_half, app, server_id, &line).await;
                 }
                 None => break ("disconnected".to_string(), Outcome::Stop),
             },

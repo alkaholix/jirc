@@ -473,7 +473,7 @@ out of scope.
 - [ ] `/alias` *(runtime alias define; aliases are loaded from scripts)*
 - [x] `/aline`- [x] `/ame`
 - [x] `/amsg`
-- [ ] `/anick`
+- [x] `/anick` *(sets `$anick`)*
 - [ ] `/aop`
 - [ ] `/auser`
 - [ ] `/autojoin`
@@ -536,10 +536,10 @@ out of scope.
 - [ ] `/flist`
 - [ ] `/flood`
 - [ ] `/flush`
-- [ ] `/flushini` *(stub)*
+- [x] `/flushini` *(no-op: jIRC writes immediately, no cache)*
 - [ ] `/font` *(stub)*
 - [ ] `/fserve`
-- [ ] `/fullname`
+- [x] `/fullname` *(sets `$fullname`)*
 - [ ] `/ghide` · [ ] `/gload` · [ ] `/gmove` · [ ] `/gopts` · [ ] `/gplay` · [ ] `/gpoint` · [ ] `/gqreq` · [ ] `/gshow` · [ ] `/gsize` · [ ] `/gstop` · [ ] `/gtalk` · [ ] `/gunload` *(agent/animation family)*
 - [x] `/goto`
 - [x] `/groups` *(`-e`/`-d` filters)*
@@ -576,7 +576,7 @@ out of scope.
 - [x] `/me`
 - [ ] `/menubar` *(stub)*
 - [x] `/mkdir`
-- [ ] `/mnick`
+- [x] `/mnick` *(sets `$mnick`)*
 - [x] `/mode`
 - [x] `/msg`
 - [x] `/nick` *(sends NICK)*
@@ -616,7 +616,7 @@ out of scope.
 - [ ] `/ruser`
 - [ ] `/save` *(stub)*
 - [ ] `/savebuf` *(stub)*
-- [ ] `/saveini` *(stub)*
+- [x] `/saveini` *(no-op: jIRC writes immediately, no cache)*
 - [x] `/say`
 - [ ] `/scid` · [ ] `/scon` *(multi-server scoping)*
 - [x] `/server`
@@ -653,7 +653,7 @@ out of scope.
 - [ ] `/treebar` *(stub)*
 - [ ] `/ulist`
 - [ ] `/unload`
-- [x] `/unset` · [ ] `/unsetall`
+- [x] `/unset` · [x] `/unsetall` *(keeps engine-internal group state)*
 - [ ] `/updatenl`
 - [x] `/url`
 - [ ] `/uwho`
