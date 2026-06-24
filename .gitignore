@@ -29,3 +29,6 @@ mIRC Help_files/
 # Kept locally for testing only — not part of the repo. Originals are in the
 # OneDrive mIRC backup.
 test-scripts/
+
+# Local design mockups (throwaway UI previews).
+window-mockups.html
