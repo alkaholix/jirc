@@ -5,6 +5,8 @@ import { TopicBar } from "./TopicBar";
 import { MessageList } from "./MessageList";
 import { NickList } from "./NickList";
 import { InputBar } from "./InputBar";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { PromptDialog } from "./PromptDialog";
 
 /** Single-window mode: renders just one buffer in its own OS window. Kept live by
  *  the same app-wide `irc-event` broadcast the main window listens to; its first
@@ -60,6 +62,14 @@ export function DetachedView({ bufferKey }: { bufferKey: string }) {
           {buffer.kind === "channel" && <NickList buffer={buffer} />}
         </div>
       </main>
+      {/* Prompt/confirm hosts so in-window actions that need input work here too —
+          e.g. the Away message prompt, topic edit, close confirmations. These are
+          driven by local (per-window) stores, so there's no cross-window duplication.
+          Script dialogs (UserDialogs) and the channel browser are intentionally left
+          to the main window, since they're driven by broadcast events that both
+          windows receive and would otherwise open twice. */}
+      <ConfirmDialog />
+      <PromptDialog />
     </div>
   );
 }
