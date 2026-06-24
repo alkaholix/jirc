@@ -15,7 +15,7 @@ function BufferItem({ buffer, active }: { buffer: Buffer; active: boolean }) {
     >
       {buffer.kind !== "channel" && (
         <span className={`buffer-icon ${buffer.kind}`}>
-          {buffer.kind === "query" ? "@" : "•"}
+          {buffer.kind === "query" ? "@" : buffer.kind === "window" ? "▣" : "•"}
         </span>
       )}
       <span className="buffer-name">{label}</span>

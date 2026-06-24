@@ -239,3 +239,68 @@ describe("messages", () => {
     expect(buf.lines.at(-1)?.text).toBe("hi privately");
   });
 });
+
+describe("custom @windows", () => {
+  const winLines = (name: string) =>
+    useStore.getState().buffers[bufferKey(SID, name)]?.lines.map((l) => l.text) ?? [];
+
+  it("opens a window buffer, activates it, and records its kind", () => {
+    useStore
+      .getState()
+      .handleEvent({ type: "windowOpen", serverId: SID, name: "@list", kind: "listbox", title: "My List" });
+    const key = bufferKey(SID, "@list");
+    const buf = useStore.getState().buffers[key];
+    expect(buf?.kind).toBe("window");
+    expect(buf.windowKind).toBe("listbox");
+    expect(useStore.getState().active).toBe(key);
+  });
+
+  it("mirrors aline/iline/rline/dline/clear with 1-based positions", () => {
+    const s = useStore.getState();
+    s.handleEvent({ type: "windowOpen", serverId: SID, name: "@w", kind: "listbox", title: "@w" });
+    const add = (text: string) =>
+      s.handleEvent({ type: "windowLine", serverId: SID, name: "@w", op: "add", n: 0, text });
+    add("one");
+    add("two");
+    add("three");
+    expect(winLines("@w")).toEqual(["one", "two", "three"]);
+
+    s.handleEvent({ type: "windowLine", serverId: SID, name: "@w", op: "replace", n: 2, text: "TWO" });
+    expect(winLines("@w")).toEqual(["one", "TWO", "three"]);
+
+    s.handleEvent({ type: "windowLine", serverId: SID, name: "@w", op: "insert", n: 1, text: "zero" });
+    expect(winLines("@w")).toEqual(["zero", "one", "TWO", "three"]);
+
+    s.handleEvent({ type: "windowLine", serverId: SID, name: "@w", op: "delete", n: 1, text: "" });
+    expect(winLines("@w")).toEqual(["one", "TWO", "three"]);
+
+    s.handleEvent({ type: "windowLine", serverId: SID, name: "@w", op: "clear", n: 0, text: "" });
+    expect(winLines("@w")).toEqual([]);
+  });
+
+  it("recreates the window buffer if a line op arrives before it was opened", () => {
+    useStore
+      .getState()
+      .handleEvent({ type: "windowLine", serverId: SID, name: "@auto", op: "add", n: 0, text: "hi" });
+    const buf = useStore.getState().buffers[bufferKey(SID, "@auto")];
+    expect(buf?.kind).toBe("window");
+    expect(winLines("@auto")).toEqual(["hi"]);
+  });
+
+  it("does not steal focus when /window re-opens an existing window", () => {
+    const s = useStore.getState();
+    s.handleEvent({ type: "windowOpen", serverId: SID, name: "@dash", kind: "listbox", title: "@dash" });
+    s.ensureBuffer(SID, STATUS, "status");
+    s.setActive(bufferKey(SID, STATUS));
+    s.handleEvent({ type: "windowOpen", serverId: SID, name: "@dash", kind: "listbox", title: "@dash" });
+    expect(useStore.getState().active).toBe(bufferKey(SID, STATUS));
+  });
+
+  it("closes a window buffer", () => {
+    const s = useStore.getState();
+    s.handleEvent({ type: "windowOpen", serverId: SID, name: "@gone", kind: "listbox", title: "@gone" });
+    expect(useStore.getState().buffers[bufferKey(SID, "@gone")]).toBeTruthy();
+    s.handleEvent({ type: "windowClose", serverId: SID, name: "@gone" });
+    expect(useStore.getState().buffers[bufferKey(SID, "@gone")]).toBeUndefined();
+  });
+});

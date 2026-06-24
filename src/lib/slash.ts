@@ -40,6 +40,11 @@ export async function handleInput(input: string, buffer: Buffer): Promise<void> 
       });
       return;
     }
+    if (kind === "window") {
+      // A custom @window has no message target; plain text is delivered only via
+      // the `on INPUT` event (already fired above). Nothing else to send.
+      return;
+    }
     const body = expandEmoji(text);
     await api.sendMessage(serverId, name, body);
     echoSelf(name, body, "msg");

@@ -18,7 +18,7 @@ function Tab({ buffer, active }: { buffer: Buffer; active: boolean }) {
       title={label}
     >
       {buffer.kind !== "channel" && (
-        <span className="switch-icon">{buffer.kind === "query" ? "@" : "•"}</span>
+        <span className="switch-icon">{buffer.kind === "query" ? "@" : buffer.kind === "window" ? "▣" : "•"}</span>
       )}
       <span className="switch-label">{label}</span>
       {buffer.unread > 0 && <span className="badge">{buffer.unread}</span>}

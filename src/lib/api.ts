@@ -216,7 +216,10 @@ export type IrcEvent =
   | { type: "ircxAccessEnd"; serverId: string; object: string }
   | { type: "ircxProp"; serverId: string; object: string; name: string; value: string }
   | { type: "ircxPropEnd"; serverId: string; object: string }
-  | { type: "whisper"; serverId: string; from: string | null; channel: string; text: string };
+  | { type: "whisper"; serverId: string; from: string | null; channel: string; text: string }
+  | { type: "windowOpen"; serverId: string; name: string; kind: string; title: string }
+  | { type: "windowClose"; serverId: string; name: string }
+  | { type: "windowLine"; serverId: string; name: string; op: string; n: number; text: string };
 
 export interface Member {
   nick: string;

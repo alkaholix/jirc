@@ -51,6 +51,11 @@ export function TopicBar({
       <div className="topic-title">
         {title}
         {buffer.kind === "channel" && <span className="member-count"> · {buffer.members.length}</span>}
+        {buffer.kind === "window" && (
+          <span className="member-count">
+            {" "}· {buffer.windowKind ?? "window"} · {buffer.lines.length} lines
+          </span>
+        )}
       </div>
       <div
         className="topic-text"
