@@ -1047,7 +1047,8 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             // match's capture groups for $regml. The optional name is ignored.
             let (text, pat) = if args.len() >= 3 { (a(1), a(2)) } else { (a(0), a(1)) };
             match mirc_regex(&pat) {
-                Some(re) => {
+                Ok(re) => {
+                    rt.vars.remove(REGERR_KEY);
                     rt.vars.retain(|k, _| !k.starts_with(REGML_PREFIX));
                     let count = re.find_iter(&text).count();
                     if let Some(caps) = re.captures(&text) {
@@ -1058,7 +1059,10 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                     }
                     count.to_string()
                 }
-                None => "0".to_string(),
+                Err(e) => {
+                    rt.vars.insert(REGERR_KEY.to_string(), e);
+                    "0".to_string()
+                }
             }
         }
         "regml" => {
@@ -1074,10 +1078,17 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             // supported — args are pre-expanded, so the %var name is lost.)
             let (text, pat, rep) = (a(0), a(1), a(2));
             match mirc_regex(&pat) {
-                Some(re) => re.replace_all(&text, translate_backrefs(&rep).as_str()).into_owned(),
-                None => text,
+                Ok(re) => {
+                    rt.vars.remove(REGERR_KEY);
+                    re.replace_all(&text, translate_backrefs(&rep).as_str()).into_owned()
+                }
+                Err(e) => {
+                    rt.vars.insert(REGERR_KEY.to_string(), e);
+                    text
+                }
             }
         }
+        "regerrstr" => rt.vars.get(REGERR_KEY).cloned().unwrap_or_default(),
         "read" => {
             // $read(file, [N]) -> the Nth line (1-based), or a random line.
             let path = super::eval::sandbox_path(&rt.data_dir, &a(0));
@@ -1254,6 +1265,9 @@ pub(super) fn mask_address(addr: &str, kind: u32) -> String {
 /// `$regml` (the NUL char can't appear in a user `%var` name).
 const REGML_PREFIX: &str = "\u{0}re";
 
+/// Reserved var key where the last regex compile error is stashed, for `$regerrstr`.
+const REGERR_KEY: &str = "\u{0}regerr";
+
 /// Translates mIRC `\1`..`\9` replacement backreferences into the regex crate's
 /// `${1}` form, escaping any literal `$` first.
 fn translate_backrefs(s: &str) -> String {
@@ -1279,7 +1293,7 @@ fn translate_backrefs(s: &str) -> String {
 /// `i` (case-insensitive), `m` (multiline), `s` (dotall), `x` (extended); other
 /// flags like `g` are ignored (global matching is handled by the caller). A bare
 /// pattern (no surrounding slashes) is compiled as-is.
-fn mirc_regex(pat: &str) -> Option<regex::Regex> {
+fn mirc_regex(pat: &str) -> Result<regex::Regex, String> {
     let p = pat.trim();
     let (body, flags) = match (p.strip_prefix('/'), p.rfind('/')) {
         (Some(_), Some(close)) if close > 0 => (&p[1..close], &p[close + 1..]),
@@ -1291,7 +1305,7 @@ fn mirc_regex(pat: &str) -> Option<regex::Regex> {
     } else {
         format!("(?{inline}){body}")
     };
-    regex::Regex::new(&full).ok()
+    regex::Regex::new(&full).map_err(|e| e.to_string())
 }
 
 fn sep_code(s: &str) -> char {
@@ -2022,6 +2036,11 @@ mod tests {
         assert_eq!(id("regex", &["Hello", "/hello/i"]), "1");
         assert_eq!(id("regex", &["Hello", "hello"]), "0");
         assert_eq!(id("regsub", &["Hello World", "/o/g", "0"]), "Hell0 W0rld");
+        // $regerrstr — set on a bad pattern, cleared on a good one.
+        assert_eq!(id("regex", &["x", "("]), "0");
+        assert!(!id("regerrstr", &[]).is_empty());
+        assert_eq!(id("regex", &["x", "x"]), "1");
+        assert_eq!(id("regerrstr", &[]), "");
         // file-name identifiers
         assert_eq!(id("nopath", &["C:\\folder\\file.txt"]), "file.txt");
         assert_eq!(id("nopath", &["/usr/bin/foo"]), "foo");

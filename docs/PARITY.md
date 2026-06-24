@@ -353,7 +353,7 @@ out of scope.
 - [x] `$read`
 - [x] `$readini`
 - [ ] `$readn`
-- [ ] `$regerrstr`
+- [x] `$regerrstr`
 - [x] `$regex`
 - [x] `$regml`
 - [ ] `$regmlex`
