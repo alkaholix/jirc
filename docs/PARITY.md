@@ -356,7 +356,7 @@ out of scope.
 - [x] `$regerrstr`
 - [x] `$regex`
 - [x] `$regml`
-- [ ] `$regmlex`
+- [x] `$regmlex`
 - [x] `$regsub`
 - [ ] `$regsubex`
 - [ ] `$remote`

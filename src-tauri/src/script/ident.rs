@@ -1050,11 +1050,18 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 Ok(re) => {
                     rt.vars.remove(REGERR_KEY);
                     rt.vars.retain(|k, _| !k.starts_with(REGML_PREFIX));
-                    let count = re.find_iter(&text).count();
-                    if let Some(caps) = re.captures(&text) {
-                        for (i, g) in caps.iter().enumerate() {
-                            let v = g.map(|m| m.as_str().to_string()).unwrap_or_default();
-                            rt.vars.insert(format!("{REGML_PREFIX}{i}"), v);
+                    // Store every match's capture groups for $regmlex (keyed
+                    // `<prefix>m<M>.<N>`), and the first match's groups flat
+                    // (`<prefix><N>`) for $regml.
+                    let mut count = 0usize;
+                    for (m, caps) in re.captures_iter(&text).enumerate() {
+                        count += 1;
+                        for (g, grp) in caps.iter().enumerate() {
+                            let v = grp.map(|x| x.as_str().to_string()).unwrap_or_default();
+                            rt.vars.insert(format!("{REGML_PREFIX}m{}.{}", m + 1, g), v.clone());
+                            if m == 0 {
+                                rt.vars.insert(format!("{REGML_PREFIX}{g}"), v);
+                            }
                         }
                     }
                     count.to_string()
@@ -1070,6 +1077,14 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             let n = if args.len() >= 2 { a(1) } else { a(0) };
             let n: usize = n.parse().unwrap_or(1);
             rt.vars.get(&format!("{REGML_PREFIX}{n}")).cloned().unwrap_or_default()
+        }
+        "regmlex" => {
+            // $regmlex([name,] M, N) -> Nth capture group of the Mth match (N
+            // defaults to 1). Skips an optional leading (non-numeric) name.
+            let i = usize::from(args.first().map_or(false, |s| s.trim().parse::<usize>().is_err()));
+            let m: usize = a(i).trim().parse().unwrap_or(1);
+            let n: usize = a(i + 1).trim().parse().unwrap_or(1);
+            rt.vars.get(&format!("{REGML_PREFIX}m{m}.{n}")).cloned().unwrap_or_default()
         }
         "regsub" => {
             // $regsub(text, pattern, replacement) -> replaced text. mIRC \1
@@ -2041,6 +2056,12 @@ mod tests {
         assert!(!id("regerrstr", &[]).is_empty());
         assert_eq!(id("regex", &["x", "x"]), "1");
         assert_eq!(id("regerrstr", &[]), "");
+        // $regmlex — per-match capture groups for a global pattern.
+        assert_eq!(id("regex", &["a1 b2 c3", "/(\\w)(\\d)/g"]), "3");
+        assert_eq!(id("regmlex", &["2", "1"]), "b");
+        assert_eq!(id("regmlex", &["2", "2"]), "2");
+        assert_eq!(id("regmlex", &["3", "1"]), "c");
+        assert_eq!(id("regml", &["1"]), "a"); // first match still flat for $regml
         // file-name identifiers
         assert_eq!(id("nopath", &["C:\\folder\\file.txt"]), "file.txt");
         assert_eq!(id("nopath", &["/usr/bin/foo"]), "foo");
