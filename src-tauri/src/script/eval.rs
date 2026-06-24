@@ -62,6 +62,8 @@ pub enum Action {
     /// `anick`/`mnick`/`fullname`; updates the live session state so the matching
     /// `$anick`/`$mnick`/`$fullname` reflects it.
     SetIdentity { field: String, value: String },
+    /// Recompile every script file from disk (`/reload`).
+    ReloadScripts,
 }
 
 /// Reserved `%var` key holding the byte count of the last `/sockread` (read by
@@ -441,6 +443,7 @@ impl<'a> Runtime<'a> {
             "flushini" | "saveini" => {
                 // No-op: jIRC writes INI/JSON to disk immediately (no cache).
             }
+            "reload" => self.actions.push(Action::ReloadScripts),
             "inc" => self.cmd_incdec(raw_args, 1),
             "dec" => self.cmd_incdec(raw_args, -1),
             "write" => self.cmd_write(raw_args),

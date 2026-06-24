@@ -602,7 +602,7 @@ out of scope.
 - [x] `/quit`
 - [x] `/quote` *(= `/raw`)*
 - [x] `/raw`
-- [ ] `/reload`
+- [x] `/reload` *(recompiles all script files)*
 - [x] `/remini`
 - [ ] `/remote`
 - [x] `/remove`
@@ -786,7 +786,10 @@ parsing** (`$hget(t,N).item/.data`, `$sock().port`); **full socket section**
 `on SOCKLISTEN`/`on SOCKWRITE`, `$sock(name).*` properties) — async accept/connect I/O
 pending live-network verification. **Script groups** (`#name on|off … #name end`):
 `/enable`/`/disable` (wildcards `#help*`/`#*`), `/groups [-e|-d]`, and `$group` —
-aliases and events in a disabled group don't fire.
+aliases and events in a disabled group don't fire. **Identity commands**
+(`/anick`/`/mnick`/`/fullname` — update live session identity via a `SetIdentity`
+control line, so `$anick`/`$mnick`/`$fullname` reflect them); `/unsetall` (keeps
+group state), `/reload` (recompile all scripts), `/flushini`/`/saveini` (no-ops).
 
 ### mIRC syntax-compatibility audit (verified against mirc.com/help)
 - **Verified correct:** token separator = ASCII code (`$gettok`/`$addtok`/…); `$left`/`$right`

@@ -704,6 +704,13 @@ pub fn apply_actions(
                     let _ = m.send(server_id, format!("\u{0}SETID {field} {value}"));
                 }
             }
+            Action::ReloadScripts => {
+                // Recompile all script files from disk. Safe here: apply_actions
+                // runs after the engine lock (run_command/dispatch) is released.
+                if let Some(engine) = app.try_state::<ScriptEngine>() {
+                    recompile(app, &engine);
+                }
+            }
             Action::WindowOpen { name, kind, title } => {
                 let _ = app.emit(
                     IRC_EVENT,
