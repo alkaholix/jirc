@@ -579,7 +579,7 @@ out of scope.
 - [ ] `/mnick`
 - [x] `/mode`
 - [x] `/msg`
-- [ ] `/nick`  ← *verify: `/nick` change works via client; mark when confirmed*
+- [x] `/nick` *(sends NICK)*
 - [x] `/nickserv`
 - [x] `/noop`
 - [x] `/notice`
