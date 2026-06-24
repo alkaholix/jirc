@@ -523,6 +523,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "fullname" => rt.state.realname.clone(),
         "usermode" => rt.state.user_mode.clone(),
         "away" => bool_str(rt.state.away),
+        "awaymsg" => rt.state.away_msg.clone(),
         // $online — seconds connected so far; $awaytime — unix time you went away.
         "online" => {
             let c = rt.state.connect_time;

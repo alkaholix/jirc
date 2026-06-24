@@ -169,6 +169,8 @@ pub struct SessionState {
     /// Unix time we connected (RPL_WELCOME) / went away, for $online / $awaytime.
     pub connect_time: u64,
     pub away_time: u64,
+    /// Our own away message (captured from the outgoing AWAY command), for `$awaymsg`.
+    pub away_msg: String,
     /// Set once RPL_WELCOME is received.
     pub registered: bool,
     /// How many alternative nicks we've tried during registration.
@@ -284,6 +286,8 @@ pub struct StateSnapshot {
     /// Unix times for `$online` (connect) and `$awaytime`.
     pub connect_time: u64,
     pub away_time: u64,
+    /// Our own away message, for `$awaymsg`.
+    pub away_msg: String,
 }
 
 impl SessionState {
@@ -311,6 +315,7 @@ impl SessionState {
             away: self.away,
             connect_time: self.connect_time,
             away_time: self.away_time,
+            away_msg: self.away_msg.clone(),
         }
     }
 }

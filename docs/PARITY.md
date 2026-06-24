@@ -60,7 +60,7 @@ out of scope.
 - [x] `$atan2`
 - [ ] `$avoice`
 - [x] `$away`
-- [ ] `$awaymsg`
+- [x] `$awaymsg`
 - [x] `$awaytime`
 - [ ] `$banmask`
 - [x] `$base`

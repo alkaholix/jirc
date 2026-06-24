@@ -265,7 +265,20 @@ async fn run_once(
                 Err(e) => break (format!("read error: {e}"), Outcome::Dropped),
             },
             cmd = outgoing_rx.recv() => match cmd {
-                Some(line) => write_line(&mut write_half, app, server_id, &line).await,
+                Some(line) => {
+                    // Capture our own away message for $awaymsg: "AWAY :msg" sets it,
+                    // bare "AWAY" clears it. Propagate the snapshot to the engine.
+                    if let Some(rest) = line.strip_prefix("AWAY") {
+                        if rest.is_empty() || rest.starts_with(' ') || rest.starts_with(':') {
+                            let rest = rest.trim_start();
+                            state.away_msg = rest.strip_prefix(':').unwrap_or(rest).to_string();
+                            if let Some(store) = app.try_state::<crate::irc::state::StateStore>() {
+                                store.set(server_id, state.snapshot());
+                            }
+                        }
+                    }
+                    write_line(&mut write_half, app, server_id, &line).await;
+                }
                 None => break ("disconnected".to_string(), Outcome::Stop),
             },
         }
