@@ -14,6 +14,15 @@ out of scope.
 > Pure keyboard-shortcut / menu entries from the index are folded into the **Client
 > subsystems** section rather than enumerated one-by-one.
 
+> **Reality check on the remaining `- [ ]` items:** a large share are *blocked on
+> subsystems jIRC doesn't have yet* and can't be genuinely implemented without
+> building those first — **DCC/file transfer, COM/DDE/DLL, Agent/speech, media
+> (sound/MIDI/MP3/video), picture-window drawing + geometry, GUI chrome
+> (toolbar/menubar/treebar/mouse/keyboard/clipboard), Windows system colours, and the
+> user-access list (`ulist`/levels/`aop`/`avoice`)**. Those are left unchecked but are
+> not "quick wins". The actively-implementable backlog is the
+> **protocol / scripting-engine / string / math / IAL / window** identifiers.
+
 ---
 
 ## Operators & special tokens
