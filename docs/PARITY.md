@@ -481,17 +481,17 @@ out of scope.
 - [x] `/away`
 - [ ] `/background` *(stub)*
 - [x] `/ban`
-- [ ] `/bcopy`
+- [x] `/bcopy`
 - [ ] `/beep` *(stub)*
 - [ ] `/bigfloat`
 - [ ] `/bindip`
-- [ ] `/bread`
+- [x] `/bread`
 - [x] `/break`
-- [ ] `/breplace`
+- [x] `/breplace`
 - [x] `/bset`
-- [ ] `/btrunc`
+- [x] `/btrunc`
 - [x] `/bunset`
-- [ ] `/bwrite`
+- [x] `/bwrite`
 - [x] `/channel` *(Channel Central UI)*
 - [x] `/clear`- [ ] `/clearall` *(stub)*
 - [ ] `/cline` *(stub)*

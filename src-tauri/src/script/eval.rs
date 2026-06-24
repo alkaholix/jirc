@@ -434,6 +434,11 @@ impl<'a> Runtime<'a> {
             "fseek" => self.cmd_fseek(raw_args),
             "bset" => self.cmd_bset(raw_args),
             "bunset" => self.cmd_bunset(raw_args),
+            "bcopy" => self.cmd_bcopy(raw_args),
+            "breplace" => self.cmd_breplace(raw_args),
+            "btrunc" => self.cmd_btrunc(raw_args),
+            "bread" => self.cmd_bread(raw_args),
+            "bwrite" => self.cmd_bwrite(raw_args),
             "window" => self.cmd_window(raw_args),
             "aline" => self.cmd_window_line(raw_args, "add"),
             "rline" => self.cmd_window_line(raw_args, "replace"),
@@ -934,6 +939,117 @@ impl<'a> Runtime<'a> {
         for name in expanded.split_whitespace() {
             self.bins.unset(name);
         }
+    }
+
+    /// `/bcopy <&dest> <N> <&source> <S> <M>` — copy M bytes from &source position S
+    /// to &dest position N (1-based positions).
+    fn cmd_bcopy(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        let p: Vec<&str> = expanded.split_whitespace().collect();
+        if p.len() < 5 {
+            return;
+        }
+        let (dest, src) = (p[0], p[2]);
+        let n: i64 = p[1].trim().parse().unwrap_or(1);
+        let s: usize = p[3].trim().parse().unwrap_or(1);
+        let m: usize = p[4].trim().parse().unwrap_or(0);
+        let slice: Vec<u8> = self
+            .bins
+            .get(src)
+            .map(|b| b.iter().skip(s.saturating_sub(1)).take(m).copied().collect())
+            .unwrap_or_default();
+        self.bins.set(dest, n, &slice, false);
+    }
+
+    /// `/breplace <&binvar> <old> <new> [<old> <new>…]` — replace matching byte
+    /// values throughout &binvar.
+    fn cmd_breplace(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        let mut parts = expanded.split_whitespace();
+        let Some(name) = parts.next() else { return };
+        let nums: Vec<u8> = parts.filter_map(|t| t.parse::<u16>().ok()).map(|n| n as u8).collect();
+        let pairs: Vec<(u8, u8)> =
+            nums.chunks(2).filter(|c| c.len() == 2).map(|c| (c[0], c[1])).collect();
+        if pairs.is_empty() {
+            return;
+        }
+        let Some(mut bytes) = self.bins.get(name).cloned() else { return };
+        for b in bytes.iter_mut() {
+            for (old, new) in &pairs {
+                if *b == *old {
+                    *b = *new;
+                    break;
+                }
+            }
+        }
+        self.bins.set(name, 1, &bytes, false);
+    }
+
+    /// `/btrunc <file> <bytes>` — truncate or zero-extend a file to `bytes` long.
+    fn cmd_btrunc(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        let mut parts = expanded.splitn(2, char::is_whitespace);
+        let (Some(file), Some(len)) = (parts.next(), parts.next()) else { return };
+        let path = sandbox_path(&self.data_dir, file.trim());
+        let len: u64 = len.trim().parse().unwrap_or(0);
+        if let Ok(f) = std::fs::OpenOptions::new().write(true).create(true).open(&path) {
+            let _ = f.set_len(len);
+        }
+    }
+
+    /// `/bread <file> <S> <N> <&binvar>` — read N bytes from `file` at position S
+    /// (1-based) into &binvar, replacing it.
+    fn cmd_bread(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        let p: Vec<&str> = expanded.split_whitespace().collect();
+        if p.len() < 4 {
+            return;
+        }
+        let path = sandbox_path(&self.data_dir, p[0]);
+        let s: usize = p[1].trim().parse().unwrap_or(1);
+        let n: usize = p[2].trim().parse().unwrap_or(0);
+        let name = p[3];
+        if let Ok(data) = std::fs::read(&path) {
+            let slice: Vec<u8> = data.iter().skip(s.saturating_sub(1)).take(n).copied().collect();
+            self.bins.unset(name);
+            self.bins.set(name, 1, &slice, false);
+        }
+    }
+
+    /// `/bwrite <file> <S> <N> <text|%var|&binvar>` — write N bytes (N<0 = all) of
+    /// the data to `file` at position S (1-based), extending the file if needed.
+    fn cmd_bwrite(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        let p: Vec<&str> = expanded.splitn(4, char::is_whitespace).collect();
+        if p.len() < 4 {
+            return;
+        }
+        let path = sandbox_path(&self.data_dir, p[0]);
+        let s: usize = p[1].trim().parse().unwrap_or(1);
+        let n: i64 = p[2].trim().parse().unwrap_or(-1);
+        let data_arg = p[3];
+        // A known &binvar contributes its bytes; otherwise the literal text.
+        let data: Vec<u8> = if data_arg.starts_with('&') && self.bins.get(data_arg).is_some() {
+            self.bins.get(data_arg).cloned().unwrap_or_default()
+        } else {
+            data_arg.as_bytes().to_vec()
+        };
+        let to_write: Vec<u8> =
+            if n < 0 { data } else { data.into_iter().take(n as usize).collect() };
+        let mut content = std::fs::read(&path).unwrap_or_default();
+        let start = s.saturating_sub(1);
+        if content.len() < start {
+            content.resize(start, 0);
+        }
+        for (i, b) in to_write.iter().enumerate() {
+            let idx = start + i;
+            if idx < content.len() {
+                content[idx] = *b;
+            } else {
+                content.push(*b);
+            }
+        }
+        let _ = std::fs::write(&path, &content);
     }
 
     /// `/window [-celp] @name [...]` — create a custom `@window` (`-c` closes,

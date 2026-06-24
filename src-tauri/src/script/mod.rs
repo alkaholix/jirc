@@ -1715,6 +1715,31 @@ mod tests {
     }
 
     #[test]
+    fn binary_var_commands() {
+        // /breplace replaces matching byte values (2 -> 9).
+        let engine = ScriptEngine::new();
+        engine.load("alias t { bset &v 1 1 2 3 2 1 | breplace &v 2 9 | msg #c $bvar(&v,1,5) }");
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :1 9 3 9 1".into())]
+        );
+        // /bcopy copies M bytes from one binvar to another.
+        let engine2 = ScriptEngine::new();
+        engine2.load("alias t { bset &v 1 10 20 30 | bcopy &w 1 &v 2 2 | msg #c $bvar(&w,1,2) }");
+        assert_eq!(
+            engine2.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :20 30".into())]
+        );
+        // /bwrite + /bread roundtrip through the sandbox.
+        let engine3 = ScriptEngine::new();
+        engine3.load("alias t { bset &v 1 65 66 67 | bwrite jirc_bin_rt.bin 1 -1 &v | bread jirc_bin_rt.bin 1 3 &w | msg #c $bvar(&w,1,3) }");
+        assert_eq!(
+            engine3.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :65 66 67".into())]
+        );
+    }
+
+    #[test]
     fn socket_commands_produce_actions() {
         let engine = ScriptEngine::new();
         engine.load(
