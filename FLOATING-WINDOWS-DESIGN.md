@@ -132,9 +132,16 @@ Nothing special needed.
   with one click; a "popped out" placeholder (Focus / Dock-back) holds its spot in the main window.
   *Deferred to Phase C:* native-✕-closes-the-buffer (today native ✕ just closes the OS window and
   leaves the placeholder, which docks it back) and the switchbar `⧉` marker.
-- **Phase B — all window types + `@window` listbox rendering** (this also finishes the earlier
-  Phase 1b): `@windows`, queries, status all poppable; the `WindowList` component.
-- **Phase C — polish:** the `⧉` switchbar marker + focus-on-click, native-✕ behaviour, edge cases
-  (dock back while a different buffer is active, server disconnect while popped out).
+- **Phase B — custom `@window` rendering — ✅ IMPLEMENTED:** the backend `@window` engine
+  (`/window`, `/aline`/`iline`/`rline`/`dline`, `$window`/`$line`) already emitted
+  `WindowOpen`/`WindowClose`/`WindowLine`; the frontend now consumes them. An `@window` is a buffer
+  (new kind `"window"`, `▣` icon) and renders through the **existing** `TopicBar + MessageList +
+  InputBar` path (window lines are plain rows — no `WindowList` component needed), so it is poppable
+  for free via Phase A. Queries/status were already poppable in Phase A. Plain text typed in an
+  `@window` is delivered only via `on INPUT` (no PRIVMSG).
+- **Phase C — polish — ✅ IMPLEMENTED:** the `⧉` sidebar/switchbar marker on popped-out buffers +
+  click-to-focus-its-window; **native ✕ now closes the buffer** (via `close_detached` → the
+  `win-close-buffer` broadcast), distinguished from dock-back by a `handledClose` guard; and a
+  "Window closed" state in a detached window whose buffer disappears (e.g. server disconnect).
 
 Each phase is independently testable and shippable.
