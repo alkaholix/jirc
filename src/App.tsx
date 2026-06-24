@@ -12,6 +12,7 @@ import { ConnectDialog } from "./components/ConnectDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { ScriptDialog } from "./components/ScriptDialog";
 import { ChannelListDialog } from "./components/ChannelListDialog";
+import { AutoJoinDialog } from "./components/AutoJoinDialog";
 import { ChannelCentral } from "./components/ChannelCentral";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { PromptDialog } from "./components/PromptDialog";
@@ -30,6 +31,7 @@ function App() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [scriptOpen, setScriptOpen] = useState(false);
+  const [autoJoinOpen, setAutoJoinOpen] = useState(false);
   const [detachedKey] = useState(() => thisWindowBufferKey());
   const theme = useSettings((s) => s.theme);
   const customCss = useSettings((s) => s.customCss);
@@ -154,6 +156,7 @@ function App() {
     onAddServer: () => setDialogOpen(true),
     onOpenSettings: () => setSettingsOpen(true),
     onOpenScripts: () => setScriptOpen(true),
+    onOpenAutoJoin: () => setAutoJoinOpen(true),
     onOpenHelp: () => api.openHelp().catch(() => {}),
   };
 
@@ -211,6 +214,7 @@ function App() {
       {dialogOpen && <ConnectDialog onClose={() => setDialogOpen(false)} onConnect={onConnect} />}
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
       {scriptOpen && <ScriptDialog onClose={() => setScriptOpen(false)} />}
+      {autoJoinOpen && <AutoJoinDialog onClose={() => setAutoJoinOpen(false)} />}
       <ChannelListDialog />
       <ChannelCentral />
       <ConfirmDialog />

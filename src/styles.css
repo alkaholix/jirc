@@ -982,6 +982,33 @@ label.inline {
 .keyring-note.warn {
   color: var(--err);
 }
+.autojoin-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg2);
+}
+.autojoin-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.3rem 0.55rem;
+}
+.autojoin-list li:not(:last-child) {
+  border-bottom: 1px solid var(--border);
+}
+.autojoin-list li.empty {
+  color: var(--muted);
+  justify-content: center;
+}
+.autojoin-list li button {
+  padding: 0 0.4rem;
+  line-height: 1.4;
+}
 .saved-row {
   display: flex;
   gap: 0.5rem;
