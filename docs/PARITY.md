@@ -790,6 +790,11 @@ aliases and events in a disabled group don't fire. **Identity commands**
 (`/anick`/`/mnick`/`/fullname` — update live session identity via a `SetIdentity`
 control line, so `$anick`/`$mnick`/`$fullname` reflect them); `/unsetall` (keeps
 group state), `/reload` (recompile all scripts), `/flushini`/`/saveini` (no-ops).
+**Runtime `/alias`** (define/remove single-line aliases, persisted); **signals**
+(`/signal` + `on SIGNAL`, `$signal`/`$1-`, wildcard names); **`/autojoin`**
+(`-n`/`-s`/`-dN`) — the connect-time autojoin now runs *after* `on CONNECT` so a
+script can control it, plus a UI **auto-join channels dialog** (per-network,
+Join-now). All verified against the official mirc.com help pages.
 
 ### mIRC syntax-compatibility audit (verified against mirc.com/help)
 - **Verified correct:** token separator = ASCII code (`$gettok`/`$addtok`/…); `$left`/`$right`

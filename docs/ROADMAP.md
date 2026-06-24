@@ -94,6 +94,12 @@ Status: ✅ done · 🟡 partial · ❌ missing · ⭐ jIRC-only (modern extra)
 - **Named/stoppable timers** ✅ `/timer[name]`, `/timer name off`, `/timers`, `/timers off`
 - **Script groups** ✅ `#name on|off … #name end` + `/enable`/`/disable` (wildcards
   `#help*`/`#*`), `/groups [-e|-d]`, `$group` — disabled groups' aliases/events don't fire
+- **Runtime `/alias`** ✅ define/replace/remove single-line aliases (persisted to disk)
+- **Signals** ✅ `/signal [-n] <name> [params]` + `on SIGNAL` (`$signal`, `$1-`, wildcard names)
+- **Identity & connect** ✅ `/anick`/`/mnick`/`/fullname`; `/autojoin` (`-n`/`-s`/`-dN`)
+  controls the connect-time autojoin from `on CONNECT`; plus an **auto-join channels
+  dialog** (the `#` button) to manage per-network channels with a Join-now action
+- **Misc** ✅ `/reload` (recompile scripts), `/unsetall`, `/flushini`/`/saveini`
 - **Hash tables** ✅ incl. persistence (`/hmake /hfree /hclear /hadd /hdel /hinc /hdec
   /hsave /hload`, `$hget $hfind`) — `-m`/`-w` switches honoured
 - **Sockets** ✅ `/sockopen [-e] /sockwrite /sockread /sockclose`,

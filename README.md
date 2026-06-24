@@ -21,7 +21,8 @@ Linux) and speaking both **standard IRC** (RFC 1459/2812 + some IRCv3) and
 - **Detachable windows** — pop any channel, query, or `@window` out into its own
   OS window and dock it back with one click (beyond mIRC's in-app MDI)
 - **Channel management** — nick right-click menu (whois/op/voice/kick/ban/ignore),
-  topic editing, channel-mode commands, **/list & IRCX /listx channel browser**
+  topic editing, channel-mode commands, **/list & IRCX /listx channel browser**, and
+  an **auto-join channels folder** (per-network add/remove + Join-now)
 - **Alternative nickname** with automatic fallback when your nick is in use
 - **Ignore list**, CTCP auto-replies (VERSION/PING/TIME), emoji shortcodes
 - **Behaviour settings** — rejoin on kick, rejoin after reconnect, skip MOTD,
@@ -38,9 +39,15 @@ files are compiled together, and an **Examples** button seeds starter scripts.
 using the client *and* the full mSL scripting reference, with examples. In the app,
 the **?** button opens it in your browser.
 
-- `alias` commands + **custom value-returning aliases** (`/return` → `$myalias`)
+- `alias` commands + **custom value-returning aliases** (`/return` → `$myalias`);
+  **runtime `/alias`** define/remove
+- **Script groups** — `#name on/off … #name end` with `/enable`/`/disable`/`/groups`
+  and `$group`; disabled groups' aliases and events don't fire
 - `on` event handlers: TEXT/ACTION/NOTICE/**INPUT**/JOIN/PART/QUIT/NICK/**KICK**/
-  **MODE**/**TOPIC**/**INVITE**/CONNECT/**DISCONNECT**
+  **MODE**/**TOPIC**/**INVITE**/CONNECT/**DISCONNECT**/**RAW**/**CTCP**/**SIGNAL**,
+  plus per-mode **OP/VOICE/BAN/…** events
+- **Identity & connect control** — `/anick`/`/mnick`/`/fullname`, and `/autojoin`
+  (`-n`/`-s`/`-dN`) to control the connect-time autojoin from `on CONNECT`
 - `if`/`elseif`/`else`, `while`, `%variables`, hash tables (with `/hsave`/`/hload`), **`/timer`**
 - **Regex** (`$regex`/`$regml`/`$regsub`) and **sandboxed file I/O** (`$read`/`/write`/`$lines`)
 - **TCP sockets** (`/sockopen`, `on SOCKREAD`, …) — build sockbots and custom clients
