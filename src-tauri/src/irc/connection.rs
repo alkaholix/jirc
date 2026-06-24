@@ -33,6 +33,10 @@ pub struct Effects {
     /// Set when a channel ban list changed without a state-event (RPL_BANLIST),
     /// so the script state snapshot is refreshed for `isban`.
     pub bans_changed: bool,
+    /// Channels to auto-join once `on CONNECT` has run (populated at RPL_WELCOME).
+    /// The connection task performs the JOINs, honoring `/autojoin` (`-s` skip,
+    /// `-dN` delay) — so a script can control them from within `on CONNECT`.
+    pub autojoin: Vec<String>,
 }
 
 /// Per-connection mutable context for the read loop / protocol logic.
@@ -244,7 +248,24 @@ async fn run_once(
                         }
                     }
 
-                    let script_actions = run_scripts(app, &state, profile, &effects.events, Some(line));
+                    let mut script_actions = run_scripts(app, &state, profile, &effects.events, Some(line));
+
+                    // `/autojoin` (used in `on CONNECT`) controls the deferred
+                    // autojoin: pull its control out of the script actions before
+                    // the rest are applied.
+                    let mut autojoin_skip = false;
+                    let mut autojoin_delay = 0u32;
+                    script_actions.retain(|a| {
+                        if let crate::script::eval::Action::Autojoin { skip, delay_secs } = a {
+                            autojoin_skip |= *skip;
+                            if *delay_secs > 0 {
+                                autojoin_delay = *delay_secs;
+                            }
+                            false
+                        } else {
+                            true
+                        }
+                    });
 
                     for out in effects.outgoing {
                         write_line(&mut write_half, app, server_id, &out).await;
@@ -261,6 +282,32 @@ async fn run_once(
                             &profile.host,
                             script_actions,
                         );
+                    }
+
+                    // Now that `on CONNECT` has run, perform the deferred autojoin
+                    // (unless a script skipped it; a delay postpones the JOINs).
+                    if !effects.autojoin.is_empty() && !autojoin_skip {
+                        if autojoin_delay > 0 {
+                            let app2 = app.clone();
+                            let sid = server_id.to_string();
+                            let channels = effects.autojoin.clone();
+                            tauri::async_runtime::spawn(async move {
+                                tokio::time::sleep(std::time::Duration::from_secs(
+                                    autojoin_delay as u64,
+                                ))
+                                .await;
+                                if let Some(m) = app2.try_state::<crate::irc::ConnectionManager>() {
+                                    for ch in channels {
+                                        let _ = m.send(&sid, format!("JOIN {ch}"));
+                                    }
+                                }
+                            });
+                        } else {
+                            for ch in &effects.autojoin {
+                                write_line(&mut write_half, app, server_id, &format!("JOIN {ch}"))
+                                    .await;
+                            }
+                        }
                     }
                 }
                 Err(e) => break (format!("read error: {e}"), Outcome::Dropped),
@@ -923,9 +970,9 @@ fn handle_numeric(ctx: &mut Context, fx: &mut Effects, resp: Response, args: &[S
             if ctx.profile.ircx {
                 fx.outgoing.push("IRCX".to_string());
             }
-            for channel in &ctx.profile.autojoin {
-                fx.outgoing.push(format!("JOIN {channel}"));
-            }
+            // Defer the autojoin until after `on CONNECT` runs, so a script can
+            // skip/delay it with `/autojoin`. The connection task does the JOINs.
+            fx.autojoin = ctx.profile.autojoin.clone();
         }
         Response::RPL_SASLSUCCESS => {
             fx.outgoing.extend(auth::on_sasl_result(ctx.auth, true));
@@ -1858,7 +1905,10 @@ mod tests {
             auth: &mut auth,
         };
         let fx = process_message(&mut ctx, ":srv 001 me :Welcome", ":srv 001 me :Welcome".parse().unwrap());
-        assert_eq!(fx.outgoing, vec!["JOIN #jirc".to_string()]);
+        // The autojoin is deferred to the connection task (after `on CONNECT`),
+        // so it's reported via `fx.autojoin`, not sent inline.
+        assert_eq!(fx.autojoin, vec!["#jirc".to_string()]);
+        assert!(!fx.outgoing.iter().any(|l| l.starts_with("JOIN")));
         assert_eq!(s.nick, "me");
     }
 }

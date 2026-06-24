@@ -767,6 +767,10 @@ fn apply_actions_depth(
             Action::DefineAlias { name, command } => {
                 update_runtime_alias(app, &name, command.as_deref());
             }
+            Action::Autojoin { .. } => {
+                // Only meaningful at connect time, where the connection task
+                // extracts it from the `on CONNECT` actions; a no-op elsewhere.
+            }
             Action::Signal { name, params } => {
                 // Dispatch `on SIGNAL` handlers after the current run (so it's safe
                 // re-entrancy-wise). Capped to mIRC's 24-deep signal recursion.
@@ -1609,6 +1613,26 @@ mod tests {
         assert_eq!(
             engine2.dispatch_event(&ctx(), "SIGNAL", ev),
             vec![Action::Send("PRIVMSG #c :got hi via myevt".into())]
+        );
+    }
+
+    #[test]
+    fn autojoin_command_emits_control() {
+        let engine = ScriptEngine::new();
+        engine.load("alias a1 { autojoin -s }\nalias a2 { autojoin -d5 }");
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "a1", ""),
+            vec![Action::Autojoin {
+                skip: true,
+                delay_secs: 0,
+            }]
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "a2", ""),
+            vec![Action::Autojoin {
+                skip: false,
+                delay_secs: 5,
+            }]
         );
     }
 

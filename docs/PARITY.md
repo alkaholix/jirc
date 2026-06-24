@@ -476,7 +476,7 @@ out of scope.
 - [x] `/anick` *(sets `$anick`)*
 - [ ] `/aop`
 - [ ] `/auser`
-- [ ] `/autojoin` *(`-n` now / `-s` skip / `-dN` delay, for use in `on CONNECT`; needs jIRC's connect-time autojoin moved to after `on CONNECT` fires)*
+- [x] `/autojoin` *(`-n` now / `-s` skip / `-dN` delay; controls the connect-time autojoin from `on CONNECT` — autojoin now runs after `on CONNECT`)*
 - [ ] `/avoice`
 - [x] `/away`
 - [ ] `/background` *(stub)*

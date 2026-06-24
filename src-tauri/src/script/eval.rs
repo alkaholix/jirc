@@ -69,6 +69,9 @@ pub enum Action {
     DefineAlias { name: String, command: Option<String> },
     /// Fire `on SIGNAL` handlers matching `name` (`/signal`); `params` become `$1-`.
     Signal { name: String, params: Vec<String> },
+    /// Control the connect-time autojoin from within `on CONNECT` (`/autojoin`):
+    /// `skip` cancels it, `delay_secs` > 0 postpones it that many seconds.
+    Autojoin { skip: bool, delay_secs: u32 },
 }
 
 /// Reserved `%var` key holding the byte count of the last `/sockread` (read by
@@ -474,6 +477,24 @@ impl<'a> Runtime<'a> {
                 if !name.is_empty() {
                     self.actions.push(Action::Signal { name, params });
                 }
+            }
+            "autojoin" => {
+                // `/autojoin [-n|-s|-dN]` controls the connect-time autojoin (used
+                // in `on CONNECT`): `-n` join now (default), `-s` skip, `-dN` delay
+                // N seconds.
+                let mut skip = false;
+                let mut delay_secs = 0u32;
+                for tok in self.expand(raw_args).split_whitespace() {
+                    if tok == "-s" {
+                        skip = true;
+                    } else if tok == "-n" {
+                        skip = false;
+                        delay_secs = 0;
+                    } else if let Some(n) = tok.strip_prefix("-d") {
+                        delay_secs = n.parse().unwrap_or(0);
+                    }
+                }
+                self.actions.push(Action::Autojoin { skip, delay_secs });
             }
             "alias" => {
                 // `/alias <name> <command>` adds/replaces; `/alias <name>` (no
