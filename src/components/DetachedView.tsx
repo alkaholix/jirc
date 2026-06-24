@@ -1,5 +1,4 @@
 import { useEffect, useRef } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useStore } from "../state/store";
 import { readSnapshot, dockBackBuffer, closeDetachedBuffer } from "../lib/detach";
 import { TopicBar } from "./TopicBar";
@@ -9,13 +8,15 @@ import { InputBar } from "./InputBar";
 
 /** Single-window mode: renders just one buffer in its own OS window. Kept live by
  *  the same app-wide `irc-event` broadcast the main window listens to; its first
- *  paint is hydrated from the snapshot the popping window stashed. */
+ *  paint is hydrated from the snapshot the popping window stashed.
+ *
+ *  Window close is owned by the backend: `dock_window` / `close_detached` emit the
+ *  right buffer action and then close the window, and the native ✕ just closes the
+ *  window. There's no JS close interception here — intercepting it deadlocked the
+ *  window and mis-fired for closes triggered from the main window. */
 export function DetachedView({ bufferKey }: { bufferKey: string }) {
   const addDetachedBuffer = useStore((s) => s.addDetachedBuffer);
   const buffer = useStore((s) => s.buffers[bufferKey] ?? null);
-  // Set when we close the window ourselves (dock-back or ✕) so the OS
-  // close-request handler doesn't double-handle it.
-  const handledClose = useRef(false);
   // Set once the buffer has appeared, to tell "still loading" from "was closed".
   const everLoaded = useRef(false);
   if (buffer) everLoaded.current = true;
@@ -24,31 +25,6 @@ export function DetachedView({ bufferKey }: { bufferKey: string }) {
     const snap = readSnapshot(bufferKey);
     if (snap) addDetachedBuffer(snap.server, snap.buffer);
   }, [bufferKey, addDetachedBuffer]);
-
-  // Native ✕ closes the buffer itself (not just this window). Dock-back sets
-  // handledClose first, so it keeps the buffer instead.
-  useEffect(() => {
-    const win = getCurrentWindow();
-    const unlisten = win.onCloseRequested((event) => {
-      if (handledClose.current) return;
-      handledClose.current = true;
-      event.preventDefault(); // the backend closes the window after the buffer
-      closeDetachedBuffer(bufferKey);
-    });
-    return () => {
-      unlisten.then((f) => f());
-    };
-  }, [bufferKey]);
-
-  const dockBack = () => {
-    handledClose.current = true; // keep the buffer; just re-dock it
-    dockBackBuffer(bufferKey);
-  };
-
-  const closeWindow = () => {
-    handledClose.current = true;
-    closeDetachedBuffer(bufferKey);
-  };
 
   if (!buffer) {
     return (
@@ -60,7 +36,7 @@ export function DetachedView({ bufferKey }: { bufferKey: string }) {
                 <h1>Window closed</h1>
                 <p>This conversation is no longer open in jIRC.</p>
                 <div className="welcome-actions">
-                  <button onClick={closeWindow}>Close window</button>
+                  <button onClick={() => closeDetachedBuffer(bufferKey)}>Close window</button>
                 </div>
               </>
             ) : (
@@ -75,7 +51,7 @@ export function DetachedView({ bufferKey }: { bufferKey: string }) {
   return (
     <div className="app detached">
       <main className="main">
-        <TopicBar buffer={buffer} onDock={dockBack} />
+        <TopicBar buffer={buffer} onDock={() => dockBackBuffer(bufferKey)} />
         <div className="main-body">
           <div className="chat-pane">
             <MessageList buffer={buffer} />

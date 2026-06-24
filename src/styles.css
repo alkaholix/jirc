@@ -92,6 +92,13 @@ input:focus {
   display: flex;
   flex-direction: column;
 }
+/* A detached (popped-out) window hosts a single buffer with no sidebar; it still
+   needs a column flex layout so `.main` fills the window (without a layout-* class
+   it would default to display:block and collapse to a blank window). */
+.app.detached {
+  display: flex;
+  flex-direction: column;
+}
 
 /* ---- Switchbar ---- */
 .switchbar {
