@@ -24,6 +24,8 @@ pub struct Isupport {
     pub chanmodes_c: String,
     /// CHANMODES type D (never take an argument).
     pub chanmodes_d: String,
+    /// Max mode params per `/mode` line (ISUPPORT `MODES`), for `$modespl`.
+    pub modes: u32,
 }
 
 impl Default for Isupport {
@@ -41,6 +43,7 @@ impl Default for Isupport {
             chanmodes_b: "k".to_string(),
             chanmodes_c: "l".to_string(),
             chanmodes_d: "imnpstrS".to_string(),
+            modes: 3,
         }
     }
 }
@@ -126,6 +129,10 @@ impl Isupport {
                 self.chanmodes_b = parts[1].to_string();
                 self.chanmodes_c = parts[2].to_string();
                 self.chanmodes_d = parts[3].to_string();
+            }
+        } else if let Some(v) = token.strip_prefix("MODES=") {
+            if let Ok(n) = v.parse::<u32>() {
+                self.modes = n;
             }
         }
     }

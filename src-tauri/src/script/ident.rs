@@ -522,6 +522,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             format!("{},{},{},{}", is.chanmodes_a, is.chanmodes_b, is.chanmodes_c, is.chanmodes_d)
         }
         "chantypes" => rt.state.isupport.chan_types.clone(),
+        "modespl" => rt.state.isupport.modes.to_string(),
         // $isalias(name) — $true if a user alias by that name is defined.
         "isalias" => bool_str(rt.script.find_alias(&a(0)).is_some()),
         // $modinv(a, m) — modular multiplicative inverse (empty if none exists).
@@ -2090,6 +2091,7 @@ mod tests {
         assert_eq!(id("prefix", &[]), "(qaohv)~&@%+");
         assert_eq!(id("chantypes", &[]), "#&!+");
         assert_eq!(id("chanmodes", &[]), "beI,k,l,imnpstrS");
+        assert_eq!(id("modespl", &[]), "3");
         // $replacex single-pass (a->b is NOT then matched by b->c), $powmod, $utf
         assert_eq!(id("replacex", &["hello", "l", "L"]), "heLLo");
         assert_eq!(id("replacex", &["abc", "a", "b", "b", "c"]), "bcc");

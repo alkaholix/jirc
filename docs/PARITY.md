@@ -297,7 +297,7 @@ out of scope.
 - [x] `$mode` *(verify — exposed in MODE events)*
 - [ ] `$modefirst`
 - [ ] `$modelast`
-- [ ] `$modespl`
+- [x] `$modespl`
 - [x] `$modinv`
 - [ ] `$mouse`
 - [ ] `$msfile`
