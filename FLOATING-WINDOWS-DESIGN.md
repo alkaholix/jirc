@@ -88,8 +88,8 @@ Nothing special needed.
 2. Main window clears `poppedOut` for that buffer (it renders as a normal tab again) and focuses it.
 3. The popped-out `WebviewWindow` closes itself.
 
-**Closing the OS window** (its native ✕): treated as dock-back (so the buffer isn't lost) — or as
-"close buffer" if you prefer; **open question, see §6**.
+**Closing the OS window** (its native ✕): **closes the buffer** (part channel / close query / close
+`@window`), per §6 — returning a window to jIRC is the separate `⧈ dock back` button, not ✕.
 
 ---
 
@@ -116,16 +116,14 @@ Nothing special needed.
 
 ---
 
-## 6. Open questions (need your call)
+## 6. Decisions (resolved)
 
-1. **Native ✕ on a popped-out window** → does it **dock back** (keep the buffer) or **close the
-   buffer** entirely? (I lean: dock back, so nothing is lost; closing is via the buffer's own close.)
-2. **Status/server window** poppable too, or only channels/queries/`@windows`? (You said "all" —
-   confirming the server/status window is included.)
-3. **Reconnect / restart**: should popped-out windows be **remembered** and re-opened on next launch,
-   or always start docked? (Lean: start docked for v1; persistence later.)
-4. **One buffer, two places**: disallowed (a buffer is either docked or popped-out, never both) —
-   confirming that's the intended behaviour.
+1. The popped-out window's **native ✕ closes the buffer** (part channel / close query / close
+   `@window`) — same as closing it inside jIRC. A **separate `⧈ dock back` button** (distinct from
+   ✕) is how you return it to jIRC without closing.
+2. **All** windows are poppable, **including the server/status window**.
+3. Windows **always start docked** on launch; popped-out state is **not persisted** in v1.
+4. A buffer is **docked XOR popped-out** — never shown in both places at once.
 
 ---
 
