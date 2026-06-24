@@ -55,17 +55,13 @@ windows — this is the key that makes sync cheap.
 contents (scrollback / current `@window` lines) for its first paint.
 
 The buffer's history lives in the **main window's** zustand store (the backend doesn't keep channel
-scrollback today). So on open, the popped-out window requests a **snapshot** from the main window:
+scrollback today). **Implemented (Phase A):** the popping window stashes a snapshot of the buffer
+(+ its server) in **shared `localStorage`** under `jirc.detached.<bufferKey>` right before spawning,
+and the detached window hydrates from it on mount. Tauri's windows are same-origin, so they share
+one `localStorage` partition — this needs **no window-to-window IPC and no extra permissions**, which
+is why it was chosen over the `emit`/`emit_to` request/response handshake originally sketched here.
 
-```
-popped-out window  ──emit("win:request-snapshot", {bufferKey})──►  main window
-main window         ──emit_to(poppedWindow, "win:snapshot", {messages, nicks, …})──►  popped-out
-```
-
-(`@window` line content is *also* available straight from the backend `WindowStore` I just built —
-a `window_snapshot` command — but routing everything through the main window keeps one code path.)
-
-After the snapshot, both windows are in lock-step via `irc-event`.
+After hydration, both windows stay in lock-step via the app-wide `irc-event` broadcast.
 
 ### 2b. Sending (typing) from a popped-out window
 
@@ -129,9 +125,13 @@ Nothing special needed.
 
 ## 7. Phasing
 
-- **Phase A — pop-out/dock-back skeleton:** the Tauri spawn, single-window mode, snapshot IPC, and
-  the two buttons, proven on **one channel**. End state: pop a channel out to an OS window, it's
-  live, dock it back with one click.
+- **Phase A — pop-out/dock-back skeleton — ✅ IMPLEMENTED:** the Tauri spawn (`open_detached_window`
+  / `focus_window` / `dock_window`), single-window mode (`#win/<bufferKey>` → `DetachedView`),
+  localStorage snapshot hydration, and the `⧉` pop-out / `⧈ dock-back` buttons — proven on any one
+  buffer (channel/query/status). Pop a buffer out to its own OS window, it stays live, dock it back
+  with one click; a "popped out" placeholder (Focus / Dock-back) holds its spot in the main window.
+  *Deferred to Phase C:* native-✕-closes-the-buffer (today native ✕ just closes the OS window and
+  leaves the placeholder, which docks it back) and the switchbar `⧉` marker.
 - **Phase B — all window types + `@window` listbox rendering** (this also finishes the earlier
   Phase 1b): `@windows`, queries, status all poppable; the `WindowList` component.
 - **Phase C — polish:** the `⧉` switchbar marker + focus-on-click, native-✕ behaviour, edge cases
