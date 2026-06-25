@@ -12,6 +12,8 @@ use keyring::Entry;
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
+use serde::Serialize;
+
 use crate::config::ServerProfile;
 
 const KEYRING_SERVICE: &str = "jirc";
@@ -83,11 +85,25 @@ pub const APP_DIR_NAME: &str = "jIRC";
 /// In priority: the `JIRC_DATA_DIR` env var, then — for a portable install — a
 /// `data/` folder next to the executable when a `portable.txt` marker sits
 /// beside it. `None` means "use the per-user OS directory".
-fn custom_base() -> Option<PathBuf> {
+fn custom_base(app: &AppHandle) -> Option<PathBuf> {
     let env = std::env::var("JIRC_DATA_DIR").ok();
     let exe = std::env::current_exe().ok();
     let exe_dir = exe.as_deref().and_then(|e| e.parent());
-    resolve_custom_base(env.as_deref(), exe_dir)
+    if let Some(b) = resolve_custom_base(env.as_deref(), exe_dir) {
+        return Some(b);
+    }
+    // A folder chosen in Settings is recorded as a `location.txt` redirect inside
+    // the default (per-profile) jIRC dir, which we always look in.
+    let default_base = app.path().config_dir().ok()?.join(APP_DIR_NAME);
+    read_location_redirect(&default_base)
+}
+
+/// Reads a saved custom data path from `<default_base>/location.txt` (written by
+/// the data-folder setting). Empty/whitespace means "no redirect".
+fn read_location_redirect(default_base: &std::path::Path) -> Option<PathBuf> {
+    let content = std::fs::read_to_string(default_base.join("location.txt")).ok()?;
+    let p = content.trim();
+    (!p.is_empty()).then(|| PathBuf::from(p))
 }
 
 /// Pure resolver for [`custom_base`] (so it can be unit-tested).
@@ -110,7 +126,7 @@ fn resolve_custom_base(env_override: Option<&str>, exe_dir: Option<&std::path::P
 /// `scriptdata/`. A custom location (env/portable) wins; otherwise it's
 /// `<os config dir>/jIRC`, under the user's profile.
 pub fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = match custom_base() {
+    let dir = match custom_base(app) {
         Some(b) => b,
         None => app
             .path()
@@ -125,7 +141,7 @@ pub fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
 /// Where `logs/` lives: the same custom base when set, else `<os data dir>/jIRC`
 /// (on Windows this is the same folder as [`config_dir`]).
 pub fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = match custom_base() {
+    let dir = match custom_base(app) {
         Some(b) => b,
         None => app
             .path()
@@ -144,6 +160,66 @@ pub fn dcc_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// The data-folder state, for the Settings dialog.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataLocation {
+    /// The folder data is currently stored in (resolved).
+    pub current: String,
+    /// The custom folder saved in Settings (empty = the default per-profile dir).
+    pub custom: String,
+    /// True when an env var (`JIRC_DATA_DIR`) or a portable install is forcing
+    /// the location — the Settings field can't override that until it's removed.
+    pub forced: bool,
+}
+
+/// Reports where data lives now, the saved custom path, and whether an
+/// env/portable override is in force.
+#[tauri::command]
+pub fn data_location(app: AppHandle) -> Result<DataLocation, String> {
+    let current = config_dir(&app)?.to_string_lossy().to_string();
+    let default_base = app
+        .path()
+        .config_dir()
+        .map_err(|e| e.to_string())?
+        .join(APP_DIR_NAME);
+    let custom = read_location_redirect(&default_base)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let exe = std::env::current_exe().ok();
+    let exe_dir = exe.as_deref().and_then(|e| e.parent());
+    let forced = resolve_custom_base(std::env::var("JIRC_DATA_DIR").ok().as_deref(), exe_dir).is_some();
+    Ok(DataLocation {
+        current,
+        custom,
+        forced,
+    })
+}
+
+/// Sets (or, with `None`/empty, clears) the custom data folder. Takes effect on
+/// the next launch; existing data is not moved.
+#[tauri::command]
+pub fn set_data_location(app: AppHandle, path: Option<String>) -> Result<(), String> {
+    let default_base = app
+        .path()
+        .config_dir()
+        .map_err(|e| e.to_string())?
+        .join(APP_DIR_NAME);
+    std::fs::create_dir_all(&default_base).map_err(|e| e.to_string())?;
+    let redirect = default_base.join("location.txt");
+    match path {
+        Some(p) if !p.trim().is_empty() => {
+            std::fs::write(&redirect, p.trim()).map_err(|e| e.to_string())
+        }
+        _ => {
+            if redirect.exists() {
+                std::fs::remove_file(&redirect).map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        }
+    }
+}
+
 fn logs_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app_data_dir(app)?.join("logs"))
 }
@@ -153,7 +229,7 @@ fn logs_dir(app: &AppHandle) -> Result<PathBuf, String> {
 /// migrated or on a fresh install.
 pub fn migrate_legacy_app_dir(app: &AppHandle) {
     // A custom/portable data dir has no per-profile legacy folder to migrate.
-    if custom_base().is_some() {
+    if custom_base(app).is_some() {
         return;
     }
     for base in [app.path().config_dir(), app.path().data_dir()] {
@@ -280,9 +356,25 @@ pub fn log_read(app: AppHandle, network: String, buffer: String) -> Result<Strin
 #[cfg(test)]
 mod tests {
     use super::{
-        keyring_available, load_secret, migrate_dir, resolve_custom_base, sanitize, store_secret,
-        APP_DIR_NAME,
+        keyring_available, load_secret, migrate_dir, read_location_redirect, resolve_custom_base,
+        sanitize, store_secret, APP_DIR_NAME,
     };
+
+    #[test]
+    fn reads_location_redirect() {
+        let tmp = std::env::temp_dir().join(format!("jirc-loc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        assert_eq!(read_location_redirect(&tmp), None); // no file
+        std::fs::write(tmp.join("location.txt"), "  \n").unwrap();
+        assert_eq!(read_location_redirect(&tmp), None); // whitespace
+        std::fs::write(tmp.join("location.txt"), "  D:/my data  \n").unwrap();
+        assert_eq!(
+            read_location_redirect(&tmp),
+            Some(std::path::PathBuf::from("D:/my data"))
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     fn custom_base_resolution() {

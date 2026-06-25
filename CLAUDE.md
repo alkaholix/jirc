@@ -93,9 +93,10 @@ jIRC/
 
 **Path resolution (`storage.rs`):** the base is, in priority — the
 `JIRC_DATA_DIR` env var; else a `data/` folder next to the exe when a
-`portable.txt` marker sits beside it (portable install); else
-`<os config dir>/jIRC` (default, under the profile, name = `APP_DIR_NAME`, not
-the bundle identifier `com.jirc.app`). `migrate_legacy_app_dir` renames an old
+`portable.txt` marker sits beside it (portable install); else a `location.txt`
+redirect in the default dir (a folder chosen in **Settings → Behaviour → Data
+folder** via `set_data_location`); else `<os config dir>/jIRC` (default, under
+the profile, name = `APP_DIR_NAME`, not the bundle identifier `com.jirc.app`). `migrate_legacy_app_dir` renames an old
 `com.jirc.app/` folder to `jIRC/` once at startup (skipped for custom bases).
 `config_dir`/`app_data_dir` differ only in the **default** case on Linux (OS
 config vs data dir); a custom base unifies them.

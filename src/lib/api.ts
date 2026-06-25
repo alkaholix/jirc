@@ -30,6 +30,15 @@ export interface ServerProfile {
   autojoin: string[];
 }
 
+export interface DataLocation {
+  /** The folder data is currently stored in (resolved). */
+  current: string;
+  /** The custom folder saved in Settings (empty = the default per-profile dir). */
+  custom: string;
+  /** True when an env var or portable install forces the location. */
+  forced: boolean;
+}
+
 export const api = {
   coreVersion: () => invoke<string>("core_version"),
 
@@ -69,6 +78,8 @@ export const api = {
   profilesSave: (profiles: ServerProfile[]) => invoke("profiles_save", { profiles }),
   profilesDelete: (id: string) => invoke("profiles_delete", { id }),
   keyringAvailable: () => invoke<boolean>("keyring_available"),
+  dataLocation: () => invoke<DataLocation>("data_location"),
+  setDataLocation: (path: string | null) => invoke("set_data_location", { path }),
   logAppend: (network: string, buffer: string, line: string) =>
     invoke("log_append", { network, buffer, line }),
   logRead: (network: string, buffer: string) => invoke<string>("log_read", { network, buffer }),

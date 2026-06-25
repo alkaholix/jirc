@@ -88,9 +88,10 @@ jIRC/
   scriptdata/     # sandbox for script file I/O ($read / /write)
 ```
 
-**Custom / portable location.** To store data elsewhere, either set the
-`JIRC_DATA_DIR` environment variable to a folder, or — for a portable install —
-put a `portable.txt` file next to the executable (then everything lives in a
+**Custom / portable location.** To store data elsewhere, pick a folder in
+**Settings → Behaviour → Data folder** (applies on restart). For an unattended
+or portable setup you can instead set the `JIRC_DATA_DIR` environment variable,
+or drop a `portable.txt` file next to the executable (then everything lives in a
 `data/` folder beside the app). App settings are kept in the webview's local
 storage. *(On Linux, the default `logs/` follow the OS data dir; a custom
 location keeps them together.)*

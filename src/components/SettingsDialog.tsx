@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { applyTheme, Layout, Theme, useSettings } from "../state/settings";
+import { api, DataLocation } from "../lib/api";
 
 const splitList = (value: string) =>
   value
@@ -24,6 +25,29 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [emoji, setEmoji] = useState<[string, string][]>(() =>
     Object.entries(settings.customEmoji ?? {})
   );
+  const [dataLoc, setDataLoc] = useState<DataLocation | null>(null);
+  const [customPath, setCustomPath] = useState("");
+  const [dataMsg, setDataMsg] = useState("");
+
+  useEffect(() => {
+    api
+      .dataLocation()
+      .then((d) => {
+        setDataLoc(d);
+        setCustomPath(d.custom);
+      })
+      .catch(() => {});
+  }, []);
+
+  const saveDataLoc = async () => {
+    await api.setDataLocation(customPath.trim() || null).catch(() => {});
+    const d = await api.dataLocation().catch(() => null);
+    if (d) {
+      setDataLoc(d);
+      setCustomPath(d.custom);
+    }
+    setDataMsg("Saved — restart jIRC to apply.");
+  };
 
   const syncEmoji = (pairs: [string, string][]) => {
     const rec: Record<string, string> = {};
@@ -248,6 +272,38 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               {toggle("rejoinOnReconnect", "Rejoin open channels after auto-reconnect")}
               {toggle("keepOpenOnKickQuit", "Keep channel windows open on kick / disconnect")}
               {toggle("showAway", "Show when users go away / come back")}
+              <div className="settings-label">Data folder</div>
+              {dataLoc && (
+                <>
+                  <div className="keyring-note ok">
+                    Currently stored in: <code>{dataLoc.current}</code>
+                  </div>
+                  {dataLoc.forced ? (
+                    <div className="keyring-note warn">
+                      Set by the <code>JIRC_DATA_DIR</code> env var or a portable install — change
+                      that to move it.
+                    </div>
+                  ) : (
+                    <>
+                      <label>
+                        Custom folder (leave blank for the default, under your profile)
+                        <input
+                          value={customPath}
+                          onChange={(e) => setCustomPath(e.target.value)}
+                          placeholder="e.g. D:\jIRC-data"
+                        />
+                      </label>
+                      <div className="row">
+                        <button onClick={saveDataLoc}>Save data folder</button>
+                        {dataMsg && <span className="keyring-note ok">{dataMsg}</span>}
+                      </div>
+                      <p className="cheat-tip">
+                        Restart jIRC to apply. Existing data isn't moved automatically.
+                      </p>
+                    </>
+                  )}
+                </>
+              )}
             </>
           )}
 
