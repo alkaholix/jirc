@@ -1683,6 +1683,26 @@ mod tests {
     }
 
     #[test]
+    fn ctcp_command_sends_and_echoes() {
+        let engine = ScriptEngine::new();
+        // A script /ctcp sends the request and echoes `-> [nick] CMD` locally.
+        engine.load("on *:TEXT:ping:#:/ctcp $nick version");
+        let ev = UiEvent::Message {
+            server_id: "s".into(),
+            kind: MessageKind::Privmsg,
+            from: Some("bob".into()),
+            target: "#chan".into(),
+            text: "ping".into(),
+            time: None,
+        };
+        let actions = drive_event(&engine, &ctx(), &ev);
+        assert!(actions.contains(&Action::Send("PRIVMSG bob :\u{1}VERSION\u{1}".into())));
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, Action::Echo { text, .. } if text == "-> [bob] VERSION")));
+    }
+
+    #[test]
     fn raw_event_matches_and_exposes_numeric_event() {
         let engine = ScriptEngine::new();
         engine.load("on *:RAW:001:/echo got $numeric ev $event p1 $1-\non *:RAW:PING:/echo gotping");

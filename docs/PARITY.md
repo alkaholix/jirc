@@ -505,7 +505,7 @@ out of scope.
 - [ ] `/creq` *(stub)*
 - [x] `/ctcp` *(send a CTCP request; `PING` reports a round-trip latency)*
 - [x] `/ctcpreply`
-- [ ] `/ctcps`
+- ~~`/ctcps`~~ — not a real mIRC command (the CTCP commands are `/ctcp` + `/ctcpreply`)
 - [x] `/dcc` *(chat both ways + **send/receive files** with progress bars; `/dcc chat`/`send`/`get`/`close`, a nicklist **DCC Chat / Send File** menu, downloads into the `dcc/` folder (`irc/dcc.rs` `DccManager`). Not yet: passive DCC, resume, `/dccserver`, `fserve`)*
 - [ ] `/dccserver`
 - [ ] `/dde` · [ ] `/ddeserver`

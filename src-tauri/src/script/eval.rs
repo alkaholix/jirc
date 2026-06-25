@@ -410,26 +410,37 @@ impl<'a> Runtime<'a> {
                 }
             }
             "ctcp" => {
-                // /ctcp <target> <ctcp> [params] — send a CTCP request (PRIVMSG).
-                // PING with no explicit param gets a millisecond timestamp so the
-                // reply yields a round-trip latency.
+                // /ctcp <target> <ctcp> [params] — send a CTCP request (PRIVMSG)
+                // and echo it locally as `-> [target] CTCP`, like mIRC. PING with
+                // no explicit param carries a millisecond timestamp so the reply
+                // yields a round-trip latency (kept out of the local echo).
                 let s = self.expand(raw_args);
                 let mut it = s.splitn(3, char::is_whitespace);
                 if let (Some(target), Some(ctcp)) = (it.next(), it.next()) {
                     let cmd = ctcp.to_ascii_uppercase();
-                    let body = match it.next().filter(|t| !t.is_empty()) {
+                    let extra = it.next().filter(|t| !t.is_empty());
+                    let shown = match extra {
                         Some(t) => format!("{cmd} {t}"),
-                        None if cmd == "PING" => {
+                        None => cmd.clone(),
+                    };
+                    let body = match (extra, cmd.as_str()) {
+                        (Some(t), _) => format!("{cmd} {t}"),
+                        (None, "PING") => {
                             let ms = std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .map(|d| d.as_millis())
                                 .unwrap_or(0);
                             format!("PING {ms}")
                         }
-                        None => cmd,
+                        (None, _) => cmd.clone(),
                     };
                     self.actions
                         .push(Action::Send(format!("PRIVMSG {target} :\u{1}{body}\u{1}")));
+                    let rt = self.reply_target();
+                    self.actions.push(Action::Echo {
+                        target: rt,
+                        text: format!("-> [{target}] {shown}"),
+                    });
                 }
             }
             "ctcpreply" => {
