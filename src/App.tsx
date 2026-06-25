@@ -13,6 +13,7 @@ import { SettingsDialog } from "./components/SettingsDialog";
 import { ScriptDialog } from "./components/ScriptDialog";
 import { ChannelListDialog } from "./components/ChannelListDialog";
 import { AutoJoinDialog } from "./components/AutoJoinDialog";
+import { TransfersPanel } from "./components/TransfersPanel";
 import { ChannelCentral } from "./components/ChannelCentral";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { PromptDialog } from "./components/PromptDialog";
@@ -241,6 +242,7 @@ function App() {
       <ConfirmDialog />
       <PromptDialog />
       <UserDialogs />
+      <TransfersPanel />
     </div>
   );
 }

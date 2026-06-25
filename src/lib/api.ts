@@ -258,6 +258,17 @@ export type IrcEvent =
       ip: string;
       port: number;
       size: number;
+    }
+  | {
+      type: "dccTransfer";
+      serverId: string;
+      id: string;
+      kind: string;
+      nick: string;
+      filename: string;
+      transferred: number;
+      size: number;
+      status: string;
     };
 
 export interface Member {

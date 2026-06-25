@@ -313,6 +313,18 @@ pub enum UiEvent {
         port: u16,
         size: u64,
     },
+    /// Progress/state of a DCC file transfer, for the transfers UI. `status` is
+    /// `active`/`done`/`error`; `kind` is `recv`/`send`.
+    DccTransfer {
+        server_id: String,
+        id: String,
+        kind: String,
+        nick: String,
+        filename: String,
+        transferred: u64,
+        size: u64,
+        status: String,
+    },
 }
 
 #[cfg(test)]

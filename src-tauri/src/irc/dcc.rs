@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use tauri::{AppHandle, Emitter, Manager};
@@ -312,19 +313,20 @@ impl DccManager {
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "received.bin".to_string());
             let path = dir.join(&base);
-            dcc_notice(
-                &app,
-                &server_id,
-                &format!("DCC: receiving \"{base}\" ({size} bytes) from {nick}…"),
-            );
-            match recv_into(&path, ip, port, size).await {
-                Ok(n) => dcc_notice(
-                    &app,
-                    &server_id,
-                    &format!("DCC: received \"{base}\" ({n} bytes) → {}", path.display()),
-                ),
+            let xid = format!("recv-{}", NEXT_XFER.fetch_add(1, Ordering::Relaxed));
+            emit_transfer(&app, &server_id, &xid, "recv", &nick, &base, 0, size, "active");
+            match recv_into(&app, &server_id, &xid, &nick, &base, &path, ip, port, size).await {
+                Ok(n) => {
+                    emit_transfer(&app, &server_id, &xid, "recv", &nick, &base, n, size, "done");
+                    dcc_notice(
+                        &app,
+                        &server_id,
+                        &format!("DCC: received \"{base}\" ({n} bytes) → {}", path.display()),
+                    );
+                }
                 Err(e) => {
-                    dcc_notice(&app, &server_id, &format!("DCC: failed to receive \"{base}\": {e}"))
+                    emit_transfer(&app, &server_id, &xid, "recv", &nick, &base, 0, size, "error");
+                    dcc_notice(&app, &server_id, &format!("DCC: failed to receive \"{base}\": {e}"));
                 }
             }
         });
@@ -392,7 +394,13 @@ fn emit_closed(app: &AppHandle, server_id: &str, id: &str) {
 /// Connects to a DCC SEND peer, streams the file to `path`, and acknowledges
 /// received bytes (the 4-byte big-endian running total DCC expects). Returns the
 /// number of bytes received.
+#[allow(clippy::too_many_arguments)]
 async fn recv_into(
+    app: &AppHandle,
+    server_id: &str,
+    xid: &str,
+    nick: &str,
+    base: &str,
     path: &std::path::Path,
     ip: Ipv4Addr,
     port: u16,
@@ -401,6 +409,7 @@ async fn recv_into(
     let mut stream = TcpStream::connect((ip, port)).await?;
     let mut file = tokio::fs::File::create(path).await?;
     let mut received: u64 = 0;
+    let mut last_emit: u64 = 0;
     let mut buf = [0u8; 8192];
     loop {
         let n = stream.read(&mut buf).await?;
@@ -411,6 +420,11 @@ async fn recv_into(
         received += n as u64;
         // Acknowledge the running total (4 bytes, big-endian; u32 per the DCC spec).
         let _ = stream.write_all(&(received as u32).to_be_bytes()).await;
+        // Throttle progress updates to ~64 KB steps.
+        if received - last_emit >= 65536 {
+            emit_transfer(app, server_id, xid, "recv", nick, base, received, size, "active");
+            last_emit = received;
+        }
         if size > 0 && received >= size {
             break;
         }
@@ -427,6 +441,37 @@ fn dcc_notice(app: &AppHandle, server_id: &str, text: &str) {
             server_id: server_id.to_string(),
             target: "(status)".to_string(),
             text: text.to_string(),
+        },
+    );
+}
+
+/// Monotonic id source for transfers, so the UI can track each independently.
+static NEXT_XFER: AtomicU64 = AtomicU64::new(1);
+
+/// Emits a [`UiEvent::DccTransfer`] for the transfers UI.
+#[allow(clippy::too_many_arguments)]
+fn emit_transfer(
+    app: &AppHandle,
+    server_id: &str,
+    id: &str,
+    kind: &str,
+    nick: &str,
+    filename: &str,
+    transferred: u64,
+    size: u64,
+    status: &str,
+) {
+    let _ = app.emit(
+        IRC_EVENT,
+        UiEvent::DccTransfer {
+            server_id: server_id.to_string(),
+            id: id.to_string(),
+            kind: kind.to_string(),
+            nick: nick.to_string(),
+            filename: filename.to_string(),
+            transferred,
+            size,
+            status: status.to_string(),
         },
     );
 }
