@@ -83,6 +83,7 @@ pub fn run() {
             commands::dcc_close,
             commands::dcc_recv,
             commands::dcc_send_file,
+            commands::dcc_configure,
             storage::profiles_load,
             storage::profiles_save,
             storage::profiles_delete,

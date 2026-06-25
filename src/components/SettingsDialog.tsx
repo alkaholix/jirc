@@ -304,6 +304,40 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   )}
                 </>
               )}
+              <div className="settings-label">DCC (file transfer)</div>
+              <label>
+                Your IP for DCC (blank = automatic / local network)
+                <input
+                  value={settings.dccIp}
+                  onChange={(e) => settings.set("dccIp", e.target.value)}
+                  placeholder="e.g. your public IP, for transfers over the internet"
+                />
+              </label>
+              <div className="row">
+                <label className="grow">
+                  Port from
+                  <input
+                    type="number"
+                    value={settings.dccPortFrom || ""}
+                    onChange={(e) => settings.set("dccPortFrom", Number(e.target.value) || 0)}
+                    placeholder="auto"
+                  />
+                </label>
+                <label className="grow">
+                  to
+                  <input
+                    type="number"
+                    value={settings.dccPortTo || ""}
+                    onChange={(e) => settings.set("dccPortTo", Number(e.target.value) || 0)}
+                    placeholder="auto"
+                  />
+                </label>
+              </div>
+              <p className="cheat-tip">
+                For DCC over the internet, set your public IP and a port range, then
+                forward that range to this PC on your router. On a single LAN, leave
+                these blank.
+              </p>
             </>
           )}
 

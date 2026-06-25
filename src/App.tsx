@@ -40,6 +40,9 @@ function App() {
   const layout = useSettings((s) => s.layout);
   const chatFont = useSettings((s) => s.chatFont);
   const chatFontSize = useSettings((s) => s.chatFontSize);
+  const dccIp = useSettings((s) => s.dccIp);
+  const dccPortFrom = useSettings((s) => s.dccPortFrom);
+  const dccPortTo = useSettings((s) => s.dccPortTo);
   const handleEvent = useStore((s) => s.handleEvent);
   const ensureServer = useStore((s) => s.ensureServer);
   const ensureBuffer = useStore((s) => s.ensureBuffer);
@@ -128,6 +131,11 @@ function App() {
   useEffect(() => {
     applyChatFont(chatFont, chatFontSize);
   }, [chatFont, chatFontSize]);
+
+  // Keep the backend DCC config (advertised IP + listen-port range) in sync.
+  useEffect(() => {
+    api.dccConfigure(dccIp, dccPortFrom, dccPortTo).catch(() => {});
+  }, [dccIp, dccPortFrom, dccPortTo]);
 
   // Detached single-window mode: render just one buffer in its own OS window.
   // (Empty string = a detached window whose route wasn't found; still not the main UI.)

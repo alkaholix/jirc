@@ -34,6 +34,11 @@ export interface Settings {
   skipMotd: boolean;
   showPingPong: boolean;
   trace: boolean;
+
+  // DCC networking (for transfers across NAT).
+  dccIp: string; // advertised IP; "" = auto (local IP)
+  dccPortFrom: number; // listen-port range; 0 = ephemeral
+  dccPortTo: number;
 }
 
 const DEFAULTS: Settings = {
@@ -59,6 +64,10 @@ const DEFAULTS: Settings = {
   skipMotd: false,
   showPingPong: false,
   trace: false,
+
+  dccIp: "",
+  dccPortFrom: 0,
+  dccPortTo: 0,
 };
 
 const STORAGE_KEY = "jirc.settings";

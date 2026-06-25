@@ -73,6 +73,8 @@ export const api = {
   ) => invoke("dcc_recv", { serverId, nick, filename, ip, port, size }),
   dccSendFile: (serverId: string, nick: string, path: string) =>
     invoke("dcc_send_file", { serverId, nick, path }),
+  dccConfigure: (ip: string, portFrom: number, portTo: number) =>
+    invoke("dcc_configure", { ip, portFrom, portTo }),
   part: (serverId: string, channel: string, reason?: string) =>
     invoke("irc_part", { serverId, channel, reason }),
   setNick: (serverId: string, nick: string) => invoke("irc_set_nick", { serverId, nick }),

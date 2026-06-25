@@ -203,10 +203,22 @@ struct DccChat {
     task: tauri::async_runtime::JoinHandle<()>,
 }
 
+/// DCC networking config (for transfers across NAT): the IP to advertise to peers
+/// and the listen-port range to bind, so the user can port-forward a known range.
+#[derive(Default, Clone)]
+pub struct DccConfig {
+    /// IP advertised in offers; empty = auto-detect the local IPv4.
+    pub ip: String,
+    /// Listen-port range. `port_from == 0` means use an ephemeral port.
+    pub port_from: u16,
+    pub port_to: u16,
+}
+
 /// Manages active DCC chat sessions, keyed by their `=nick` buffer id.
 #[derive(Default)]
 pub struct DccManager {
     chats: Mutex<HashMap<String, DccChat>>,
+    config: Mutex<DccConfig>,
 }
 
 impl DccManager {
@@ -214,12 +226,22 @@ impl DccManager {
         Self::default()
     }
 
+    /// Updates the advertised IP and listen-port range used for new offers.
+    pub fn configure(&self, ip: String, port_from: u16, port_to: u16) {
+        *self.config.lock().unwrap() = DccConfig {
+            ip,
+            port_from,
+            port_to,
+        };
+    }
+
     /// `/dcc chat <nick>` — listen on an ephemeral port, send the peer a CHAT
     /// offer over IRC, and accept their connection.
     pub fn chat(&self, app: AppHandle, server_id: String, nick: String) -> Result<(), String> {
-        let listener = std::net::TcpListener::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
-        let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-        let ip = local_ipv4().ok_or("could not determine the local IP address")?;
+        let cfg = self.config.lock().unwrap().clone();
+        let (listener, port) =
+            bind_in_range(cfg.port_from, cfg.port_to).ok_or("no free DCC port in range")?;
+        let ip = resolve_dcc_ip(&cfg.ip)?;
         let offer = format_chat_offer(ip, port);
         if let Some(m) = app.try_state::<ConnectionManager>() {
             let _ = m.send(&server_id, format!("PRIVMSG {nick} :\u{1}{offer}\u{1}"));
@@ -350,9 +372,10 @@ impl DccManager {
             .map(|s| s.to_string_lossy().to_string())
             .filter(|s| !s.is_empty())
             .ok_or("bad filename")?;
-        let listener = std::net::TcpListener::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
-        let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-        let ip = local_ipv4().ok_or("could not determine the local IP address")?;
+        let cfg = self.config.lock().unwrap().clone();
+        let (listener, port) =
+            bind_in_range(cfg.port_from, cfg.port_to).ok_or("no free DCC port in range")?;
+        let ip = resolve_dcc_ip(&cfg.ip)?;
         // DCC SEND filenames are space-delimited, so spaces become underscores.
         let offer = format_send_offer(&base.replace(' ', "_"), ip, port, size);
         if let Some(m) = app.try_state::<ConnectionManager>() {
@@ -580,6 +603,32 @@ fn local_ipv4() -> Option<Ipv4Addr> {
         std::net::IpAddr::V4(ip) => Some(ip),
         _ => None,
     }
+}
+
+/// Binds a listener in the configured port range (or an ephemeral port when
+/// `from == 0`), returning the listener and the chosen port.
+fn bind_in_range(from: u16, to: u16) -> Option<(std::net::TcpListener, u16)> {
+    if from == 0 {
+        let l = std::net::TcpListener::bind("0.0.0.0:0").ok()?;
+        let p = l.local_addr().ok()?.port();
+        return Some((l, p));
+    }
+    (from..=to.max(from)).find_map(|p| {
+        std::net::TcpListener::bind(("0.0.0.0", p))
+            .ok()
+            .map(|l| (l, p))
+    })
+}
+
+/// The IPv4 to advertise in offers: the configured IP if set, else the local one.
+fn resolve_dcc_ip(configured: &str) -> Result<Ipv4Addr, String> {
+    let c = configured.trim();
+    if !c.is_empty() {
+        return c
+            .parse::<Ipv4Addr>()
+            .map_err(|_| format!("invalid DCC IP: {c}"));
+    }
+    local_ipv4().ok_or_else(|| "could not determine the local IP address".to_string())
 }
 
 #[cfg(test)]

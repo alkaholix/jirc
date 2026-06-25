@@ -395,3 +395,14 @@ pub fn dcc_send_file(
 ) -> Result<(), String> {
     dcc.send_file(app.clone(), server_id, nick, std::path::PathBuf::from(path))
 }
+
+/// Sets the DCC IP to advertise and the listen-port range (for transfers across NAT).
+#[tauri::command]
+pub fn dcc_configure(
+    dcc: State<'_, crate::irc::dcc::DccManager>,
+    ip: String,
+    port_from: u16,
+    port_to: u16,
+) {
+    dcc.configure(ip, port_from, port_to);
+}
