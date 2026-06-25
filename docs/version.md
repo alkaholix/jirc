@@ -29,10 +29,10 @@ Newest first.
   mode; `scripts/`, `dcc/`, `logs/` and friends all live under one `jIRC` folder.
 
 ### Changed
-- **CTCP TIME** now replies with your **local time and UTC offset** (e.g.
-  `2026-06-25 14:32:10 +12:00`) instead of UTC — NZST/NZDT in New Zealand, the
-  local zone elsewhere, with DST handled automatically. This matches mIRC, which
-  replies with your own clock.
+- **CTCP TIME** now replies with the **weekday, your local date/time and UTC
+  offset** (e.g. `Thu 2026-06-25 14:32:10 +12:00`) instead of UTC — NZST/NZDT in
+  New Zealand, the local zone elsewhere, with DST handled automatically. This
+  matches mIRC, which replies with your own clock.
 - The app data folder was renamed from `com.jirc.app` to **`jIRC`**
   (auto-migrated once at startup).
 - Adopted **CalVer** versioning and started this log.

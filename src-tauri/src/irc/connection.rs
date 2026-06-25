@@ -1299,12 +1299,13 @@ fn ctcp_reply_pretty(ctcp: &str) -> String {
     ctcp.to_string()
 }
 
-/// A local-time timestamp for CTCP TIME, e.g. `2026-06-25 14:32:10 +12:00`.
-/// Uses the OS timezone — NZST/NZDT in New Zealand, the local zone elsewhere —
-/// matching mIRC, which replies with your own clock (and handling DST for free).
+/// A local-time timestamp for CTCP TIME, e.g. `Thu 2026-06-25 14:32:10 +12:00`
+/// (weekday + date + time + offset). Uses the OS timezone — NZST/NZDT in New
+/// Zealand, the local zone elsewhere — matching mIRC, which replies with your
+/// own clock (and handling DST for free).
 fn ctcp_time() -> String {
     chrono::Local::now()
-        .format("%Y-%m-%d %H:%M:%S %:z")
+        .format("%a %Y-%m-%d %H:%M:%S %:z")
         .to_string()
 }
 
