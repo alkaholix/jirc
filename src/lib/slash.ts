@@ -80,8 +80,15 @@ export async function handleInput(input: string, buffer: Buffer): Promise<void> 
         const id = name.startsWith("=") ? name : who ? `=${who}` : "";
         if (id) await api.dccClose(id).catch(() => {});
       } else if ((sub === "get" || sub === "accept") && who) {
-        const offer = dccOffers.take(serverId, who);
-        if (offer) await api.dccAccept(serverId, offer.nick, offer.ip, offer.port).catch(() => {});
+        const file = dccOffers.takeFile(serverId, who);
+        if (file) {
+          await api
+            .dccRecv(serverId, file.nick, file.filename, file.ip, file.port, file.size)
+            .catch(() => {});
+        } else {
+          const offer = dccOffers.take(serverId, who);
+          if (offer) await api.dccAccept(serverId, offer.nick, offer.ip, offer.port).catch(() => {});
+        }
       }
       break;
     }

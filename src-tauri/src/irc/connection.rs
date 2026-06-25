@@ -534,14 +534,24 @@ pub fn process_message(ctx: &mut Context, raw: &str, msg: Message) -> Effects {
                                 text: format!("[DCC] {who} offers a DCC CHAT — /dcc get {who} to accept"),
                             });
                         }
-                        Some(o) => fx.events.push(UiEvent::Echo {
-                            server_id,
-                            target: "(status)".to_string(),
-                            text: format!(
-                                "[DCC] {who} offers to send you \"{}\" ({} bytes) from {}:{}",
-                                o.filename, o.size, o.ip, o.port
-                            ),
-                        }),
+                        Some(o) => {
+                            fx.events.push(UiEvent::DccFileOffer {
+                                server_id: server_id.clone(),
+                                nick: who.clone(),
+                                filename: o.filename.clone(),
+                                ip: o.ip.to_string(),
+                                port: o.port,
+                                size: o.size,
+                            });
+                            fx.events.push(UiEvent::Echo {
+                                server_id,
+                                target: "(status)".to_string(),
+                                text: format!(
+                                    "[DCC] {who} offers to send you \"{}\" ({} bytes) — /dcc get {who} to accept",
+                                    o.filename, o.size
+                                ),
+                            });
+                        }
                         None => fx.events.push(UiEvent::Echo {
                             server_id,
                             target: "(status)".to_string(),

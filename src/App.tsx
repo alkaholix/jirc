@@ -67,6 +67,16 @@ function App() {
           if (ok) api.dccAccept(o.serverId, o.nick, o.ip, o.port).catch(() => {});
         });
       }
+      if (e.payload.type === "dccFileOffer" && detachedKey === null) {
+        const o = e.payload;
+        confirmDialog(
+          `${o.nick} wants to send you "${o.filename}" (${o.size} bytes). Download it?`,
+          { title: "DCC file offer", confirmLabel: "Download" }
+        ).then((ok) => {
+          if (ok)
+            api.dccRecv(o.serverId, o.nick, o.filename, o.ip, o.port, o.size).catch(() => {});
+        });
+      }
     });
     return () => {
       unlisten.then((f) => f());

@@ -304,6 +304,15 @@ pub enum UiEvent {
         ip: String,
         port: u16,
     },
+    /// An incoming DCC SEND (file) offer the user can accept to download.
+    DccFileOffer {
+        server_id: String,
+        nick: String,
+        filename: String,
+        ip: String,
+        port: u16,
+        size: u64,
+    },
 }
 
 #[cfg(test)]

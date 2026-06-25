@@ -80,6 +80,7 @@ pub fn run() {
             commands::dcc_accept,
             commands::dcc_send,
             commands::dcc_close,
+            commands::dcc_recv,
             storage::profiles_load,
             storage::profiles_save,
             storage::profiles_delete,

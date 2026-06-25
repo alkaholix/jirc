@@ -63,6 +63,14 @@ export const api = {
     invoke("dcc_accept", { serverId, nick, ip, port }),
   dccSend: (id: string, text: string) => invoke("dcc_send", { id, text }),
   dccClose: (id: string) => invoke("dcc_close", { id }),
+  dccRecv: (
+    serverId: string,
+    nick: string,
+    filename: string,
+    ip: string,
+    port: number,
+    size: number
+  ) => invoke("dcc_recv", { serverId, nick, filename, ip, port, size }),
   part: (serverId: string, channel: string, reason?: string) =>
     invoke("irc_part", { serverId, channel, reason }),
   setNick: (serverId: string, nick: string) => invoke("irc_set_nick", { serverId, nick }),
@@ -241,7 +249,16 @@ export type IrcEvent =
   | { type: "dccChatOpen"; serverId: string; id: string; nick: string; outgoing: boolean }
   | { type: "dccChatLine"; serverId: string; id: string; from: string; text: string }
   | { type: "dccChatClosed"; serverId: string; id: string }
-  | { type: "dccChatOffer"; serverId: string; nick: string; ip: string; port: number };
+  | { type: "dccChatOffer"; serverId: string; nick: string; ip: string; port: number }
+  | {
+      type: "dccFileOffer";
+      serverId: string;
+      nick: string;
+      filename: string;
+      ip: string;
+      port: number;
+      size: number;
+    };
 
 export interface Member {
   nick: string;

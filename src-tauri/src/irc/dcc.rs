@@ -16,7 +16,7 @@ use std::net::Ipv4Addr;
 use std::sync::Mutex;
 
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
@@ -285,6 +285,50 @@ impl DccManager {
             c.task.abort();
         }
     }
+
+    /// Accept an incoming DCC SEND offer: connect, download into the `dcc/`
+    /// folder, and acknowledge bytes as they arrive.
+    pub fn recv_file(
+        &self,
+        app: AppHandle,
+        server_id: String,
+        nick: String,
+        filename: String,
+        ip: Ipv4Addr,
+        port: u16,
+        size: u64,
+    ) {
+        tauri::async_runtime::spawn(async move {
+            let dir = match crate::storage::dcc_dir(&app) {
+                Ok(d) => d,
+                Err(e) => {
+                    return dcc_notice(&app, &server_id, &format!("DCC: can't open the dcc folder: {e}"));
+                }
+            };
+            // Use only the file's base name, to avoid path traversal.
+            let base = std::path::Path::new(&filename)
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "received.bin".to_string());
+            let path = dir.join(&base);
+            dcc_notice(
+                &app,
+                &server_id,
+                &format!("DCC: receiving \"{base}\" ({size} bytes) from {nick}…"),
+            );
+            match recv_into(&path, ip, port, size).await {
+                Ok(n) => dcc_notice(
+                    &app,
+                    &server_id,
+                    &format!("DCC: received \"{base}\" ({n} bytes) → {}", path.display()),
+                ),
+                Err(e) => {
+                    dcc_notice(&app, &server_id, &format!("DCC: failed to receive \"{base}\": {e}"))
+                }
+            }
+        });
+    }
 }
 
 async fn run_chat(
@@ -341,6 +385,48 @@ fn emit_closed(app: &AppHandle, server_id: &str, id: &str) {
         UiEvent::DccChatClosed {
             server_id: server_id.to_string(),
             id: id.to_string(),
+        },
+    );
+}
+
+/// Connects to a DCC SEND peer, streams the file to `path`, and acknowledges
+/// received bytes (the 4-byte big-endian running total DCC expects). Returns the
+/// number of bytes received.
+async fn recv_into(
+    path: &std::path::Path,
+    ip: Ipv4Addr,
+    port: u16,
+    size: u64,
+) -> std::io::Result<u64> {
+    let mut stream = TcpStream::connect((ip, port)).await?;
+    let mut file = tokio::fs::File::create(path).await?;
+    let mut received: u64 = 0;
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = stream.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        file.write_all(&buf[..n]).await?;
+        received += n as u64;
+        // Acknowledge the running total (4 bytes, big-endian; u32 per the DCC spec).
+        let _ = stream.write_all(&(received as u32).to_be_bytes()).await;
+        if size > 0 && received >= size {
+            break;
+        }
+    }
+    file.flush().await?;
+    Ok(received)
+}
+
+/// Emits a `[DCC]` status notice to the status window.
+fn dcc_notice(app: &AppHandle, server_id: &str, text: &str) {
+    let _ = app.emit(
+        IRC_EVENT,
+        UiEvent::Echo {
+            server_id: server_id.to_string(),
+            target: "(status)".to_string(),
+            text: text.to_string(),
         },
     );
 }

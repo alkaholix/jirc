@@ -366,3 +366,20 @@ pub fn dcc_send(dcc: State<'_, crate::irc::dcc::DccManager>, id: String, text: S
 pub fn dcc_close(dcc: State<'_, crate::irc::dcc::DccManager>, id: String) {
     dcc.close(&id);
 }
+
+/// Accepts an incoming DCC SEND offer and downloads the file into the `dcc/` folder.
+#[tauri::command]
+pub fn dcc_recv(
+    app: AppHandle,
+    dcc: State<'_, crate::irc::dcc::DccManager>,
+    server_id: String,
+    nick: String,
+    filename: String,
+    ip: String,
+    port: u16,
+    size: u64,
+) -> Result<(), String> {
+    let addr: std::net::Ipv4Addr = ip.parse().map_err(|_| "invalid DCC IP".to_string())?;
+    dcc.recv_file(app.clone(), server_id, nick, filename, addr, port, size);
+    Ok(())
+}

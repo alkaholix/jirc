@@ -505,7 +505,7 @@ out of scope.
 - [ ] `/creq` *(stub)*
 - [x] `/ctcpreply`
 - [ ] `/ctcps`
-- [ ] `/dcc *` *(DCC **chat works** both ways — `/dcc chat <nick>` offers + listens, `/dcc get <nick>` accepts an incoming offer; lines go over the peer socket in a `=nick` buffer (`irc/dcc.rs` `DccManager`). File **send/get** transfers are the remaining piece)*
+- [ ] `/dcc *` *(DCC **chat** both ways + **receiving files** work — `/dcc chat` + a `=nick` buffer; an incoming SEND pops a Download prompt (or `/dcc get <nick>`) that downloads into the `dcc/` folder with ACKs (`irc/dcc.rs` `DccManager`). **Sending** a file (`/dcc send`) is the remaining piece)*
 - [ ] `/dccserver`
 - [ ] `/dde` · [ ] `/ddeserver`
 - [ ] `/debug` *(stub)*
