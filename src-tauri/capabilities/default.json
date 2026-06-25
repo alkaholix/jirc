@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Default capability set granted to the main window and detached buffer windows.",
   "windows": ["main", "detached-*"],
-  "permissions": ["core:default", "notification:default", "opener:allow-open-url"]
+  "permissions": ["core:default", "notification:default", "opener:allow-open-url", "dialog:allow-open"]
 }

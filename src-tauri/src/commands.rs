@@ -383,3 +383,15 @@ pub fn dcc_recv(
     dcc.recv_file(app.clone(), server_id, nick, filename, addr, port, size);
     Ok(())
 }
+
+/// `/dcc send <nick> <file>` — offer and stream a local file to `nick`.
+#[tauri::command]
+pub fn dcc_send_file(
+    app: AppHandle,
+    dcc: State<'_, crate::irc::dcc::DccManager>,
+    server_id: String,
+    nick: String,
+    path: String,
+) -> Result<(), String> {
+    dcc.send_file(app.clone(), server_id, nick, std::path::PathBuf::from(path))
+}

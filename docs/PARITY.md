@@ -505,7 +505,7 @@ out of scope.
 - [ ] `/creq` *(stub)*
 - [x] `/ctcpreply`
 - [ ] `/ctcps`
-- [ ] `/dcc *` *(DCC **chat** both ways + **receiving files** work — `/dcc chat` + a `=nick` buffer; an incoming SEND pops a Download prompt (or `/dcc get <nick>`) that downloads into the `dcc/` folder with ACKs (`irc/dcc.rs` `DccManager`). **Sending** a file (`/dcc send`) is the remaining piece)*
+- [x] `/dcc` *(chat both ways + **send/receive files** with progress bars; `/dcc chat`/`send`/`get`/`close`, a nicklist **DCC Chat / Send File** menu, downloads into the `dcc/` folder (`irc/dcc.rs` `DccManager`). Not yet: passive DCC, resume, `/dccserver`, `fserve`)*
 - [ ] `/dccserver`
 - [ ] `/dde` · [ ] `/ddeserver`
 - [ ] `/debug` *(stub)*

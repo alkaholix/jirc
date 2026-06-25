@@ -331,6 +331,62 @@ impl DccManager {
             }
         });
     }
+
+    /// `/dcc send <nick> <file>` — offer a file, listen, and stream it on connect.
+    pub fn send_file(
+        &self,
+        app: AppHandle,
+        server_id: String,
+        nick: String,
+        path: std::path::PathBuf,
+    ) -> Result<(), String> {
+        let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+        if !meta.is_file() {
+            return Err("not a file".to_string());
+        }
+        let size = meta.len();
+        let base = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .filter(|s| !s.is_empty())
+            .ok_or("bad filename")?;
+        let listener = std::net::TcpListener::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
+        let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+        let ip = local_ipv4().ok_or("could not determine the local IP address")?;
+        // DCC SEND filenames are space-delimited, so spaces become underscores.
+        let offer = format_send_offer(&base.replace(' ', "_"), ip, port, size);
+        if let Some(m) = app.try_state::<ConnectionManager>() {
+            let _ = m.send(&server_id, format!("PRIVMSG {nick} :\u{1}{offer}\u{1}"));
+        }
+        let xid = format!("send-{}", NEXT_XFER.fetch_add(1, Ordering::Relaxed));
+        emit_transfer(&app, &server_id, &xid, "send", &nick, &base, 0, size, "active");
+        tauri::async_runtime::spawn(async move {
+            let accepted = match TcpListener::from_std(listener) {
+                Ok(l) => l.accept().await.map(|(s, _)| s),
+                Err(e) => Err(e),
+            };
+            match accepted {
+                Ok(stream) => {
+                    match send_into(&app, &server_id, &xid, &nick, &base, &path, stream, size).await
+                    {
+                        Ok(n) => {
+                            emit_transfer(&app, &server_id, &xid, "send", &nick, &base, n, size, "done");
+                            dcc_notice(&app, &server_id, &format!("DCC: sent \"{base}\" ({n} bytes) to {nick}"));
+                        }
+                        Err(e) => {
+                            emit_transfer(&app, &server_id, &xid, "send", &nick, &base, 0, size, "error");
+                            dcc_notice(&app, &server_id, &format!("DCC: failed sending \"{base}\": {e}"));
+                        }
+                    }
+                }
+                Err(_) => {
+                    emit_transfer(&app, &server_id, &xid, "send", &nick, &base, 0, size, "error");
+                    dcc_notice(&app, &server_id, &format!("DCC: \"{base}\" was not accepted by {nick}"));
+                }
+            }
+        });
+        Ok(())
+    }
 }
 
 async fn run_chat(
@@ -431,6 +487,45 @@ async fn recv_into(
     }
     file.flush().await?;
     Ok(received)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn send_into(
+    app: &AppHandle,
+    server_id: &str,
+    xid: &str,
+    nick: &str,
+    base: &str,
+    path: &std::path::Path,
+    stream: TcpStream,
+    size: u64,
+) -> std::io::Result<u64> {
+    let (mut rd, mut wr) = stream.into_split();
+    // Drain the receiver's 4-byte ACKs concurrently so it can never block on us.
+    let acks = tauri::async_runtime::spawn(async move {
+        let mut b = [0u8; 64];
+        while rd.read(&mut b).await.map(|n| n > 0).unwrap_or(false) {}
+    });
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut sent: u64 = 0;
+    let mut last_emit: u64 = 0;
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = file.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        wr.write_all(&buf[..n]).await?;
+        sent += n as u64;
+        if sent - last_emit >= 65536 {
+            emit_transfer(app, server_id, xid, "send", nick, base, sent, size, "active");
+            last_emit = sent;
+        }
+    }
+    wr.flush().await?;
+    drop(wr); // EOF to the receiver
+    acks.abort();
+    Ok(sent)
 }
 
 /// Emits a `[DCC]` status notice to the status window.

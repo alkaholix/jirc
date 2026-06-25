@@ -76,6 +76,9 @@ export async function handleInput(input: string, buffer: Buffer): Promise<void> 
       const who = rest[1];
       if (sub === "chat" && who) {
         await api.dccChat(serverId, who).catch(() => {});
+      } else if (sub === "send" && who) {
+        const path = rest.slice(2).join(" ");
+        if (path) await api.dccSendFile(serverId, who, path).catch(() => {});
       } else if (sub === "close") {
         const id = name.startsWith("=") ? name : who ? `=${who}` : "";
         if (id) await api.dccClose(id).catch(() => {});

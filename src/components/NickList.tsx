@@ -7,6 +7,7 @@ import { ircxDisplay } from "../lib/ircx";
 import { handleInput } from "../lib/slash";
 import { promptDialog } from "../state/prompt";
 import { iconKey, useNickIcons } from "../state/nickIcons";
+import { open } from "@tauri-apps/plugin-dialog";
 
 const isUrl = (s: string) => /^(https?:|data:)/i.test(s);
 
@@ -145,6 +146,19 @@ export function NickList({ buffer }: { buffer: Buffer }) {
     }
   };
 
+  const dccChat = (nick: string) => {
+    api.dccChat(serverId, nick).catch(() => {});
+    setMenu(null);
+  };
+
+  const dccSend = async (nick: string) => {
+    setMenu(null);
+    const picked = await open({ multiple: false, title: `Send a file to ${nick}` }).catch(
+      () => null
+    );
+    if (typeof picked === "string") api.dccSendFile(serverId, nick, picked).catch(() => {});
+  };
+
   // Runs a script popup command with $1 = selected nick, $chan = channel.
   const runPopup = (command: string, nick: string) => {
     api
@@ -208,6 +222,9 @@ export function NickList({ buffer }: { buffer: Buffer }) {
                 <button onClick={() => raw(`WHOIS ${menu.nick}`)}>Whois</button>
                 <button onClick={() => openQuery(menu.nick)}>Query</button>
                 <button onClick={() => whisper(menu.nick)}>Whisper…</button>
+                <div className="menu-sep" />
+                <button onClick={() => dccChat(menu.nick)}>DCC Chat</button>
+                <button onClick={() => dccSend(menu.nick)}>DCC Send File…</button>
                 <div className="menu-sep" />
                 <button onClick={() => raw(`MODE ${channel} +q ${menu.nick}`)}>Owner (+q)</button>
                 <button onClick={() => raw(`MODE ${channel} -q ${menu.nick}`)}>Deowner (-q)</button>

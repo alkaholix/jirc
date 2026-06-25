@@ -28,6 +28,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(ConnectionManager::new())
         .manage(ScriptEngine::new())
         .manage(script::socket::SocketManager::new())
@@ -81,6 +82,7 @@ pub fn run() {
             commands::dcc_send,
             commands::dcc_close,
             commands::dcc_recv,
+            commands::dcc_send_file,
             storage::profiles_load,
             storage::profiles_save,
             storage::profiles_delete,
