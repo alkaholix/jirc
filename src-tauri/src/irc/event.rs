@@ -297,6 +297,13 @@ pub enum UiEvent {
         server_id: String,
         id: String,
     },
+    /// An incoming DCC CHAT offer the user can accept (connect to `ip:port`).
+    DccChatOffer {
+        server_id: String,
+        nick: String,
+        ip: String,
+        port: u16,
+    },
 }
 
 #[cfg(test)]

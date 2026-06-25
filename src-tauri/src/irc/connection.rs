@@ -517,24 +517,37 @@ pub fn process_message(ctx: &mut Context, raw: &str, msg: Message) -> Effects {
                 // A DCC offer (CHAT/SEND) — surface it to the user. (Connecting to
                 // accept it is a later phase; for now incoming offers are visible.)
                 if cmd.eq_ignore_ascii_case("DCC") {
-                    let who = source.as_deref().unwrap_or("?");
-                    let note = match crate::irc::dcc::parse_dcc(ctcp) {
-                        Some(o) => match o.kind {
-                            crate::irc::dcc::DccKind::Chat => {
-                                format!("{who} offers a DCC CHAT ({}:{})", o.ip, o.port)
-                            }
-                            crate::irc::dcc::DccKind::Send => format!(
-                                "{who} offers to send you \"{}\" ({} bytes) from {}:{}",
+                    let who = source.as_deref().unwrap_or("?").to_string();
+                    match crate::irc::dcc::parse_dcc(ctcp) {
+                        // A CHAT offer is acceptable — surface it structurally so the
+                        // UI can connect (`/dcc get <nick>`).
+                        Some(o) if o.kind == crate::irc::dcc::DccKind::Chat => {
+                            fx.events.push(UiEvent::DccChatOffer {
+                                server_id: server_id.clone(),
+                                nick: who.clone(),
+                                ip: o.ip.to_string(),
+                                port: o.port,
+                            });
+                            fx.events.push(UiEvent::Echo {
+                                server_id,
+                                target: "(status)".to_string(),
+                                text: format!("[DCC] {who} offers a DCC CHAT — /dcc get {who} to accept"),
+                            });
+                        }
+                        Some(o) => fx.events.push(UiEvent::Echo {
+                            server_id,
+                            target: "(status)".to_string(),
+                            text: format!(
+                                "[DCC] {who} offers to send you \"{}\" ({} bytes) from {}:{}",
                                 o.filename, o.size, o.ip, o.port
                             ),
-                        },
-                        None => format!("{who} sent an unrecognised DCC request: {rest}"),
-                    };
-                    fx.events.push(UiEvent::Echo {
-                        server_id,
-                        target: "(status)".to_string(),
-                        text: format!("[DCC] {note}"),
-                    });
+                        }),
+                        None => fx.events.push(UiEvent::Echo {
+                            server_id,
+                            target: "(status)".to_string(),
+                            text: format!("[DCC] {who} sent an unrecognised DCC request: {rest}"),
+                        }),
+                    }
                     return fx;
                 }
                 if !cmd.eq_ignore_ascii_case("ACTION") {

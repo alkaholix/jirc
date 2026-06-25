@@ -505,7 +505,7 @@ out of scope.
 - [ ] `/creq` *(stub)*
 - [x] `/ctcpreply`
 - [ ] `/ctcps`
-- [ ] `/dcc *` *(in progress — phase 1: CTCP handshake parse/format (`irc/dcc.rs`) + incoming-offer detection done; connect-to-accept, transfers, and the `/dcc` command pending)*
+- [ ] `/dcc *` *(DCC **chat works** both ways — `/dcc chat <nick>` offers + listens, `/dcc get <nick>` accepts an incoming offer; lines go over the peer socket in a `=nick` buffer (`irc/dcc.rs` `DccManager`). File **send/get** transfers are the remaining piece)*
 - [ ] `/dccserver`
 - [ ] `/dde` · [ ] `/ddeserver`
 - [ ] `/debug` *(stub)*

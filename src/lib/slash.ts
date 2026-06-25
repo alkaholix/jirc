@@ -3,6 +3,7 @@ import { bufferKey, Buffer, useStore } from "../state/store";
 import { useSettings } from "../state/settings";
 import { useUrlGrabber } from "../state/urlGrabber";
 import { useChannelCentral } from "../state/channelModes";
+import { dccOffers } from "../state/dcc";
 import { expandEmoji } from "./emoji";
 
 const ACTION = "\x01ACTION ";
@@ -78,6 +79,9 @@ export async function handleInput(input: string, buffer: Buffer): Promise<void> 
       } else if (sub === "close") {
         const id = name.startsWith("=") ? name : who ? `=${who}` : "";
         if (id) await api.dccClose(id).catch(() => {});
+      } else if ((sub === "get" || sub === "accept") && who) {
+        const offer = dccOffers.take(serverId, who);
+        if (offer) await api.dccAccept(serverId, offer.nick, offer.ip, offer.port).catch(() => {});
       }
       break;
     }

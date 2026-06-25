@@ -240,7 +240,8 @@ export type IrcEvent =
   | { type: "windowLine"; serverId: string; name: string; op: string; n: number; text: string }
   | { type: "dccChatOpen"; serverId: string; id: string; nick: string; outgoing: boolean }
   | { type: "dccChatLine"; serverId: string; id: string; from: string; text: string }
-  | { type: "dccChatClosed"; serverId: string; id: string };
+  | { type: "dccChatClosed"; serverId: string; id: string }
+  | { type: "dccChatOffer"; serverId: string; nick: string; ip: string; port: number };
 
 export interface Member {
   nick: string;
