@@ -12,7 +12,7 @@
 //! **offerer listens** on `<port>` while the **receiver connects** to it.
 
 use std::collections::HashMap;
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
@@ -37,7 +37,7 @@ pub struct DccOffer {
     pub kind: DccKind,
     /// The offered filename for `SEND` (empty for `CHAT`).
     pub filename: String,
-    pub ip: Ipv4Addr,
+    pub ip: IpAddr,
     pub port: u16,
     /// The file size in bytes for `SEND` (`0` when absent or for `CHAT`).
     pub size: u64,
@@ -53,6 +53,24 @@ pub fn ip_to_dcc(ip: Ipv4Addr) -> u32 {
 /// Decodes DCC's decimal 32-bit integer IP back into an address.
 pub fn dcc_to_ip(n: u32) -> Ipv4Addr {
     Ipv4Addr::from(n)
+}
+
+/// Parses a DCC IP field: an IPv6 literal (has `:`) or DCC's decimal 32-bit
+/// integer for IPv4.
+fn parse_dcc_ip(s: &str) -> Option<IpAddr> {
+    if s.contains(':') {
+        s.parse::<Ipv6Addr>().ok().map(IpAddr::V6)
+    } else {
+        s.parse::<u32>().ok().map(|n| IpAddr::V4(dcc_to_ip(n)))
+    }
+}
+
+/// Formats an IP for a DCC offer: the 32-bit integer for IPv4, the literal for IPv6.
+fn dcc_ip_str(ip: IpAddr) -> String {
+    match ip {
+        IpAddr::V4(v4) => ip_to_dcc(v4).to_string(),
+        IpAddr::V6(v6) => v6.to_string(),
+    }
 }
 
 fn unquote(s: &str) -> String {
@@ -76,7 +94,7 @@ pub fn parse_dcc(payload: &str) -> Option<DccOffer> {
 
     if kind.eq_ignore_ascii_case("CHAT") {
         let _proto = head.next()?; // the literal "chat"
-        let ip = dcc_to_ip(head.next()?.parse::<u32>().ok()?);
+        let ip = parse_dcc_ip(head.next()?)?;
         let port = head.next()?.parse::<u16>().ok()?;
         return Some(DccOffer {
             kind: DccKind::Chat,
@@ -95,15 +113,15 @@ pub fn parse_dcc(payload: &str) -> Option<DccOffer> {
         let rest = payload.splitn(3, char::is_whitespace).nth(2)?.trim();
         let w: Vec<&str> = rest.rsplitn(4, char::is_whitespace).collect();
         if w.len() == 4 {
-            if let (Ok(size), Ok(port), Ok(ipn)) = (
+            if let (Ok(size), Ok(port), Some(ip)) = (
                 w[0].parse::<u64>(),
                 w[1].parse::<u16>(),
-                w[2].parse::<u32>(),
+                parse_dcc_ip(w[2]),
             ) {
                 return Some(DccOffer {
                     kind: DccKind::Send,
                     filename: unquote(w[3]),
-                    ip: dcc_to_ip(ipn),
+                    ip,
                     port,
                     size,
                 });
@@ -111,11 +129,11 @@ pub fn parse_dcc(payload: &str) -> Option<DccOffer> {
         }
         let w: Vec<&str> = rest.rsplitn(3, char::is_whitespace).collect();
         if w.len() == 3 {
-            if let (Ok(port), Ok(ipn)) = (w[0].parse::<u16>(), w[1].parse::<u32>()) {
+            if let (Ok(port), Some(ip)) = (w[0].parse::<u16>(), parse_dcc_ip(w[1])) {
                 return Some(DccOffer {
                     kind: DccKind::Send,
                     filename: unquote(w[2]),
-                    ip: dcc_to_ip(ipn),
+                    ip,
                     port,
                     size: 0,
                 });
@@ -130,20 +148,20 @@ pub fn parse_dcc(payload: &str) -> Option<DccOffer> {
 /// Builds the CTCP payload for an outgoing DCC CHAT offer (caller wraps it in
 /// `\x01` and a `PRIVMSG`).
 #[allow(dead_code)] // wired in the DCC connect/send phase
-pub fn format_chat_offer(ip: Ipv4Addr, port: u16) -> String {
-    format!("DCC CHAT chat {} {}", ip_to_dcc(ip), port)
+pub fn format_chat_offer(ip: IpAddr, port: u16) -> String {
+    format!("DCC CHAT chat {} {}", dcc_ip_str(ip), port)
 }
 
 /// Builds the CTCP payload for an outgoing DCC SEND offer. Filenames containing
 /// spaces are quoted.
 #[allow(dead_code)] // wired in the DCC connect/send phase
-pub fn format_send_offer(filename: &str, ip: Ipv4Addr, port: u16, size: u64) -> String {
+pub fn format_send_offer(filename: &str, ip: IpAddr, port: u16, size: u64) -> String {
     let name = if filename.contains(' ') {
         format!("\"{filename}\"")
     } else {
         filename.to_string()
     };
-    format!("DCC SEND {} {} {} {}", name, ip_to_dcc(ip), port, size)
+    format!("DCC SEND {} {} {} {}", name, dcc_ip_str(ip), port, size)
 }
 
 /// A parsed `/dcc` subcommand (the part after `/dcc`).
@@ -239,9 +257,9 @@ impl DccManager {
     /// offer over IRC, and accept their connection.
     pub fn chat(&self, app: AppHandle, server_id: String, nick: String) -> Result<(), String> {
         let cfg = self.config.lock().unwrap().clone();
-        let (listener, port) =
-            bind_in_range(cfg.port_from, cfg.port_to).ok_or("no free DCC port in range")?;
         let ip = resolve_dcc_ip(&cfg.ip)?;
+        let (listener, port) =
+            bind_in_range(ip, cfg.port_from, cfg.port_to).ok_or("no free DCC port in range")?;
         let offer = format_chat_offer(ip, port);
         if let Some(m) = app.try_state::<ConnectionManager>() {
             let _ = m.send(&server_id, format!("PRIVMSG {nick} :\u{1}{offer}\u{1}"));
@@ -273,7 +291,7 @@ impl DccManager {
     }
 
     /// Accept an incoming offer by connecting to `ip:port`.
-    pub fn accept(&self, app: AppHandle, server_id: String, nick: String, ip: Ipv4Addr, port: u16) {
+    pub fn accept(&self, app: AppHandle, server_id: String, nick: String, ip: IpAddr, port: u16) {
         let id = format!("={nick}");
         let _ = app.emit(
             IRC_EVENT,
@@ -317,7 +335,7 @@ impl DccManager {
         server_id: String,
         nick: String,
         filename: String,
-        ip: Ipv4Addr,
+        ip: IpAddr,
         port: u16,
         size: u64,
     ) {
@@ -373,9 +391,9 @@ impl DccManager {
             .filter(|s| !s.is_empty())
             .ok_or("bad filename")?;
         let cfg = self.config.lock().unwrap().clone();
-        let (listener, port) =
-            bind_in_range(cfg.port_from, cfg.port_to).ok_or("no free DCC port in range")?;
         let ip = resolve_dcc_ip(&cfg.ip)?;
+        let (listener, port) =
+            bind_in_range(ip, cfg.port_from, cfg.port_to).ok_or("no free DCC port in range")?;
         // DCC SEND filenames are space-delimited, so spaces become underscores.
         let offer = format_send_offer(&base.replace(' ', "_"), ip, port, size);
         if let Some(m) = app.try_state::<ConnectionManager>() {
@@ -481,7 +499,7 @@ async fn recv_into(
     nick: &str,
     base: &str,
     path: &std::path::Path,
-    ip: Ipv4Addr,
+    ip: IpAddr,
     port: u16,
     size: u64,
 ) -> std::io::Result<u64> {
@@ -605,30 +623,50 @@ fn local_ipv4() -> Option<Ipv4Addr> {
     }
 }
 
-/// Binds a listener in the configured port range (or an ephemeral port when
-/// `from == 0`), returning the listener and the chosen port.
-fn bind_in_range(from: u16, to: u16) -> Option<(std::net::TcpListener, u16)> {
+/// The machine's routable global IPv6, if any (skips link-local `fe80::`). This
+/// is what makes DCC work through CGNAT, where IPv4 has no reachable port.
+fn local_ipv6() -> Option<Ipv6Addr> {
+    let sock = std::net::UdpSocket::bind("[::]:0").ok()?;
+    sock.connect("[2001:4860:4860::8888]:80").ok()?;
+    match sock.local_addr().ok()?.ip() {
+        IpAddr::V6(ip) if !ip.is_loopback() && (ip.segments()[0] & 0xffc0) != 0xfe80 => Some(ip),
+        _ => None,
+    }
+}
+
+/// The IP to auto-fill in the DCC settings: a routable global IPv6 (which works
+/// through CGNAT) if the machine has one, else empty so the UI falls back to the
+/// USERHOST-detected IPv4.
+pub fn detect_local_ip() -> String {
+    local_ipv6().map(|v6| v6.to_string()).unwrap_or_default()
+}
+
+/// Binds a listener (on the advertised IP's family) in the configured port range,
+/// or an ephemeral port when `from == 0`. Returns the listener and chosen port.
+fn bind_in_range(ip: IpAddr, from: u16, to: u16) -> Option<(std::net::TcpListener, u16)> {
+    let any: IpAddr = if ip.is_ipv6() {
+        Ipv6Addr::UNSPECIFIED.into()
+    } else {
+        Ipv4Addr::UNSPECIFIED.into()
+    };
     if from == 0 {
-        let l = std::net::TcpListener::bind("0.0.0.0:0").ok()?;
+        let l = std::net::TcpListener::bind((any, 0)).ok()?;
         let p = l.local_addr().ok()?.port();
         return Some((l, p));
     }
-    (from..=to.max(from)).find_map(|p| {
-        std::net::TcpListener::bind(("0.0.0.0", p))
-            .ok()
-            .map(|l| (l, p))
-    })
+    (from..=to.max(from)).find_map(|p| std::net::TcpListener::bind((any, p)).ok().map(|l| (l, p)))
 }
 
-/// The IPv4 to advertise in offers: the configured IP if set, else the local one.
-fn resolve_dcc_ip(configured: &str) -> Result<Ipv4Addr, String> {
+/// The IP to advertise in offers: the configured one (IPv4 or IPv6) if set, else
+/// the local IPv4 (LAN default).
+fn resolve_dcc_ip(configured: &str) -> Result<IpAddr, String> {
     let c = configured.trim();
     if !c.is_empty() {
-        return c
-            .parse::<Ipv4Addr>()
-            .map_err(|_| format!("invalid DCC IP: {c}"));
+        return c.parse::<IpAddr>().map_err(|_| format!("invalid DCC IP: {c}"));
     }
-    local_ipv4().ok_or_else(|| "could not determine the local IP address".to_string())
+    local_ipv4()
+        .map(IpAddr::V4)
+        .ok_or_else(|| "could not determine the local IP address".to_string())
 }
 
 #[cfg(test)]
@@ -679,7 +717,7 @@ mod tests {
 
     #[test]
     fn formats_offers() {
-        let ip = Ipv4Addr::new(192, 168, 0, 1);
+        let ip: IpAddr = Ipv4Addr::new(192, 168, 0, 1).into();
         assert_eq!(format_chat_offer(ip, 1024), "DCC CHAT chat 3232235521 1024");
         assert_eq!(
             format_send_offer("file.txt", ip, 1024, 50),
@@ -689,6 +727,18 @@ mod tests {
             format_send_offer("a b.txt", ip, 1024, 50),
             "DCC SEND \"a b.txt\" 3232235521 1024 50"
         );
+    }
+
+    #[test]
+    fn handles_ipv6_offers() {
+        let o = parse_dcc("DCC CHAT chat 2001:db8::1 1024").unwrap();
+        assert_eq!(o.ip, "2001:db8::1".parse::<IpAddr>().unwrap());
+        assert_eq!(o.port, 1024);
+        let ip: IpAddr = "2001:db8::1".parse().unwrap();
+        assert_eq!(format_chat_offer(ip, 1024), "DCC CHAT chat 2001:db8::1 1024");
+        let o = parse_dcc("DCC SEND f.bin 2001:db8::2 5000 100").unwrap();
+        assert_eq!(o.ip, "2001:db8::2".parse::<IpAddr>().unwrap());
+        assert_eq!(o.size, 100);
     }
 
     #[test]

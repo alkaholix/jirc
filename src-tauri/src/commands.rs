@@ -350,7 +350,7 @@ pub fn dcc_accept(
     ip: String,
     port: u16,
 ) -> Result<(), String> {
-    let addr: std::net::Ipv4Addr = ip.parse().map_err(|_| "invalid DCC IP".to_string())?;
+    let addr: std::net::IpAddr = ip.parse().map_err(|_| "invalid DCC IP".to_string())?;
     dcc.accept(app.clone(), server_id, nick, addr, port);
     Ok(())
 }
@@ -379,7 +379,7 @@ pub fn dcc_recv(
     port: u16,
     size: u64,
 ) -> Result<(), String> {
-    let addr: std::net::Ipv4Addr = ip.parse().map_err(|_| "invalid DCC IP".to_string())?;
+    let addr: std::net::IpAddr = ip.parse().map_err(|_| "invalid DCC IP".to_string())?;
     dcc.recv_file(app.clone(), server_id, nick, filename, addr, port, size);
     Ok(())
 }
@@ -405,4 +405,11 @@ pub fn dcc_configure(
     port_to: u16,
 ) {
     dcc.configure(ip, port_from, port_to);
+}
+
+/// A routable local IP for DCC (a global IPv6 if available), for the "Detect"
+/// button. Empty when there's no global IPv6.
+#[tauri::command]
+pub fn dcc_local_ip() -> String {
+    crate::irc::dcc::detect_local_ip()
 }

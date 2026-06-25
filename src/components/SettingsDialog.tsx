@@ -53,6 +53,14 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
   const isIpv4 = (s: string) => /^\d{1,3}(\.\d{1,3}){3}$/.test(s);
   const detectDccIp = async () => {
+    // A routable IPv6 (which works through CGNAT) is best; else fall back to the
+    // server's view of our IPv4 (USERHOST).
+    const local = await api.dccLocalIp().catch(() => "");
+    if (local) {
+      settings.set("dccIp", local);
+      setDccMsg(`Detected ${local} (IPv6 — best for transfers across NAT)`);
+      return;
+    }
     const host = dccDetect.get();
     if (!host) {
       setDccMsg("Connect to a server first, then try again.");
@@ -363,9 +371,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 </label>
               </div>
               <p className="cheat-tip">
-                For DCC over the internet, set your public IP and a port range, then
-                forward that range to this PC on your router. On a single LAN, leave
-                these blank.
+                For DCC over the internet, click <strong>Detect from server</strong> —
+                if you have IPv6 it'll use that (works through carrier/CGNAT, no
+                port-forwarding needed). Otherwise set your public IPv4 + a port range
+                and forward that range on your router. On a single LAN, leave blank.
               </p>
             </>
           )}
