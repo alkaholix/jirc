@@ -79,24 +79,67 @@ fn sanitize(name: &str) -> String {
 /// registration). [`migrate_legacy_app_dir`] moves the old folder once.
 pub const APP_DIR_NAME: &str = "jIRC";
 
-/// `<os config dir>/jIRC` — holds `profiles.json` and `scripts/`.
+/// A user-chosen data location that overrides the default per-profile folder.
+/// In priority: the `JIRC_DATA_DIR` env var, then — for a portable install — a
+/// `data/` folder next to the executable when a `portable.txt` marker sits
+/// beside it. `None` means "use the per-user OS directory".
+fn custom_base() -> Option<PathBuf> {
+    let env = std::env::var("JIRC_DATA_DIR").ok();
+    let exe = std::env::current_exe().ok();
+    let exe_dir = exe.as_deref().and_then(|e| e.parent());
+    resolve_custom_base(env.as_deref(), exe_dir)
+}
+
+/// Pure resolver for [`custom_base`] (so it can be unit-tested).
+fn resolve_custom_base(env_override: Option<&str>, exe_dir: Option<&std::path::Path>) -> Option<PathBuf> {
+    if let Some(p) = env_override {
+        let p = p.trim();
+        if !p.is_empty() {
+            return Some(PathBuf::from(p));
+        }
+    }
+    if let Some(dir) = exe_dir {
+        if dir.join("portable.txt").exists() {
+            return Some(dir.join("data"));
+        }
+    }
+    None
+}
+
+/// The base jIRC data folder — holds `profiles.json`, `scripts/`, `dcc/`,
+/// `scriptdata/`. A custom location (env/portable) wins; otherwise it's
+/// `<os config dir>/jIRC`, under the user's profile.
 pub fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .config_dir()
-        .map_err(|e| e.to_string())?
-        .join(APP_DIR_NAME);
+    let dir = match custom_base() {
+        Some(b) => b,
+        None => app
+            .path()
+            .config_dir()
+            .map_err(|e| e.to_string())?
+            .join(APP_DIR_NAME),
+    };
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
 }
 
-/// `<os data dir>/jIRC` — holds `logs/`.
+/// Where `logs/` lives: the same custom base when set, else `<os data dir>/jIRC`
+/// (on Windows this is the same folder as [`config_dir`]).
 pub fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .data_dir()
-        .map_err(|e| e.to_string())?
-        .join(APP_DIR_NAME);
+    let dir = match custom_base() {
+        Some(b) => b,
+        None => app
+            .path()
+            .data_dir()
+            .map_err(|e| e.to_string())?
+            .join(APP_DIR_NAME),
+    };
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+/// `<base>/dcc` — where received DCC files are saved. Created on demand.
+pub fn dcc_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = config_dir(app)?.join("dcc");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
 }
@@ -109,6 +152,10 @@ fn logs_dir(app: &AppHandle) -> Result<PathBuf, String> {
 /// in both the OS config and data base dirs. Runs at startup; a no-op once
 /// migrated or on a fresh install.
 pub fn migrate_legacy_app_dir(app: &AppHandle) {
+    // A custom/portable data dir has no per-profile legacy folder to migrate.
+    if custom_base().is_some() {
+        return;
+    }
     for base in [app.path().config_dir(), app.path().data_dir()] {
         if let Ok(base) = base {
             migrate_dir(&base);
@@ -233,8 +280,34 @@ pub fn log_read(app: AppHandle, network: String, buffer: String) -> Result<Strin
 #[cfg(test)]
 mod tests {
     use super::{
-        keyring_available, load_secret, migrate_dir, sanitize, store_secret, APP_DIR_NAME,
+        keyring_available, load_secret, migrate_dir, resolve_custom_base, sanitize, store_secret,
+        APP_DIR_NAME,
     };
+
+    #[test]
+    fn custom_base_resolution() {
+        use std::path::PathBuf;
+        // The env override wins and is taken verbatim.
+        assert_eq!(
+            resolve_custom_base(Some("D:/jirc-data"), None),
+            Some(PathBuf::from("D:/jirc-data"))
+        );
+        // Blank env + no exe dir -> the default (None).
+        assert_eq!(resolve_custom_base(Some("   "), None), None);
+        assert_eq!(resolve_custom_base(None, None), None);
+
+        // A portable.txt marker beside the exe -> <dir>/data; absent -> None.
+        let tmp = std::env::temp_dir().join(format!("jirc-portable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        assert_eq!(resolve_custom_base(None, Some(tmp.as_path())), None);
+        std::fs::write(tmp.join("portable.txt"), "").unwrap();
+        assert_eq!(
+            resolve_custom_base(None, Some(tmp.as_path())),
+            Some(tmp.join("data"))
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     fn sanitizes_illegal_chars() {

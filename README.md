@@ -76,16 +76,24 @@ cargo test --manifest-path src-tauri/Cargo.toml -- --skip live   # backend tests
 
 ## Where your data lives
 
-Stored as JSON (no INI files). Under the app config dir
-(Windows: `%APPDATA%/jIRC/`):
+By default, in a single **`jIRC` folder under your profile** (Windows:
+`%APPDATA%/jIRC/`). Everything is JSON — no INI files:
 
 ```
-profiles.json     # saved servers (passwords are in the OS keyring, not here)
-scripts/*.mrc     # your scripts, all compiled together
+jIRC/
+  profiles.json   # saved servers (passwords are in the OS keyring, not here)
+  scripts/        # your .mrc scripts, all compiled together
+  dcc/            # received DCC files
+  logs/           # chat logs, <network>/<buffer>.log
+  scriptdata/     # sandbox for script file I/O ($read / /write)
 ```
 
-Chat logs live under the app data dir as `logs/<network>/<buffer>.log`.
-App settings are kept in the webview's local storage.
+**Custom / portable location.** To store data elsewhere, either set the
+`JIRC_DATA_DIR` environment variable to a folder, or — for a portable install —
+put a `portable.txt` file next to the executable (then everything lives in a
+`data/` folder beside the app). App settings are kept in the webview's local
+storage. *(On Linux, the default `logs/` follow the OS data dir; a custom
+location keeps them together.)*
 
 ### Password storage (cross-platform)
 

@@ -37,6 +37,9 @@ pub fn run() {
             // Rename the legacy `com.jirc.app` data folder to `jIRC` (once) before
             // anything reads profiles/scripts/logs.
             storage::migrate_legacy_app_dir(app.handle());
+            // Materialise the data subfolders under the jIRC folder (scripts/ is
+            // created when scripts load; dcc/ for received transfers).
+            let _ = storage::dcc_dir(app.handle());
             let engine = app.state::<ScriptEngine>();
             // Install the real socket backend so /socklisten/$sock(...) work.
             engine.set_sockets(std::sync::Arc::new(script::socket::EngineSockets::new(

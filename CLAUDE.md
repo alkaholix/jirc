@@ -78,25 +78,27 @@ Live network tests are `#[ignore]`d:
 
 ## Data / folder structure (on the user's machine)
 
-Under a **`jIRC` folder** in the OS config dir (Windows: `%APPDATA%/jIRC/`). The
-folder name is `jIRC` (not the bundle identifier `com.jirc.app`) — `storage.rs`
-resolves paths via `config_dir()`/`data_dir()` + `APP_DIR_NAME`, and
-`migrate_legacy_app_dir` renames an old `com.jirc.app/` folder once at startup.
+Everything lives under a single **`jIRC` folder** (Windows: `%APPDATA%/jIRC/`).
+`storage.rs` resolves the base via `config_dir(app)` — all other helpers
+(`scripts_dir`, `dcc_dir`, `logs_dir`, `script_data_dir`) hang off it:
 
 ```
 jIRC/
-  profiles.json        # server profiles (NO passwords — those are in the OS keyring)
-  scripts/             # mSL script files, all compiled together
-    main.mrc
-    <name>.mrc
+  profiles.json   # server profiles (NO passwords — those are in the OS keyring)
+  scripts/        # mSL script files, all compiled together (main.mrc, <name>.mrc)
+  dcc/            # received DCC files
+  logs/           # chat logs, <network>/<buffer>.log
+  scriptdata/     # sandbox for $read / /write
 ```
 
-Under the **app data dir**:
-
-```
-jIRC/
-  logs/<network>/<buffer>.log    # chat logs
-```
+**Path resolution (`storage.rs`):** the base is, in priority — the
+`JIRC_DATA_DIR` env var; else a `data/` folder next to the exe when a
+`portable.txt` marker sits beside it (portable install); else
+`<os config dir>/jIRC` (default, under the profile, name = `APP_DIR_NAME`, not
+the bundle identifier `com.jirc.app`). `migrate_legacy_app_dir` renames an old
+`com.jirc.app/` folder to `jIRC/` once at startup (skipped for custom bases).
+`config_dir`/`app_data_dir` differ only in the **default** case on Linux (OS
+config vs data dir); a custom base unifies them.
 
 **Settings** live in the webview's `localStorage` (`jirc.settings`) — chosen for
 speed/simplicity (sync, no startup flash). Secrets use the **OS keyring** (service
