@@ -135,6 +135,55 @@ pub fn format_send_offer(filename: &str, ip: Ipv4Addr, port: u16, size: u64) -> 
     format!("DCC SEND {} {} {} {}", name, ip_to_dcc(ip), port, size)
 }
 
+/// A parsed `/dcc` subcommand (the part after `/dcc`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DccCommand {
+    /// `/dcc chat <nick>` — offer/open a direct chat.
+    Chat { nick: String },
+    /// `/dcc send <nick> <file>` — offer a file.
+    Send { nick: String, file: String },
+    /// `/dcc get [nick]` — accept a pending incoming offer.
+    Get { nick: Option<String> },
+    /// `/dcc close [chat|send] [nick]` — close matching DCC session(s).
+    Close {
+        kind: Option<DccKind>,
+        nick: Option<String>,
+    },
+}
+
+/// Parses the arguments to `/dcc` (everything after the command word). Returns
+/// `None` for an unknown/incomplete subcommand.
+#[allow(dead_code)] // wired into the /dcc command + DCC manager next
+pub fn parse_dcc_command(args: &str) -> Option<DccCommand> {
+    let mut t = args.split_whitespace();
+    match t.next()?.to_ascii_lowercase().as_str() {
+        "chat" => Some(DccCommand::Chat {
+            nick: t.next()?.to_string(),
+        }),
+        "send" => {
+            let nick = t.next()?.to_string();
+            let file = t.collect::<Vec<_>>().join(" ");
+            (!file.is_empty()).then_some(DccCommand::Send { nick, file })
+        }
+        "get" | "accept" => Some(DccCommand::Get {
+            nick: t.next().map(String::from),
+        }),
+        "close" => {
+            let mut kind = None;
+            let mut nick = None;
+            for w in t {
+                match w.to_ascii_lowercase().as_str() {
+                    "chat" => kind = Some(DccKind::Chat),
+                    "send" => kind = Some(DccKind::Send),
+                    other => nick = Some(other.to_string()),
+                }
+            }
+            Some(DccCommand::Close { kind, nick })
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,5 +242,30 @@ mod tests {
             format_send_offer("a b.txt", ip, 1024, 50),
             "DCC SEND \"a b.txt\" 3232235521 1024 50"
         );
+    }
+
+    #[test]
+    fn parses_dcc_commands() {
+        assert_eq!(
+            parse_dcc_command("chat bob"),
+            Some(DccCommand::Chat { nick: "bob".into() })
+        );
+        assert_eq!(
+            parse_dcc_command("send bob my file.txt"),
+            Some(DccCommand::Send {
+                nick: "bob".into(),
+                file: "my file.txt".into()
+            })
+        );
+        assert_eq!(parse_dcc_command("get"), Some(DccCommand::Get { nick: None }));
+        assert_eq!(
+            parse_dcc_command("close chat bob"),
+            Some(DccCommand::Close {
+                kind: Some(DccKind::Chat),
+                nick: Some("bob".into())
+            })
+        );
+        assert_eq!(parse_dcc_command("chat"), None); // missing nick
+        assert_eq!(parse_dcc_command("wat"), None);
     }
 }
