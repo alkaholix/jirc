@@ -24,7 +24,7 @@ Full rationale: `C:\Users\John\.claude\plans\reactive-kindling-lemon.md`.
 - Tauri v2. Backend `src-tauri/src/`, frontend `src/` (React 18 + TS + Vite + zustand).
 - **Native mSL engine: `src-tauri/src/script/`** (`parser`, `ast`, `eval`, `ident`, `mod`, `socket`, `timer`,
   `files`, `ini`), runs `.mrc` directly. **This is where mSL parity work goes.**
-- User scripts: `%APPDATA%/com.jirc.app/scripts/*.mrc`.
+- User scripts: `%APPDATA%/jIRC/scripts/*.mrc`.
 - Build/test: `cargo test --manifest-path src-tauri/Cargo.toml -- --skip live` · `npm run build` · `npx vitest run` ·
   `npm run tauri build -- --no-bundle` → `src-tauri/target/release/jirc.exe`.
 

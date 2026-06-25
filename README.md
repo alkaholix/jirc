@@ -77,7 +77,7 @@ cargo test --manifest-path src-tauri/Cargo.toml -- --skip live   # backend tests
 ## Where your data lives
 
 Stored as JSON (no INI files). Under the app config dir
-(Windows: `%APPDATA%/com.jirc.app/`):
+(Windows: `%APPDATA%/jIRC/`):
 
 ```
 profiles.json     # saved servers (passwords are in the OS keyring, not here)

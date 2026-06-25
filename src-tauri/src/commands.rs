@@ -1,6 +1,6 @@
 //! Tauri commands exposed to the frontend (the `invoke` surface).
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::config::ServerProfile;
@@ -18,8 +18,7 @@ const HELP_HTML: &str = include_str!("../../public/help.html");
 /// Writes the help guide to disk and opens it in the user's default browser.
 #[tauri::command]
 pub fn open_help(app: AppHandle) -> Result<(), String> {
-    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dir = crate::storage::config_dir(&app)?;
     let path = dir.join("help.html");
     std::fs::write(&path, HELP_HTML).map_err(|e| e.to_string())?;
     app.opener()

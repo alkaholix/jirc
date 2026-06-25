@@ -413,11 +413,7 @@ use crate::irc::ConnectionManager;
 // ---- Multi-file script storage (<config>/scripts/*.mrc) ----
 
 fn scripts_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
-    let dir = app
-        .path()
-        .app_config_dir()
-        .map_err(|e| e.to_string())?
-        .join("scripts");
+    let dir = crate::storage::config_dir(app)?.join("scripts");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
 }
@@ -425,9 +421,7 @@ fn scripts_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
 /// The sandbox directory for script file I/O (`$read`/`/write`). Created on
 /// demand; falls back to the system temp dir if the config dir is unavailable.
 pub fn script_data_dir(app: &AppHandle) -> std::path::PathBuf {
-    let dir = app
-        .path()
-        .app_config_dir()
+    let dir = crate::storage::config_dir(app)
         .map(|c| c.join("scriptdata"))
         .unwrap_or_else(|_| std::env::temp_dir().join("jirc-scriptdata"));
     let _ = std::fs::create_dir_all(&dir);
@@ -574,13 +568,11 @@ fn update_runtime_alias(app: &AppHandle, name: &str, command: Option<&str>) {
 /// seeding example scripts on first run.
 pub fn load_persisted(app: &AppHandle, engine: &ScriptEngine) {
     // First run = the scripts dir does not exist yet.
-    let first_run = app
-        .path()
-        .app_config_dir()
+    let first_run = crate::storage::config_dir(app)
         .map(|c| !c.join("scripts").exists())
         .unwrap_or(false);
 
-    if let Ok(config) = app.path().app_config_dir() {
+    if let Ok(config) = crate::storage::config_dir(app) {
         let legacy = config.join("script.mrc");
         if legacy.exists() {
             if let Ok(dir) = scripts_dir(app) {

@@ -78,10 +78,13 @@ Live network tests are `#[ignore]`d:
 
 ## Data / folder structure (on the user's machine)
 
-Under the Tauri **app config dir** (Windows: `%APPDATA%/com.jirc.app/`):
+Under a **`jIRC` folder** in the OS config dir (Windows: `%APPDATA%/jIRC/`). The
+folder name is `jIRC` (not the bundle identifier `com.jirc.app`) — `storage.rs`
+resolves paths via `config_dir()`/`data_dir()` + `APP_DIR_NAME`, and
+`migrate_legacy_app_dir` renames an old `com.jirc.app/` folder once at startup.
 
 ```
-com.jirc.app/
+jIRC/
   profiles.json        # server profiles (NO passwords — those are in the OS keyring)
   scripts/             # mSL script files, all compiled together
     main.mrc
@@ -91,7 +94,7 @@ com.jirc.app/
 Under the **app data dir**:
 
 ```
-com.jirc.app/
+jIRC/
   logs/<network>/<buffer>.log    # chat logs
 ```
 

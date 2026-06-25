@@ -34,6 +34,9 @@ pub fn run() {
         .manage(script::timer::TimerManager::new())
         .manage(irc::state::StateStore::new())
         .setup(|app| {
+            // Rename the legacy `com.jirc.app` data folder to `jIRC` (once) before
+            // anything reads profiles/scripts/logs.
+            storage::migrate_legacy_app_dir(app.handle());
             let engine = app.state::<ScriptEngine>();
             // Install the real socket backend so /socklisten/$sock(...) work.
             engine.set_sockets(std::sync::Arc::new(script::socket::EngineSockets::new(
