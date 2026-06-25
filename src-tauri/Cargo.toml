@@ -33,6 +33,7 @@ rustls = { version = "0.23.40", default-features = false, features = ["ring", "s
 webpki-roots = "1.0.7"
 keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 base64 = "0.22"
+sspi = { version = "0.21.0", default-features = false }
 regex = "1"
 # Local time + date formatting for mSL $time/$date/$asctime ($asctime needs a
 # timezone db; chrono's clock feature is already in the tree transitively).

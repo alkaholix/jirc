@@ -176,20 +176,59 @@ async fn run_once(
     );
 
     let (read_half, mut write_half) = tokio::io::split(stream);
+    // IRC is byte-oriented: read raw bytes and decode UTF-8 with a Latin-1
+    // fallback so non-UTF-8 lines (common on IRCX/older nets) don't drop us.
+    // `buf` persists across iterations so a select!-cancelled partial read isn't lost.
+    // The reader is built before registration so an NTLM handshake can read its
+    // challenge frames from the same buffered stream the read loop then reuses.
+    let mut reader = BufReader::new(read_half);
+    let mut buf: Vec<u8> = Vec::new();
 
-    // Registration: begin CAP negotiation before NICK/USER so SASL can run.
-    write_line(&mut write_half, app, server_id, "CAP LS 302").await;
-    if let Some(pw) = profile.password.as_deref().filter(|p| !p.is_empty()) {
-        write_line(&mut write_half, app, server_id, &format!("PASS {pw}")).await;
+    // Registration. IRC7 servers require an IRCX NTLM (SSPI) handshake *before*
+    // NICK/USER; standard servers use CAP/SASL instead.
+    if profile.ntlm {
+        if let Err(e) =
+            crate::irc::ntlm::handshake(&mut reader, &mut write_half, profile, app, server_id).await
+        {
+            emit(
+                app,
+                UiEvent::Error {
+                    server_id: server_id.to_string(),
+                    message: format!("NTLM authentication failed: {e}"),
+                },
+            );
+            emit(
+                app,
+                UiEvent::Disconnected {
+                    server_id: server_id.to_string(),
+                    reason: format!("NTLM auth failed: {e}"),
+                },
+            );
+            return Outcome::Dropped;
+        }
+        write_line(&mut write_half, app, server_id, &format!("NICK {}", profile.nick)).await;
+        write_line(
+            &mut write_half,
+            app,
+            server_id,
+            &format!("USER {} 0 * :{}", profile.username(), profile.realname()),
+        )
+        .await;
+    } else {
+        // Begin CAP negotiation before NICK/USER so SASL can run.
+        write_line(&mut write_half, app, server_id, "CAP LS 302").await;
+        if let Some(pw) = profile.password.as_deref().filter(|p| !p.is_empty()) {
+            write_line(&mut write_half, app, server_id, &format!("PASS {pw}")).await;
+        }
+        write_line(&mut write_half, app, server_id, &format!("NICK {}", profile.nick)).await;
+        write_line(
+            &mut write_half,
+            app,
+            server_id,
+            &format!("USER {} 0 * :{}", profile.username(), profile.realname()),
+        )
+        .await;
     }
-    write_line(&mut write_half, app, server_id, &format!("NICK {}", profile.nick)).await;
-    write_line(
-        &mut write_half,
-        app,
-        server_id,
-        &format!("USER {} 0 * :{}", profile.username(), profile.realname()),
-    )
-    .await;
 
     let mut state = SessionState {
         nick: profile.nick.clone(),
@@ -203,11 +242,6 @@ async fn run_once(
     let mut names_accum: HashMap<String, Vec<String>> = HashMap::new();
     let mut whois_accum: HashMap<String, Vec<String>> = HashMap::new();
     let mut auth = AuthState::default();
-    // IRC is byte-oriented: read raw bytes and decode UTF-8 with a Latin-1
-    // fallback so non-UTF-8 lines (common on IRCX/older nets) don't drop us.
-    // `buf` persists across iterations so a select!-cancelled partial read isn't lost.
-    let mut reader = BufReader::new(read_half);
-    let mut buf: Vec<u8> = Vec::new();
 
     let reason = loop {
         tokio::select! {
@@ -1394,6 +1428,10 @@ mod tests {
             username: None,
             realname: None,
             password: None,
+            ntlm: false,
+            ntlm_domain: None,
+            ntlm_user: None,
+            ntlm_password: None,
             autojoin: vec![],
         }
     }

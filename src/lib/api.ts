@@ -27,6 +27,10 @@ export interface ServerProfile {
   username?: string;
   realname?: string;
   password?: string;
+  ntlm?: boolean;
+  ntlmDomain?: string;
+  ntlmUser?: string;
+  ntlmPassword?: string;
   autojoin: string[];
 }
 

@@ -54,6 +54,17 @@ pub struct ServerProfile {
     /// Optional server password (PASS).
     #[serde(default)]
     pub password: Option<String>,
+    #[serde(default)]
+    pub ntlm: bool,
+    /// NTLM domain (e.g. "cg"); None/empty when the account isn't domain-scoped.
+    #[serde(default)]
+    pub ntlm_domain: Option<String>,
+    /// NTLM username; defaults to `nick` when unset/empty.
+    #[serde(default)]
+    pub ntlm_user: Option<String>,
+    /// NTLM password (secret; kept in the OS keyring, never in profiles.json).
+    #[serde(default)]
+    pub ntlm_password: Option<String>,
     /// Channels to join automatically after registration.
     #[serde(default)]
     pub autojoin: Vec<String>,
@@ -86,5 +97,18 @@ impl ServerProfile {
 
     pub fn account(&self) -> &str {
         self.account.as_deref().unwrap_or(&self.nick)
+    }
+
+    /// NTLM username, falling back to the nick when unset/empty.
+    pub fn ntlm_user(&self) -> &str {
+        self.ntlm_user
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&self.nick)
+    }
+
+    /// NTLM domain (empty string when unset).
+    pub fn ntlm_domain(&self) -> &str {
+        self.ntlm_domain.as_deref().unwrap_or("")
     }
 }

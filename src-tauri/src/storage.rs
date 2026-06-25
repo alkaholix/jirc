@@ -266,6 +266,9 @@ pub fn profiles_load(app: AppHandle) -> Result<Vec<ServerProfile>, String> {
             if p.password.is_none() {
                 p.password = load_secret(&id, "password");
             }
+            if p.ntlm_password.is_none() {
+                p.ntlm_password = load_secret(&id, "ntlm_password");
+            }
             if let Some(proxy) = p.proxy.as_mut() {
                 if proxy.password.is_none() {
                     proxy.password = load_secret(&id, "proxy_password");
@@ -291,6 +294,9 @@ pub fn profiles_save(app: AppHandle, mut profiles: Vec<ServerProfile>) -> Result
         }
         if store_secret(&id, "password", p.password.as_deref()) {
             p.password = None;
+        }
+        if store_secret(&id, "ntlm_password", p.ntlm_password.as_deref()) {
+            p.ntlm_password = None;
         }
         if let Some(proxy) = p.proxy.as_mut() {
             if store_secret(&id, "proxy_password", proxy.password.as_deref()) {
@@ -318,6 +324,7 @@ pub fn profiles_delete(app: AppHandle, id: String) -> Result<(), String> {
     // Remove any keyring secrets for this profile.
     store_secret(&id, "account_password", None);
     store_secret(&id, "password", None);
+    store_secret(&id, "ntlm_password", None);
     store_secret(&id, "proxy_password", None);
     Ok(())
 }
