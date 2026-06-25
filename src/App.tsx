@@ -19,6 +19,7 @@ import { PromptDialog } from "./components/PromptDialog";
 import { UserDialogs } from "./components/UserDialogs";
 import { DetachedView } from "./components/DetachedView";
 import { thisWindowBufferKey, popOutBuffer, dockBackBuffer, detachedLabel } from "./lib/detach";
+import { confirmDialog } from "./state/confirm";
 import { routeDialogEvent } from "./state/dialogs";
 import { routeNickIconEvent } from "./state/nickIcons";
 import { routeAwayEvent } from "./state/away";
@@ -56,6 +57,16 @@ function App() {
       routeNotifyEvent(e.payload);
       routeUrlEvent(e.payload);
       routeModeEvent(e.payload);
+      // Approve/decline an incoming DCC chat — prompt once, in the main window.
+      if (e.payload.type === "dccChatOffer" && detachedKey === null) {
+        const o = e.payload;
+        confirmDialog(
+          `${o.nick} wants to start a DCC chat with you (from ${o.ip}). Accept?`,
+          { title: "DCC chat request", confirmLabel: "Accept" }
+        ).then((ok) => {
+          if (ok) api.dccAccept(o.serverId, o.nick, o.ip, o.port).catch(() => {});
+        });
+      }
     });
     return () => {
       unlisten.then((f) => f());
