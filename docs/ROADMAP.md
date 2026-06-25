@@ -74,8 +74,8 @@ Status: ✅ done · 🟡 partial · ❌ missing · ⭐ jIRC-only (modern extra)
 | Feature | Status | Notes |
 | --- | --- | --- |
 | ACTION (`/me`) | ✅ | |
-| VERSION / PING / TIME / CLIENTINFO replies | ✅ | auto-reply to direct requests |
-| Custom CTCP | ❌ | |
+| VERSION / PING / TIME / FINGER / USERINFO / SOURCE / CLIENTINFO replies | ✅ | auto-reply to direct requests |
+| Custom CTCP | ✅ | `/ctcp` to send, `on CTCP` / `on CTCPREPLY` to handle, `/ctcpreply` to answer |
 
 ## 5. Scripting (mSL)
 

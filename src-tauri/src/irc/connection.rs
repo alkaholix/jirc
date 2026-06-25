@@ -30,6 +30,10 @@ fn emit(app: &AppHandle, ev: UiEvent) {
 pub struct Effects {
     pub outgoing: Vec<String>,
     pub events: Vec<UiEvent>,
+    /// Events surfaced to the script engine only (never emitted to the UI):
+    /// CTCP requests/replies, which the UI renders as an `Echo` but scripts
+    /// need as a `Message` so `on CTCP`/`on CTCPREPLY` fire live.
+    pub script_events: Vec<UiEvent>,
     /// Set when a channel ban list changed without a state-event (RPL_BANLIST),
     /// so the script state snapshot is refreshed for `isban`.
     pub bans_changed: bool,
@@ -248,7 +252,8 @@ async fn run_once(
                         }
                     }
 
-                    let mut script_actions = run_scripts(app, &state, profile, &effects.events, Some(line));
+                    let mut script_actions =
+                        run_scripts(app, &state, profile, &effects.events, &effects.script_events, Some(line));
 
                     // `/autojoin` (used in `on CONNECT`) controls the deferred
                     // autojoin: pull its control out of the script actions before
@@ -355,7 +360,7 @@ async fn run_once(
         server_id: server_id.to_string(),
         reason: reason.0,
     };
-    let actions = run_scripts(app, &state, profile, std::slice::from_ref(&disc), None);
+    let actions = run_scripts(app, &state, profile, std::slice::from_ref(&disc), &[], None);
     if !actions.is_empty() {
         crate::script::apply_actions(
             app,
@@ -395,6 +400,8 @@ fn run_scripts(
     state: &SessionState,
     profile: &ServerProfile,
     events: &[UiEvent],
+    // Extra events for scripts only (CTCP requests/replies); see `Effects`.
+    script_events: &[UiEvent],
     raw_line: Option<&str>,
 ) -> Vec<crate::script::eval::Action> {
     let Some(engine) = app.try_state::<crate::script::ScriptEngine>() else {
@@ -414,7 +421,7 @@ fn run_scripts(
             actions.extend(crate::script::dispatch_raw(&engine, &ctx, &command, params));
         }
     }
-    for ev in events {
+    for ev in events.iter().chain(script_events) {
         actions.extend(crate::script::drive_event(&engine, &ctx, ev));
     }
     actions
@@ -570,6 +577,16 @@ pub fn process_message(ctx: &mut Context, raw: &str, msg: Message) -> Effects {
                                 .push(format!("NOTICE {nick} :\u{1}{reply}\u{1}"));
                         }
                     }
+                    // Surface the request to scripts as a Message so `on CTCP`
+                    // fires; the UI shows the Echo below, not this.
+                    fx.script_events.push(UiEvent::Message {
+                        server_id: server_id.clone(),
+                        kind: MessageKind::Privmsg,
+                        from: source.clone(),
+                        target: target.clone(),
+                        text: text.clone(),
+                        time: server_time.clone(),
+                    });
                     fx.events.push(UiEvent::Echo {
                         server_id,
                         target: "(status)".to_string(),
@@ -592,12 +609,25 @@ pub fn process_message(ctx: &mut Context, raw: &str, msg: Message) -> Effects {
             });
         }
         Command::NOTICE(ref target, ref text) => {
-            // A CTCP reply (\x01...\x01) — render it readably in the status window.
+            // A CTCP reply (\x01...\x01) — render it readably, and surface it to
+            // scripts as a Message so `on CTCPREPLY` fires.
             if let Some(ctcp) = text.strip_prefix('\u{1}').map(|s| s.trim_end_matches('\u{1}')) {
+                fx.script_events.push(UiEvent::Message {
+                    server_id: server_id.clone(),
+                    kind: MessageKind::Notice,
+                    from: source.clone(),
+                    target: target.clone(),
+                    text: text.clone(),
+                    time: server_time.clone(),
+                });
                 fx.events.push(UiEvent::Echo {
                     server_id,
                     target: "(status)".to_string(),
-                    text: format!("[CTCP reply from {}] {ctcp}", source.as_deref().unwrap_or("?")),
+                    text: format!(
+                        "[CTCP reply from {}] {}",
+                        source.as_deref().unwrap_or("?"),
+                        ctcp_reply_pretty(ctcp)
+                    ),
                 });
                 return fx;
             }
@@ -1240,39 +1270,42 @@ fn ctcp_reply(cmd: &str, rest: &str) -> Option<String> {
         )),
         "PING" => Some(format!("PING {rest}")),
         "TIME" => Some(format!("TIME {}", ctcp_time())),
-        "CLIENTINFO" => Some("CLIENTINFO VERSION PING TIME CLIENTINFO ACTION".to_string()),
+        "FINGER" => Some("FINGER jIRC user".to_string()),
+        "USERINFO" => Some("USERINFO jIRC user".to_string()),
+        "SOURCE" => Some("SOURCE https://github.com/alkaholix/jirc".to_string()),
+        "CLIENTINFO" => Some(
+            "CLIENTINFO ACTION CLIENTINFO FINGER PING SOURCE TIME USERINFO VERSION".to_string(),
+        ),
         _ => None,
     }
 }
 
-/// A UTC timestamp string for CTCP TIME.
+/// Renders a CTCP reply for the status window. A PING reply echoes the
+/// millisecond timestamp we sent with `/ctcp <nick> ping`, so turn it back into
+/// a round-trip latency; anything else is shown as-is.
+fn ctcp_reply_pretty(ctcp: &str) -> String {
+    if let Some(ts) = ctcp
+        .strip_prefix("PING ")
+        .and_then(|s| s.trim().parse::<u128>().ok())
+    {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        if now >= ts && now - ts <= 3_600_000 {
+            return format!("PING reply: {:.3} seconds", (now - ts) as f64 / 1000.0);
+        }
+    }
+    ctcp.to_string()
+}
+
+/// A local-time timestamp for CTCP TIME, e.g. `2026-06-25 14:32:10 +12:00`.
+/// Uses the OS timezone — NZST/NZDT in New Zealand, the local zone elsewhere —
+/// matching mIRC, which replies with your own clock (and handling DST for free).
 fn ctcp_time() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    // days -> civil date (Howard Hinnant's algorithm)
-    let z = (secs / 86400) as i64 + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = if m <= 2 { y + 1 } else { y };
-    let s = secs % 86400;
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
-        year,
-        m,
-        d,
-        s / 3600,
-        (s % 3600) / 60,
-        s % 60
-    )
+    chrono::Local::now()
+        .format("%Y-%m-%d %H:%M:%S %:z")
+        .to_string()
 }
 
 /// Formats a single WHOIS numeric into a human-readable line.
@@ -1600,7 +1633,58 @@ mod tests {
             .outgoing
             .iter()
             .any(|l| l.starts_with("NOTICE bob :\u{1}VERSION jIRC")));
+        // The UI sees an Echo, not a raw Message...
         assert!(!fx.events.iter().any(|e| matches!(e, UiEvent::Message { .. })));
+        // ...but scripts get the request as a Message so `on CTCP` fires live.
+        assert!(fx
+            .script_events
+            .iter()
+            .any(|e| matches!(e, UiEvent::Message { text, .. } if text.contains("VERSION"))));
+    }
+
+    #[test]
+    fn ctcp_finger_userinfo_source_autoreply() {
+        let mut s = SessionState {
+            nick: "me".into(),
+            ..Default::default()
+        };
+        let mut accum = HashMap::new();
+        for (req, reply) in [
+            ("FINGER", "FINGER jIRC"),
+            ("USERINFO", "USERINFO jIRC"),
+            ("SOURCE", "SOURCE https://github.com/alkaholix/jirc"),
+        ] {
+            let fx = run_line(&mut s, &mut accum, &format!(":bob!u@h PRIVMSG me :\u{1}{req}\u{1}"));
+            assert!(
+                fx.outgoing
+                    .iter()
+                    .any(|l| l.starts_with(&format!("NOTICE bob :\u{1}{reply}"))),
+                "no auto-reply for {req}: {:?}",
+                fx.outgoing
+            );
+        }
+    }
+
+    #[test]
+    fn ctcp_reply_routes_to_scripts_not_ui_message() {
+        let mut s = SessionState {
+            nick: "me".into(),
+            ..Default::default()
+        };
+        let mut accum = HashMap::new();
+        // A CTCP reply arrives as a NOTICE \x01..\x01.
+        let fx = run_line(&mut s, &mut accum, ":bob!u@h NOTICE me :\u{1}VERSION jIRC 1.0\u{1}");
+        // UI: a readable Echo, no raw Message, and a reply is never auto-replied to.
+        assert!(fx.events.iter().any(
+            |e| matches!(e, UiEvent::Echo { text, .. } if text.contains("CTCP reply from bob"))
+        ));
+        assert!(!fx.events.iter().any(|e| matches!(e, UiEvent::Message { .. })));
+        assert!(fx.outgoing.is_empty());
+        // Scripts: a Notice Message so `on CTCPREPLY` fires.
+        assert!(fx.script_events.iter().any(|e| matches!(
+            e,
+            UiEvent::Message { kind: MessageKind::Notice, text, .. } if text.contains("VERSION")
+        )));
     }
 
     #[test]

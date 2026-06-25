@@ -24,7 +24,7 @@ Linux) and speaking both **standard IRC** (RFC 1459/2812 + some IRCv3) and
   topic editing, channel-mode commands, **/list & IRCX /listx channel browser**, and
   an **auto-join channels folder** (per-network add/remove + Join-now)
 - **Alternative nickname** with automatic fallback when your nick is in use
-- **Ignore list**, CTCP auto-replies (VERSION/PING/TIME), emoji shortcodes
+- **Ignore list**, CTCP auto-replies (VERSION/PING/TIME/FINGER/USERINFO/SOURCE/CLIENTINFO), emoji shortcodes
 - **Behaviour settings** — rejoin on kick, rejoin after reconnect, skip MOTD,
   ping?/pong! display, raw **trace**, themes (dark/light/system), and more
 - **Scripting (mSL)** with **editable popups** — see below
@@ -44,7 +44,7 @@ the **?** button opens it in your browser.
 - **Script groups** — `#name on/off … #name end` with `/enable`/`/disable`/`/groups`
   and `$group`; disabled groups' aliases and events don't fire
 - `on` event handlers: TEXT/ACTION/NOTICE/**INPUT**/JOIN/PART/QUIT/NICK/**KICK**/
-  **MODE**/**TOPIC**/**INVITE**/CONNECT/**DISCONNECT**/**RAW**/**CTCP**/**SIGNAL**,
+  **MODE**/**TOPIC**/**INVITE**/CONNECT/**DISCONNECT**/**RAW**/**CTCP**/**CTCPREPLY**/**SIGNAL**,
   plus per-mode **OP/VOICE/BAN/…** events
 - **Identity & connect control** — `/anick`/`/mnick`/`/fullname`, and `/autojoin`
   (`-n`/`-s`/`-dN`) to control the connect-time autojoin from `on CONNECT`

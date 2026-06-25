@@ -7,7 +7,8 @@
 
 use super::ast::{Alias, Dialog, DialogControl, Event, Popup, PopupItem, Script, Stmt};
 
-const MATCHTEXT_EVENTS: &[&str] = &["TEXT", "ACTION", "NOTICE", "WALLOPS", "CTCP", "RAW"];
+const MATCHTEXT_EVENTS: &[&str] =
+    &["TEXT", "ACTION", "NOTICE", "WALLOPS", "CTCP", "CTCPREPLY", "RAW"];
 
 struct Cursor {
     chars: Vec<char>,

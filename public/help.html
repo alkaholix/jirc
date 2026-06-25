@@ -428,6 +428,7 @@ Text-style events also take a <strong>matchtext</strong> pattern before the targ
   <tr><td><code>DISCONNECT</code></td><td>you disconnect</td><td>—</td></tr>
   <tr><td><code>RAW</code></td><td>any raw server line arrives</td><td><code>$numeric</code>, <code>$1-</code> (the line)</td></tr>
   <tr><td><code>CTCP</code></td><td>someone sends a CTCP request</td><td><code>$nick $chan $1-</code></td></tr>
+  <tr><td><code>CTCPREPLY</code></td><td>a CTCP reply (e.g. PING) comes back</td><td><code>$nick $1-</code></td></tr>
   <tr><td><code>SIGNAL</code></td><td>a script runs <code>/signal &lt;name&gt;</code></td><td><code>$signal</code> (name), <code>$1-</code> (params)</td></tr>
 </table>
 

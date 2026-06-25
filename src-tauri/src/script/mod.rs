@@ -386,8 +386,8 @@ fn matches(ev: &EventVars, pattern: &str, target_spec: &str, kind: &str) -> bool
         || pattern == "*"
         || wildcard_match(pattern, &ev.text)
         // A CTCP matchtext also matches just the command word, so
-        // `on CTCP:PING:` catches "PING <timestamp>".
-        || (kind == "CTCP"
+        // `on CTCP:PING:` catches "PING <timestamp>" (likewise `on CTCPREPLY`).
+        || ((kind == "CTCP" || kind == "CTCPREPLY")
             && wildcard_match(pattern, ev.text.split_whitespace().next().unwrap_or("")));
     if !pat_ok {
         return false;
@@ -1156,9 +1156,16 @@ pub fn drive_event(
             // $1 = the command word.
             if let Some(ctcp) = text.strip_prefix('\u{1}') {
                 let ctcp = ctcp.trim_end_matches('\u{1}');
-                let (ckind, body) = match ctcp.strip_prefix("ACTION ") {
-                    Some(act) => ("ACTION", act),
-                    None => ("CTCP", ctcp),
+                let (ckind, body) = if matches!(kind, crate::irc::event::MessageKind::Notice) {
+                    // A CTCP reply (NOTICE \x01..\x01) → `on CTCPREPLY`.
+                    ("CTCPREPLY", ctcp)
+                } else {
+                    // A CTCP request (PRIVMSG \x01..\x01): ACTION → `on ACTION`,
+                    // anything else → `on CTCP`.
+                    match ctcp.strip_prefix("ACTION ") {
+                        Some(act) => ("ACTION", act),
+                        None => ("CTCP", ctcp),
+                    }
                 };
                 let vars = EventVars {
                     nick: from,
@@ -1651,6 +1658,28 @@ mod tests {
         );
         // A plain message must NOT fire the CTCP handlers.
         assert!(drive_event(&engine, &ctx(), &msg("hello PING")).is_empty());
+    }
+
+    #[test]
+    fn ctcpreply_event_fires_on_notice_only() {
+        let engine = ScriptEngine::new();
+        // A NOTICE-wrapped CTCP fires `on CTCPREPLY`, never `on CTCP`.
+        engine.load("on *:CTCPREPLY:PING*:?:/echo $nick replied $1-\non *:CTCP:PING:?:/echo req");
+        let notice = UiEvent::Message {
+            server_id: "s".into(),
+            kind: MessageKind::Notice,
+            from: Some("bob".into()),
+            target: "me".into(),
+            text: "\u{1}PING 99\u{1}".into(),
+            time: None,
+        };
+        assert_eq!(
+            drive_event(&engine, &ctx(), &notice),
+            vec![Action::Echo {
+                target: "bob".into(),
+                text: "bob replied PING 99".into(),
+            }]
+        );
     }
 
     #[test]

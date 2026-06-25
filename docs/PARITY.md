@@ -503,6 +503,7 @@ out of scope.
 - [x] `/continue`
 - [x] `/copy`
 - [ ] `/creq` *(stub)*
+- [x] `/ctcp` *(send a CTCP request; `PING` reports a round-trip latency)*
 - [x] `/ctcpreply`
 - [ ] `/ctcps`
 - [x] `/dcc` *(chat both ways + **send/receive files** with progress bars; `/dcc chat`/`send`/`get`/`close`, a nicklist **DCC Chat / Send File** menu, downloads into the `dcc/` folder (`irc/dcc.rs` `DccManager`). Not yet: passive DCC, resume, `/dccserver`, `fserve`)*
@@ -679,7 +680,7 @@ out of scope.
 - [ ] `on CLOSE`
 - [x] `on CONNECT`
 - [ ] `on CONNECTFAIL`
-- [ ] `on CTCPREPLY`
+- [x] `on CTCPREPLY`
 - [ ] `on DCCSERVER`
 - [ ] `on DEHELP`  *(per-mode events fire; verify DEHELP specifically)*
 - [x] `on DEOP`
@@ -729,7 +730,7 @@ out of scope.
 - [ ] `on VCMD`
 - [x] `on VOICE`
 - [ ] `on WALLOPS`
-- **CTCP events:** [x] `on CTCP` *(matchtext = command or full text)*
+- **CTCP events:** [x] `on CTCP` · [x] `on CTCPREPLY` *(matchtext = command or full text; both fire live. jIRC auto-replies to VERSION, PING, TIME, FINGER, USERINFO, SOURCE, CLIENTINFO)*
 - **Numeric events:** [x] handled via `on RAW`
 
 ---
