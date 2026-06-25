@@ -33,6 +33,7 @@ pub fn run() {
         .manage(script::socket::SocketManager::new())
         .manage(script::timer::TimerManager::new())
         .manage(irc::state::StateStore::new())
+        .manage(irc::dcc::DccManager::new())
         .setup(|app| {
             // Rename the legacy `com.jirc.app` data folder to `jIRC` (once) before
             // anything reads profiles/scripts/logs.
@@ -75,6 +76,10 @@ pub fn run() {
             commands::ircx_create,
             commands::ircx_listx,
             commands::ircx_knock,
+            commands::dcc_chat,
+            commands::dcc_accept,
+            commands::dcc_send,
+            commands::dcc_close,
             storage::profiles_load,
             storage::profiles_save,
             storage::profiles_delete,

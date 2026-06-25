@@ -11,7 +11,17 @@
 //! `<ip>` is the IPv4 address as a big-endian `u32` written in decimal, and the
 //! **offerer listens** on `<port>` while the **receiver connects** to it.
 
+use std::collections::HashMap;
 use std::net::Ipv4Addr;
+use std::sync::Mutex;
+
+use tauri::{AppHandle, Emitter, Manager};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+
+use super::event::{UiEvent, IRC_EVENT};
+use super::ConnectionManager;
 
 /// The kind of a DCC handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,6 +190,168 @@ pub fn parse_dcc_command(args: &str) -> Option<DccCommand> {
             }
             Some(DccCommand::Close { kind, nick })
         }
+        _ => None,
+    }
+}
+
+// ---- DCC chat connection manager ----
+
+struct DccChat {
+    /// Lines typed in the buffer, to send to the peer.
+    tx: UnboundedSender<String>,
+    task: tauri::async_runtime::JoinHandle<()>,
+}
+
+/// Manages active DCC chat sessions, keyed by their `=nick` buffer id.
+#[derive(Default)]
+pub struct DccManager {
+    chats: Mutex<HashMap<String, DccChat>>,
+}
+
+impl DccManager {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// `/dcc chat <nick>` — listen on an ephemeral port, send the peer a CHAT
+    /// offer over IRC, and accept their connection.
+    pub fn chat(&self, app: AppHandle, server_id: String, nick: String) -> Result<(), String> {
+        let listener = std::net::TcpListener::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
+        let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+        let ip = local_ipv4().ok_or("could not determine the local IP address")?;
+        let offer = format_chat_offer(ip, port);
+        if let Some(m) = app.try_state::<ConnectionManager>() {
+            let _ = m.send(&server_id, format!("PRIVMSG {nick} :\u{1}{offer}\u{1}"));
+        }
+        let id = format!("={nick}");
+        let _ = app.emit(
+            IRC_EVENT,
+            UiEvent::DccChatOpen {
+                server_id: server_id.clone(),
+                id: id.clone(),
+                nick: nick.clone(),
+                outgoing: true,
+            },
+        );
+        let (tx, rx) = mpsc::unbounded_channel::<String>();
+        let id2 = id.clone();
+        let task = tauri::async_runtime::spawn(async move {
+            let listener = match TcpListener::from_std(listener) {
+                Ok(l) => l,
+                Err(_) => return emit_closed(&app, &server_id, &id),
+            };
+            match listener.accept().await {
+                Ok((stream, _)) => run_chat(app, server_id, id, nick, stream, rx).await,
+                Err(_) => emit_closed(&app, &server_id, &id),
+            }
+        });
+        self.chats.lock().unwrap().insert(id2, DccChat { tx, task });
+        Ok(())
+    }
+
+    /// Accept an incoming offer by connecting to `ip:port`.
+    pub fn accept(&self, app: AppHandle, server_id: String, nick: String, ip: Ipv4Addr, port: u16) {
+        let id = format!("={nick}");
+        let _ = app.emit(
+            IRC_EVENT,
+            UiEvent::DccChatOpen {
+                server_id: server_id.clone(),
+                id: id.clone(),
+                nick: nick.clone(),
+                outgoing: false,
+            },
+        );
+        let (tx, rx) = mpsc::unbounded_channel::<String>();
+        let id2 = id.clone();
+        let task = tauri::async_runtime::spawn(async move {
+            match TcpStream::connect((ip, port)).await {
+                Ok(stream) => run_chat(app, server_id, id, nick, stream, rx).await,
+                Err(_) => emit_closed(&app, &server_id, &id),
+            }
+        });
+        self.chats.lock().unwrap().insert(id2, DccChat { tx, task });
+    }
+
+    /// Send a typed line to a DCC chat peer.
+    pub fn send(&self, id: &str, text: String) {
+        if let Some(c) = self.chats.lock().unwrap().get(id) {
+            let _ = c.tx.send(text);
+        }
+    }
+
+    /// Close a DCC chat session.
+    pub fn close(&self, id: &str) {
+        if let Some(c) = self.chats.lock().unwrap().remove(id) {
+            c.task.abort();
+        }
+    }
+}
+
+async fn run_chat(
+    app: AppHandle,
+    server_id: String,
+    id: String,
+    nick: String,
+    stream: TcpStream,
+    mut rx: UnboundedReceiver<String>,
+) {
+    let (read_half, mut write_half) = tokio::io::split(stream);
+    let mut reader = BufReader::new(read_half);
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        tokio::select! {
+            out = rx.recv() => match out {
+                Some(line) => {
+                    if write_half.write_all(format!("{line}\n").as_bytes()).await.is_err() {
+                        break;
+                    }
+                }
+                None => break,
+            },
+            res = reader.read_until(b'\n', &mut buf) => match res {
+                Ok(0) => break,
+                Ok(_) => {
+                    let text = String::from_utf8_lossy(&buf)
+                        .trim_end_matches(['\r', '\n'])
+                        .to_string();
+                    buf.clear();
+                    let _ = app.emit(
+                        IRC_EVENT,
+                        UiEvent::DccChatLine {
+                            server_id: server_id.clone(),
+                            id: id.clone(),
+                            from: nick.clone(),
+                            text,
+                        },
+                    );
+                }
+                Err(_) => break,
+            },
+        }
+    }
+    emit_closed(&app, &server_id, &id);
+    if let Some(m) = app.try_state::<DccManager>() {
+        m.chats.lock().unwrap().remove(&id);
+    }
+}
+
+fn emit_closed(app: &AppHandle, server_id: &str, id: &str) {
+    let _ = app.emit(
+        IRC_EVENT,
+        UiEvent::DccChatClosed {
+            server_id: server_id.to_string(),
+            id: id.to_string(),
+        },
+    );
+}
+
+/// The machine's primary local IPv4, found from the local address a UDP socket
+/// would use to reach a public host (no packets are actually sent).
+fn local_ipv4() -> Option<Ipv4Addr> {
+    let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect("8.8.8.8:80").ok()?;
+    match sock.local_addr().ok()?.ip() {
+        std::net::IpAddr::V4(ip) => Some(ip),
         _ => None,
     }
 }

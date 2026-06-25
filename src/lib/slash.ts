@@ -46,6 +46,12 @@ export async function handleInput(input: string, buffer: Buffer): Promise<void> 
       return;
     }
     const body = expandEmoji(text);
+    if (name.startsWith("=")) {
+      // A DCC chat buffer: send over the peer connection, not the server.
+      await api.dccSend(name, body).catch(() => {});
+      echoSelf(name, body, "msg");
+      return;
+    }
     await api.sendMessage(serverId, name, body);
     echoSelf(name, body, "msg");
     return;
@@ -64,6 +70,17 @@ export async function handleInput(input: string, buffer: Buffer): Promise<void> 
     case "j":
       if (args) await api.join(serverId, args.split(" ")[0]);
       break;
+    case "dcc": {
+      const sub = rest[0]?.toLowerCase();
+      const who = rest[1];
+      if (sub === "chat" && who) {
+        await api.dccChat(serverId, who).catch(() => {});
+      } else if (sub === "close") {
+        const id = name.startsWith("=") ? name : who ? `=${who}` : "";
+        if (id) await api.dccClose(id).catch(() => {});
+      }
+      break;
+    }
     case "part":
     case "leave": {
       const parts = args.split(" ");

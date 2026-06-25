@@ -58,6 +58,11 @@ export const api = {
   sendMessage: (serverId: string, target: string, text: string) =>
     invoke("irc_send_message", { serverId, target, text }),
   join: (serverId: string, channel: string) => invoke("irc_join", { serverId, channel }),
+  dccChat: (serverId: string, nick: string) => invoke("dcc_chat", { serverId, nick }),
+  dccAccept: (serverId: string, nick: string, ip: string, port: number) =>
+    invoke("dcc_accept", { serverId, nick, ip, port }),
+  dccSend: (id: string, text: string) => invoke("dcc_send", { id, text }),
+  dccClose: (id: string) => invoke("dcc_close", { id }),
   part: (serverId: string, channel: string, reason?: string) =>
     invoke("irc_part", { serverId, channel, reason }),
   setNick: (serverId: string, nick: string) => invoke("irc_set_nick", { serverId, nick }),
@@ -232,7 +237,10 @@ export type IrcEvent =
   | { type: "whisper"; serverId: string; from: string | null; channel: string; text: string }
   | { type: "windowOpen"; serverId: string; name: string; kind: string; title: string }
   | { type: "windowClose"; serverId: string; name: string }
-  | { type: "windowLine"; serverId: string; name: string; op: string; n: number; text: string };
+  | { type: "windowLine"; serverId: string; name: string; op: string; n: number; text: string }
+  | { type: "dccChatOpen"; serverId: string; id: string; nick: string; outgoing: boolean }
+  | { type: "dccChatLine"; serverId: string; id: string; from: string; text: string }
+  | { type: "dccChatClosed"; serverId: string; id: string };
 
 export interface Member {
   nick: string;

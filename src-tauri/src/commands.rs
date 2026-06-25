@@ -326,3 +326,43 @@ pub fn ircx_knock(
 ) -> Result<(), String> {
     manager.send(&server_id, format!("KNOCK {channel}"))
 }
+
+// ---- DCC ----
+
+/// `/dcc chat <nick>` — offer a direct chat to `nick` (we listen for them).
+#[tauri::command]
+pub fn dcc_chat(
+    app: AppHandle,
+    dcc: State<'_, crate::irc::dcc::DccManager>,
+    server_id: String,
+    nick: String,
+) -> Result<(), String> {
+    dcc.chat(app.clone(), server_id, nick)
+}
+
+/// Accepts an incoming DCC chat offer by connecting to its `ip:port`.
+#[tauri::command]
+pub fn dcc_accept(
+    app: AppHandle,
+    dcc: State<'_, crate::irc::dcc::DccManager>,
+    server_id: String,
+    nick: String,
+    ip: String,
+    port: u16,
+) -> Result<(), String> {
+    let addr: std::net::Ipv4Addr = ip.parse().map_err(|_| "invalid DCC IP".to_string())?;
+    dcc.accept(app.clone(), server_id, nick, addr, port);
+    Ok(())
+}
+
+/// Sends a typed line to a DCC chat peer.
+#[tauri::command]
+pub fn dcc_send(dcc: State<'_, crate::irc::dcc::DccManager>, id: String, text: String) {
+    dcc.send(&id, text);
+}
+
+/// Closes a DCC chat session.
+#[tauri::command]
+pub fn dcc_close(dcc: State<'_, crate::irc::dcc::DccManager>, id: String) {
+    dcc.close(&id);
+}

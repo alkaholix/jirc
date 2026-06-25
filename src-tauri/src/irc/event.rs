@@ -277,6 +277,26 @@ pub enum UiEvent {
         n: u32,
         text: String,
     },
+    /// A DCC chat session opened (`id` is the buffer key, mIRC-style `=nick`).
+    DccChatOpen {
+        server_id: String,
+        id: String,
+        nick: String,
+        /// True if we initiated it (`/dcc chat`), false if we accepted an offer.
+        outgoing: bool,
+    },
+    /// A line received over a DCC chat connection.
+    DccChatLine {
+        server_id: String,
+        id: String,
+        from: String,
+        text: String,
+    },
+    /// A DCC chat connection closed.
+    DccChatClosed {
+        server_id: String,
+        id: String,
+    },
 }
 
 #[cfg(test)]
