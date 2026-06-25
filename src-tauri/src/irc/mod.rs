@@ -3,6 +3,7 @@
 
 pub mod auth;
 pub mod connection;
+pub mod dcc;
 pub mod event;
 pub mod ircx;
 pub mod manager;

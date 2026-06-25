@@ -514,6 +514,29 @@ pub fn process_message(ctx: &mut Context, raw: &str, msg: Message) -> Effects {
             // CTCP requests (\x01CMD args\x01), excluding ACTION, get auto-replies.
             if let Some(ctcp) = text.strip_prefix('\u{1}').map(|s| s.trim_end_matches('\u{1}')) {
                 let (cmd, rest) = ctcp.split_once(' ').unwrap_or((ctcp, ""));
+                // A DCC offer (CHAT/SEND) — surface it to the user. (Connecting to
+                // accept it is a later phase; for now incoming offers are visible.)
+                if cmd.eq_ignore_ascii_case("DCC") {
+                    let who = source.as_deref().unwrap_or("?");
+                    let note = match crate::irc::dcc::parse_dcc(ctcp) {
+                        Some(o) => match o.kind {
+                            crate::irc::dcc::DccKind::Chat => {
+                                format!("{who} offers a DCC CHAT ({}:{})", o.ip, o.port)
+                            }
+                            crate::irc::dcc::DccKind::Send => format!(
+                                "{who} offers to send you \"{}\" ({} bytes) from {}:{}",
+                                o.filename, o.size, o.ip, o.port
+                            ),
+                        },
+                        None => format!("{who} sent an unrecognised DCC request: {rest}"),
+                    };
+                    fx.events.push(UiEvent::Echo {
+                        server_id,
+                        target: "(status)".to_string(),
+                        text: format!("[DCC] {note}"),
+                    });
+                    return fx;
+                }
                 if !cmd.eq_ignore_ascii_case("ACTION") {
                     // Only auto-respond to direct CTCP (avoids channel storms).
                     if target == &ctx.state.nick {
@@ -1534,6 +1557,28 @@ mod tests {
             .iter()
             .any(|l| l.starts_with("NOTICE bob :\u{1}VERSION jIRC")));
         assert!(!fx.events.iter().any(|e| matches!(e, UiEvent::Message { .. })));
+    }
+
+    #[test]
+    fn incoming_dcc_offer_is_surfaced() {
+        let mut s = SessionState {
+            nick: "me".into(),
+            ..Default::default()
+        };
+        let mut accum = HashMap::new();
+        let fx = run_line(
+            &mut s,
+            &mut accum,
+            ":bob!u@h PRIVMSG me :\u{1}DCC SEND readme.txt 3232235521 5000 12345\u{1}",
+        );
+        assert!(fx.events.iter().any(|e| matches!(
+            e,
+            UiEvent::Echo { text, .. }
+                if text.contains("[DCC]") && text.contains("readme.txt") && text.contains("bob")
+        )));
+        // A DCC CTCP isn't echoed as a normal message and gets no auto-reply.
+        assert!(!fx.events.iter().any(|e| matches!(e, UiEvent::Message { .. })));
+        assert!(fx.outgoing.is_empty());
     }
 
     #[test]
