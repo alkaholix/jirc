@@ -14,6 +14,7 @@ import { ScriptDialog } from "./components/ScriptDialog";
 import { ChannelListDialog } from "./components/ChannelListDialog";
 import { AutoJoinDialog } from "./components/AutoJoinDialog";
 import { TransfersPanel } from "./components/TransfersPanel";
+import { dccDetect } from "./state/dcc";
 import { ChannelCentral } from "./components/ChannelCentral";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { PromptDialog } from "./components/PromptDialog";
@@ -81,6 +82,7 @@ function App() {
             api.dccRecv(o.serverId, o.nick, o.filename, o.ip, o.port, o.size).catch(() => {});
         });
       }
+      if (e.payload.type === "dccLocalHost") dccDetect.set(e.payload.host);
     });
     return () => {
       unlisten.then((f) => f());

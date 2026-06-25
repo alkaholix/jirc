@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { applyTheme, Layout, Theme, useSettings } from "../state/settings";
 import { api, DataLocation } from "../lib/api";
+import { dccDetect } from "../state/dcc";
 
 const splitList = (value: string) =>
   value
@@ -28,6 +29,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [dataLoc, setDataLoc] = useState<DataLocation | null>(null);
   const [customPath, setCustomPath] = useState("");
   const [dataMsg, setDataMsg] = useState("");
+  const [dccMsg, setDccMsg] = useState("");
 
   useEffect(() => {
     api
@@ -47,6 +49,27 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       setCustomPath(d.custom);
     }
     setDataMsg("Saved — restart jIRC to apply.");
+  };
+
+  const isIpv4 = (s: string) => /^\d{1,3}(\.\d{1,3}){3}$/.test(s);
+  const detectDccIp = async () => {
+    const host = dccDetect.get();
+    if (!host) {
+      setDccMsg("Connect to a server first, then try again.");
+      return;
+    }
+    if (isIpv4(host)) {
+      settings.set("dccIp", host);
+      setDccMsg(`Detected ${host}`);
+      return;
+    }
+    const ipv4 = (await api.dnsLookup(host).catch(() => [])).find(isIpv4);
+    if (ipv4) {
+      settings.set("dccIp", ipv4);
+      setDccMsg(`Detected ${ipv4} (${host})`);
+    } else {
+      setDccMsg(`Couldn't resolve ${host} — your host may be masked; enter your IP manually.`);
+    }
   };
 
   const syncEmoji = (pairs: [string, string][]) => {
@@ -313,6 +336,12 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   placeholder="e.g. your public IP, for transfers over the internet"
                 />
               </label>
+              <div className="row">
+                <button className="ghost" onClick={detectDccIp}>
+                  Detect from server
+                </button>
+                {dccMsg && <span className="keyring-note ok">{dccMsg}</span>}
+              </div>
               <div className="row">
                 <label className="grow">
                   Port from

@@ -986,6 +986,24 @@ fn handle_numeric(ctx: &mut Context, fx: &mut Effects, resp: Response, args: &[S
     let server_id = ctx.server_id.to_string();
     let code = resp as u16;
     match resp {
+        // 302 USERHOST: "<nick>[*]=<+|-><user>@<host>". Pull our own host for the
+        // DCC IP auto-detect (mIRC's "Server" lookup method).
+        Response::RPL_USERHOST => {
+            if let Some(reply) = args.last() {
+                for tok in reply.split_whitespace() {
+                    if let Some((who, rest)) = tok.split_once('=') {
+                        if who.trim_end_matches('*').eq_ignore_ascii_case(&ctx.state.nick) {
+                            if let Some((_, host)) = rest.split_once('@') {
+                                fx.events.push(UiEvent::DccLocalHost {
+                                    server_id: server_id.clone(),
+                                    host: host.to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
         Response::RPL_WELCOME => {
             ctx.state.registered = true;
             ctx.state.connect_time = now_secs();
@@ -996,6 +1014,9 @@ fn handle_numeric(ctx: &mut Context, fx: &mut Effects, resp: Response, args: &[S
                 server_id,
                 nick: ctx.state.nick.clone(),
             });
+            // Ask the server for our own host so DCC can auto-detect the IP to
+            // advertise (mIRC's "Server" lookup). The 302 reply drives DccLocalHost.
+            fx.outgoing.push(format!("USERHOST {}", ctx.state.nick));
             // NickServ identify (when not already authenticated via SASL).
             if ctx.profile.nickserv && !ctx.auth.sasl_succeeded {
                 if let Some(pw) = ctx

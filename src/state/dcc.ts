@@ -29,3 +29,13 @@ export const dccOffers = {
     return o;
   },
 };
+
+// The latest host the server reported for us (USERHOST), used to auto-detect the
+// public IP for DCC offers.
+let detectedHost = "";
+export const dccDetect = {
+  set: (host: string) => {
+    detectedHost = host;
+  },
+  get: () => detectedHost,
+};

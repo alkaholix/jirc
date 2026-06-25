@@ -325,6 +325,12 @@ pub enum UiEvent {
         size: u64,
         status: String,
     },
+    /// Our own host as the server sees it (from a USERHOST reply), for the DCC
+    /// IP auto-detect.
+    DccLocalHost {
+        server_id: String,
+        host: String,
+    },
 }
 
 #[cfg(test)]

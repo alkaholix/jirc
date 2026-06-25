@@ -273,7 +273,8 @@ export type IrcEvent =
       transferred: number;
       size: number;
       status: string;
-    };
+    }
+  | { type: "dccLocalHost"; serverId: string; host: string };
 
 export interface Member {
   nick: string;
