@@ -426,9 +426,14 @@ Text-style events also take a <strong>matchtext</strong> pattern before the targ
   <tr><td><code>INVITE</code></td><td>you are invited</td><td><code>$nick</code> (inviter), <code>$chan</code></td></tr>
   <tr><td><code>CONNECT</code></td><td>you finish connecting</td><td>—</td></tr>
   <tr><td><code>DISCONNECT</code></td><td>you disconnect</td><td>—</td></tr>
+  <tr><td><code>CONNECTFAIL</code></td><td>a connection attempt fails</td><td><code>$1-</code> (reason)</td></tr>
   <tr><td><code>RAW</code></td><td>any raw server line arrives</td><td><code>$numeric</code>, <code>$1-</code> (the line)</td></tr>
   <tr><td><code>CTCP</code></td><td>someone sends a CTCP request</td><td><code>$nick $chan $1-</code></td></tr>
   <tr><td><code>CTCPREPLY</code></td><td>a CTCP reply (e.g. PING) comes back</td><td><code>$nick $1-</code></td></tr>
+  <tr><td><code>WALLOPS</code></td><td>a wallops message arrives (matchtext)</td><td><code>$nick</code> (sender), <code>$1-</code></td></tr>
+  <tr><td><code>SNOTICE</code></td><td>a server notice arrives (matchtext)</td><td><code>$1-</code> (the notice)</td></tr>
+  <tr><td><code>ERROR</code></td><td>the server sends an ERROR (matchtext)</td><td><code>$1-</code> (the message)</td></tr>
+  <tr><td><code>PING PONG</code></td><td>server ping / pong keepalives</td><td><code>$1-</code></td></tr>
   <tr><td><code>SIGNAL</code></td><td>a script runs <code>/signal &lt;name&gt;</code></td><td><code>$signal</code> (name), <code>$1-</code> (params)</td></tr>
 </table>
 

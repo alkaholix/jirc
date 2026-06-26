@@ -679,7 +679,7 @@ out of scope.
 - [ ] `on CHAT` *(DCC chat)*
 - [ ] `on CLOSE`
 - [x] `on CONNECT`
-- [ ] `on CONNECTFAIL`
+- [x] `on CONNECTFAIL` *(fires on a failed connect attempt; `$1-` = reason)*
 - [x] `on CTCPREPLY`
 - [ ] `on DCCSERVER`
 - [ ] `on DEHELP`  *(per-mode events fire; verify DEHELP specifically)*
@@ -688,7 +688,7 @@ out of scope.
 - [x] `on DIALOG`
 - [x] `on DISCONNECT`
 - [ ] `on DNS`
-- [ ] `on ERROR`
+- [x] `on ERROR` *(matchtext; `$1-` = the server error message)*
 - [ ] `on EXIT`
 - [ ] `on FILERCVD` · [ ] `on FILESENT` · [ ] `on GETFAIL` · [ ] `on SENDFAIL` *(DCC transfer)*
 - [ ] `on HELP`
@@ -709,13 +709,13 @@ out of scope.
 - [ ] `on OPEN`
 - [ ] `on PARSELINE`
 - [x] `on PART`
-- [ ] `on PING` · [ ] `on PONG`
+- [x] `on PING` · [x] `on PONG`
 - [x] `on QUIT`
 - [x] `on RAW` *(numeric/command, `$numeric`)*
 - [x] `on RAWMODE`
 - [ ] `on SERV` · [ ] `on SERVERMODE` · [ ] `on SERVEROP`
 - [x] `on SIGNAL` *(`$signal` = name, `$1-` = params; wildcard name match)*
-- [ ] `on SNOTICE`
+- [x] `on SNOTICE` *(matchtext; a NOTICE from a server)*
 - [x] `on SOCKCLOSE`
 - [x] `on SOCKLISTEN`
 - [x] `on SOCKOPEN`
@@ -729,7 +729,7 @@ out of scope.
 - [x] `on USERMODE`
 - [ ] `on VCMD`
 - [x] `on VOICE`
-- [ ] `on WALLOPS`
+- [x] `on WALLOPS` *(matchtext; `$nick` = sender)*
 - **CTCP events:** [x] `on CTCP` · [x] `on CTCPREPLY` *(matchtext = command or full text; both fire live. jIRC auto-replies to VERSION, PING, TIME, FINGER, USERINFO, SOURCE, CLIENTINFO)*
 - **Numeric events:** [x] handled via `on RAW`
 

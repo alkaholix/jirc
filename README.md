@@ -44,7 +44,7 @@ the **?** button opens it in your browser.
 - **Script groups** — `#name on/off … #name end` with `/enable`/`/disable`/`/groups`
   and `$group`; disabled groups' aliases and events don't fire
 - `on` event handlers: TEXT/ACTION/NOTICE/**INPUT**/JOIN/PART/QUIT/NICK/**KICK**/
-  **MODE**/**TOPIC**/**INVITE**/CONNECT/**DISCONNECT**/**RAW**/**CTCP**/**CTCPREPLY**/**SIGNAL**,
+  **MODE**/**TOPIC**/**INVITE**/CONNECT/**DISCONNECT**/**CONNECTFAIL**/**RAW**/**CTCP**/**CTCPREPLY**/**WALLOPS**/**SNOTICE**/**ERROR**/**PING**/**PONG**/**SIGNAL**,
   plus per-mode **OP/VOICE/BAN/…** events
 - **Identity & connect control** — `/anick`/`/mnick`/`/fullname`, and `/autojoin`
   (`-n`/`-s`/`-dN`) to control the connect-time autojoin from `on CONNECT`

@@ -7,8 +7,15 @@
 
 use super::ast::{Alias, Dialog, DialogControl, Event, Popup, PopupItem, Script, Stmt};
 
-const MATCHTEXT_EVENTS: &[&str] =
-    &["TEXT", "ACTION", "NOTICE", "WALLOPS", "CTCP", "CTCPREPLY", "RAW"];
+const MATCHTEXT_EVENTS: &[&str] = &[
+    "TEXT", "ACTION", "NOTICE", "SNOTICE", "WALLOPS", "ERROR", "CTCP", "CTCPREPLY", "RAW",
+];
+
+/// Matchtext events with NO `*#?` target field — `on EVENT:<matchtext>:<cmd>`.
+const NO_TARGET_MATCHTEXT: &[&str] = &["RAW", "WALLOPS", "SNOTICE", "ERROR"];
+
+/// Events with neither a matchtext nor a target — `on EVENT:<cmd>`.
+const PLAIN_EVENTS: &[&str] = &["CONNECT", "DISCONNECT", "CONNECTFAIL", "PING", "PONG"];
 
 struct Cursor {
     chars: Vec<char>,
@@ -368,19 +375,24 @@ fn parse_braceless_event(header: &str) -> Option<Event> {
         return None;
     }
     let rest = ev.next().unwrap_or("");
-    let (pattern, target, command) = if kind == "RAW" {
-        // on *:RAW:<numeric>:<command> — matchtext, no target field.
+    let (pattern, target, command) = if NO_TARGET_MATCHTEXT.contains(&kind.as_str()) {
+        // on *:RAW|WALLOPS|SNOTICE|ERROR:<matchtext>:<command> — no target field.
         let mut p = rest.splitn(2, ':');
         let matchtext = p.next().unwrap_or("").trim().to_string();
         let command = p.next().unwrap_or("").trim().to_string();
         (matchtext, String::new(), command)
     } else if MATCHTEXT_EVENTS.contains(&kind.as_str()) {
+        // on *:TEXT|NOTICE|CTCP|…:<matchtext>:<*#?>:<command>.
         let mut p = rest.splitn(3, ':');
         let matchtext = p.next().unwrap_or("").trim().to_string();
         let target = p.next().unwrap_or("").trim().to_string();
         let command = p.next().unwrap_or("").trim().to_string();
         (matchtext, target, command)
+    } else if PLAIN_EVENTS.contains(&kind.as_str()) {
+        // on *:CONNECT|PING|…:<command> — no matchtext, no target.
+        (String::new(), String::new(), rest.trim().to_string())
     } else {
+        // on *:JOIN|PART|…:<target>:<command> — channel target, no matchtext.
         let mut p = rest.splitn(2, ':');
         let target = p.next().unwrap_or("").trim().to_string();
         let command = p.next().unwrap_or("").trim().to_string();

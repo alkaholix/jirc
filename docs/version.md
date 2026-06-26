@@ -13,6 +13,21 @@ three places that carry it:
 
 Newest first.
 
+## 26.6.26
+
+### Added
+- **Protocol script events** — `on WALLOPS`, `on SNOTICE` (a NOTICE from a
+  server), `on ERROR` (a server ERROR message), `on CONNECTFAIL` (a failed
+  connect attempt), and `on PING` / `on PONG`. WALLOPS/SNOTICE/ERROR take a
+  matchtext; the rest are plain. `$nick` is the sender where applicable, `$1-`
+  the message text. Verified against mirc.com.
+
+### Fixed
+- **Braceless `on` one-liners** for matchtext-without-target events (`RAW`/
+  `WALLOPS`/`SNOTICE`/`ERROR`) and plain events (`CONNECT`/`DISCONNECT`/`PING`/…)
+  now parse correctly — the trailing command was previously swallowed as the
+  target field, so the handler did nothing.
+
 ## 26.6.25
 
 ### Added

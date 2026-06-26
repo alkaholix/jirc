@@ -164,6 +164,8 @@ async fn run_once(
                     reason: e.to_string(),
                 },
             );
+            // `on CONNECTFAIL` for scripts ($1- = the failure reason).
+            fire_connectfail(app, server_id, profile, &e.to_string());
             return Outcome::Dropped;
         }
     };
@@ -394,6 +396,49 @@ fn is_state_event(ev: &UiEvent) -> bool {
     )
 }
 
+/// The nick from a raw line's prefix (`:nick!user@host CMD …` → `nick`); the
+/// bare prefix when there's no `!`/`@` (a server), or empty with no prefix.
+fn source_nick(line: &str) -> String {
+    line.strip_prefix(':')
+        .and_then(|s| s.split(' ').next())
+        .map(|p| p.split(['!', '@']).next().unwrap_or(p).to_string())
+        .unwrap_or_default()
+}
+
+/// Maps an inbound IRC command to the named `on` event it fires, if any.
+fn named_event_kind(command: &str) -> Option<&'static str> {
+    match command.to_ascii_uppercase().as_str() {
+        "WALLOPS" => Some("WALLOPS"),
+        "ERROR" => Some("ERROR"),
+        "PING" => Some("PING"),
+        "PONG" => Some("PONG"),
+        _ => None,
+    }
+}
+
+/// Runs `on CONNECTFAIL` after a failed connection attempt. No live session
+/// exists yet, so a minimal state (just our nick) backs the run context.
+fn fire_connectfail(app: &AppHandle, server_id: &str, profile: &ServerProfile, reason: &str) {
+    let Some(engine) = app.try_state::<crate::script::ScriptEngine>() else {
+        return;
+    };
+    let state = SessionState {
+        nick: profile.nick.clone(),
+        ..Default::default()
+    };
+    let ctx = crate::script::RunCtx {
+        my_nick: &state.nick,
+        network: &profile.name,
+        server: &profile.host,
+        data_dir: crate::script::script_data_dir(app),
+        state: std::sync::Arc::new(state.snapshot()),
+    };
+    let actions = crate::script::dispatch_named(&engine, &ctx, "CONNECTFAIL", "", reason);
+    if !actions.is_empty() {
+        crate::script::apply_actions(app, server_id, &state.nick, &profile.name, &profile.host, actions);
+    }
+}
+
 /// Runs script event handlers for the events produced by one inbound message.
 fn run_scripts(
     app: &AppHandle,
@@ -415,9 +460,20 @@ fn run_scripts(
         state: std::sync::Arc::new(state.snapshot()),
     };
     let mut actions = Vec::new();
-    // `on RAW` fires for every inbound server line.
+    // `on RAW` fires for every inbound server line; named protocol events
+    // (`on WALLOPS`/`ERROR`/`PING`/`PONG`) fire off the same parsed command.
     if let Some(line) = raw_line {
         if let Some((command, params)) = raw_command_params(line) {
+            if let Some(kind) = named_event_kind(&command) {
+                let text = params.last().cloned().unwrap_or_default();
+                actions.extend(crate::script::dispatch_named(
+                    &engine,
+                    &ctx,
+                    kind,
+                    &source_nick(line),
+                    &text,
+                ));
+            }
             actions.extend(crate::script::dispatch_raw(&engine, &ctx, &command, params));
         }
     }

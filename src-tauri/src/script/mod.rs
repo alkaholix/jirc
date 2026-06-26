@@ -1178,6 +1178,8 @@ pub fn drive_event(
                 return engine.dispatch_event(ctx, ckind, vars);
             }
             let kind = match kind {
+                // A NOTICE with no nick prefix is a server notice → `on SNOTICE`.
+                crate::irc::event::MessageKind::Notice if from.is_empty() => "SNOTICE",
                 crate::irc::event::MessageKind::Notice => "NOTICE",
                 _ => "TEXT",
             };
@@ -1346,6 +1348,26 @@ pub fn dispatch_raw(
         ..Default::default()
     };
     engine.dispatch_event(ctx, "RAW", vars)
+}
+
+/// Dispatches a named protocol event fired straight off an inbound command —
+/// `on WALLOPS` / `ERROR` / `PING` / `PONG` / `CONNECTFAIL`. `$nick` is the
+/// source (empty for server-only commands), `$1-` the message text. WALLOPS is
+/// a matchtext event (matches the text); the rest are plain.
+pub fn dispatch_named(
+    engine: &ScriptEngine,
+    ctx: &RunCtx,
+    kind: &str,
+    nick: &str,
+    text: &str,
+) -> Vec<Action> {
+    let vars = EventVars {
+        nick: nick.to_string(),
+        params: words(text),
+        text: text.to_string(),
+        ..Default::default()
+    };
+    engine.dispatch_event(ctx, kind, vars)
 }
 
 #[cfg(test)]
@@ -1700,6 +1722,54 @@ mod tests {
         assert!(actions
             .iter()
             .any(|a| matches!(a, Action::Echo { text, .. } if text == "-> [bob] VERSION")));
+    }
+
+    #[test]
+    fn protocol_named_events_fire() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "on *:WALLOPS:*flood*:/echo w $nick $1-\non *:ERROR:*:/echo e $1-\non *:PING:/echo p\non *:CONNECTFAIL:/echo cf $1-",
+        );
+        // WALLOPS is a matchtext event — matches the text; $nick = sender.
+        assert_eq!(
+            dispatch_named(&engine, &ctx(), "WALLOPS", "oper", "net flood detected"),
+            vec![Action::Echo { target: "(status)".into(), text: "w oper net flood detected".into() }]
+        );
+        // ERROR / PING / CONNECTFAIL are plain — they fire regardless; $1- = text.
+        assert_eq!(
+            dispatch_named(&engine, &ctx(), "ERROR", "", "Closing Link: spam"),
+            vec![Action::Echo { target: "(status)".into(), text: "e Closing Link: spam".into() }]
+        );
+        assert_eq!(
+            dispatch_named(&engine, &ctx(), "PING", "", "12345"),
+            vec![Action::Echo { target: "(status)".into(), text: "p".into() }]
+        );
+        assert_eq!(
+            dispatch_named(&engine, &ctx(), "CONNECTFAIL", "", "connection refused"),
+            vec![Action::Echo { target: "(status)".into(), text: "cf connection refused".into() }]
+        );
+    }
+
+    #[test]
+    fn server_notice_fires_snotice_not_notice() {
+        let engine = ScriptEngine::new();
+        engine.load("on *:SNOTICE:*:/echo s $1-\non *:NOTICE:*:*:/echo n $1-");
+        // A NOTICE with no nick prefix (server source) → on SNOTICE, not NOTICE.
+        let ev = UiEvent::Message {
+            server_id: "s".into(),
+            kind: MessageKind::Notice,
+            from: None,
+            target: "me".into(),
+            text: "*** Looking up your hostname".into(),
+            time: None,
+        };
+        assert_eq!(
+            drive_event(&engine, &ctx(), &ev),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "s *** Looking up your hostname".into()
+            }]
+        );
     }
 
     #[test]
