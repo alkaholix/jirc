@@ -15,6 +15,7 @@ const BLANK: ServerProfile = {
   port: 6667,
   nick: "",
   ircx: true,
+  ntlmDomain: "CG",
   tls: false,
   autoReconnect: true,
   autojoin: [],
@@ -234,9 +235,54 @@ export function ConnectDialog({ onClose, onConnect }: Props) {
               NickServ
             </label>
             <label className="inline">
-              <input type="checkbox" checked={!!form.ircx} onChange={(e) => set("ircx", e.target.checked)} />
+              <input
+                type="checkbox"
+                checked={!!form.ircx}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, ircx: e.target.checked, ntlm: e.target.checked ? f.ntlm : false }))
+                }
+              />
               IRCX
             </label>
+            {form.ircx && (
+              <label className="inline">
+                <input type="checkbox" checked={!!form.ntlm} onChange={(e) => set("ntlm", e.target.checked)} />
+                NTLM
+              </label>
+            )}
+          </div>
+          {form.ircx && form.ntlm && (
+            <>
+              <div className="row">
+                <label className="grow">
+                  NTLM domain
+                  <input
+                    value={form.ntlmDomain ?? ""}
+                    onChange={(e) => set("ntlmDomain", e.target.value)}
+                    placeholder="e.g. CG (optional)"
+                  />
+                </label>
+                <label className="grow">
+                  NTLM username
+                  <input
+                    value={form.ntlmUser ?? ""}
+                    onChange={(e) => set("ntlmUser", e.target.value)}
+                    placeholder="defaults to nick"
+                  />
+                </label>
+              </div>
+              <label>
+                NTLM password
+                <input
+                  type="password"
+                  value={form.ntlmPassword ?? ""}
+                  onChange={(e) => set("ntlmPassword", e.target.value)}
+                  placeholder="NTLM password"
+                />
+              </label>
+            </>
+          )}
+          <div className="row toggles">
             <label className="inline">
               <input
                 type="checkbox"

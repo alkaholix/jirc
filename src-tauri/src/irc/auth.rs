@@ -121,6 +121,10 @@ mod tests {
             username: None,
             realname: None,
             password: None,
+            ntlm: false,
+            ntlm_domain: None,
+            ntlm_user: None,
+            ntlm_password: None,
             autojoin: vec![],
         }
     }

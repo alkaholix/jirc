@@ -6,7 +6,9 @@ pub mod connection;
 pub mod dcc;
 pub mod event;
 pub mod ircx;
+pub mod ircx_sspi;
 pub mod manager;
+pub mod ntlm;
 pub mod state;
 pub mod stream;
 
