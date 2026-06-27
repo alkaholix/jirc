@@ -1773,6 +1773,18 @@ mod tests {
     }
 
     #[test]
+    fn ialfill_sends_who_for_the_channel() {
+        let engine = ScriptEngine::new();
+        engine.load("alias f { /ialfill $1- }");
+        // Bare channel, and with a leading network token — both WHO the channel.
+        assert_eq!(engine.run_alias(&ctx(), "#x", "f", "#chan"), vec![Action::Send("WHO #chan".into())]);
+        assert_eq!(
+            engine.run_alias(&ctx(), "#x", "f", "libera #chan"),
+            vec![Action::Send("WHO #chan".into())]
+        );
+    }
+
+    #[test]
     fn raw_event_matches_and_exposes_numeric_event() {
         let engine = ScriptEngine::new();
         engine.load("on *:RAW:001:/echo got $numeric ev $event p1 $1-\non *:RAW:PING:/echo gotping");

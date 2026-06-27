@@ -690,15 +690,27 @@ impl<'a> Runtime<'a> {
             }
             // Client-side commands we don't (yet) implement but which must NOT be
             // sent to the server as raw IRC (that produces "421 Unknown command").
+            "ialfill" => {
+                // /ialfill [network] <#channel> — populate the IAL by WHOing the
+                // channel; each WHO reply records that member's address.
+                let s = self.expand(raw_args);
+                if let Some(chan) = s.split_whitespace().rev().find(|t| t.starts_with('#')) {
+                    self.actions.push(Action::Send(format!("WHO {chan}")));
+                }
+            }
             // We evaluate any parameters (for identifier side effects) and stop.
             // `/run` is deliberately a no-op — jIRC never launches programs.
+            // `/ial`/`/ialclear`/`/ialmark` are recognised here so they aren't sent
+            // to the server as raw commands; mutating the live IAL needs a
+            // connection-control channel that isn't built yet.
             "clearall" | "close" | "sline" | "cline" | "fline" | "renwin"
             | "titlebar" | "editbox" | "linesep"
             | "background" | "color" | "font" | "flash" | "beep" | "ebeeps" | "speak" | "splay"
             | "play" | "sound" | "run" | "url" | "dns" | "debug" | "log" | "logview"
             | "timestamp" | "donotdisturb" | "toolbar" | "menubar" | "switchbar" | "treebar"
             | "mdi" | "save" | "loadbuf"
-            | "savebuf" | "filter" | "showmirc" | "maximize" | "minimize" | "ial"
+            | "savebuf" | "filter" | "showmirc" | "maximize" | "minimize"
+            | "ial" | "ialclear" | "ialmark"
             | "creq" | "sreq" | "clipboard" | "resetidle" => {
                 let _ = self.expand(raw_args);
             }

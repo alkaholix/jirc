@@ -13,6 +13,28 @@ three places that carry it:
 
 Newest first.
 
+## 26.6.27
+
+### Added
+- **`/notify`** — maintain a notify (watch) list. `/notify <nick>` adds, `/notify
+  -r <nick>` removes, and bare `/notify` prints the list. Stored in settings
+  (`notifyList`) and matched case-insensitively.
+- **`/ialfill [network] <#channel>`** — populate the IAL by WHOing the channel;
+  each WHO reply records that member's address. `/ial`, `/ialclear` and `/ialmark`
+  are now recognised as client commands too (no longer mis-sent to the server as a
+  raw "421 Unknown command") — mutating the live IAL still needs a
+  connection-control channel that isn't built yet.
+- **`/links [server]`** — send a LINKS query.
+- **`/qmsg <text>`** and **`/qme <action>`** — message (or CTCP ACTION) every open
+  query window at once.
+- **`/queryrn <oldnick> <newnick>`** — rename an open query buffer (new
+  `renameBuffer` store action; a case-only rename keeps the same key).
+
+### Changed
+- **`/ignore`** now lists the current ignores when called bare, supports
+  `/ignore -r <nick>` to remove an entry, and matches case-insensitively
+  (previously it was add-only).
+
 ## 26.6.26
 
 ### Added

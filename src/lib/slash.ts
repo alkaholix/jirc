@@ -133,10 +133,19 @@ export async function handleInput(input: string, buffer: Buffer): Promise<void> 
       if (args) await api.whois(serverId, args.split(" ")[0]);
       break;
     case "ignore": {
-      const who = rest[0];
-      if (who) {
-        const st = useSettings.getState();
-        if (!st.ignores.includes(who)) st.set("ignores", [...st.ignores, who]);
+      const st = useSettings.getState();
+      const remove = rest[0] === "-r";
+      const who = remove ? rest[1] : rest[0];
+      if (!who) {
+        const list = st.ignores.length ? st.ignores.join(", ") : "(none)";
+        store.appendLine(serverId, name, kind, { kind: "system", text: `Ignore list: ${list}` });
+      } else if (remove) {
+        st.set("ignores", st.ignores.filter((i) => i.toLowerCase() !== who.toLowerCase()));
+        store.appendLine(serverId, name, kind, { kind: "system", text: `No longer ignoring ${who}` });
+      } else {
+        if (!st.ignores.some((i) => i.toLowerCase() === who.toLowerCase())) {
+          st.set("ignores", [...st.ignores, who]);
+        }
         store.appendLine(serverId, name, kind, { kind: "system", text: `Ignoring ${who}` });
       }
       break;
@@ -147,6 +156,60 @@ export async function handleInput(input: string, buffer: Buffer): Promise<void> 
         const st = useSettings.getState();
         st.set("ignores", st.ignores.filter((i) => i !== who));
         store.appendLine(serverId, name, kind, { kind: "system", text: `No longer ignoring ${who}` });
+      }
+      break;
+    }
+    case "notify": {
+      const st = useSettings.getState();
+      const remove = rest[0] === "-r";
+      const who = remove ? rest[1] : rest[0];
+      if (!who) {
+        const list = st.notifyList.length ? st.notifyList.join(", ") : "(none)";
+        store.appendLine(serverId, name, kind, { kind: "system", text: `Notify list: ${list}` });
+      } else if (remove) {
+        st.set("notifyList", st.notifyList.filter((n) => n.toLowerCase() !== who.toLowerCase()));
+        store.appendLine(serverId, name, kind, { kind: "system", text: `${who} removed from notify` });
+      } else {
+        if (!st.notifyList.some((n) => n.toLowerCase() === who.toLowerCase())) {
+          st.set("notifyList", [...st.notifyList, who]);
+        }
+        store.appendLine(serverId, name, kind, { kind: "system", text: `${who} added to notify` });
+      }
+      break;
+    }
+    case "links":
+      await api.sendRaw(serverId, args ? `LINKS ${args}` : "LINKS");
+      break;
+    case "qmsg":
+    case "qme": {
+      if (args) {
+        const isAction = command === "qme";
+        const queries = Object.values(store.buffers).filter(
+          (b) => b.serverId === serverId && b.kind === "query"
+        );
+        for (const qb of queries) {
+          if (isAction) {
+            await api.sendRaw(serverId, `PRIVMSG ${qb.name} :${ACTION}${args}\x01`);
+          } else {
+            await api.sendMessage(serverId, qb.name, args);
+          }
+          store.appendLine(serverId, qb.name, "query", {
+            kind: isAction ? "action" : "msg",
+            from: nick,
+            text: args,
+            self: true,
+          });
+        }
+      }
+      break;
+    }
+    case "queryrn": {
+      const [oldNick, newNick] = rest;
+      if (oldNick && newNick) {
+        const oldKey = bufferKey(serverId, oldNick);
+        if (store.buffers[oldKey]?.kind === "query") {
+          store.renameBuffer(oldKey, newNick);
+        }
       }
       break;
     }

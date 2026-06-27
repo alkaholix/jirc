@@ -304,3 +304,22 @@ describe("custom @windows", () => {
     expect(useStore.getState().buffers[bufferKey(SID, "@gone")]).toBeUndefined();
   });
 });
+
+describe("renameBuffer (/queryrn)", () => {
+  it("moves a query buffer to a new key, preserving lines + active", () => {
+    const s = useStore.getState();
+    s.appendLine(SID, "bob", "query", { kind: "msg", from: "bob", text: "hi there" });
+    const oldKey = bufferKey(SID, "bob");
+    s.setActive(oldKey);
+    s.renameBuffer(oldKey, "robert");
+
+    const st = useStore.getState();
+    const newKey = bufferKey(SID, "robert");
+    expect(st.buffers[oldKey]).toBeUndefined();
+    expect(st.buffers[newKey]?.name).toBe("robert");
+    expect(st.buffers[newKey]?.lines.map((l) => l.text)).toContain("hi there");
+    expect(st.active).toBe(newKey);
+    expect(st.order).toContain(newKey);
+    expect(st.order).not.toContain(oldKey);
+  });
+});

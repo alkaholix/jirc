@@ -555,7 +555,7 @@ out of scope.
 - [x] `/hmake`
 - [x] `/hop`
 - [x] `/hsave`
-- [ ] `/ial` *(stub)* · [ ] `/ialclear` · [ ] `/ialfill` · [ ] `/ialmark`
+- [x] `/ialfill` *(WHOs the channel to fill the IAL)* · [ ] `/ial` · [ ] `/ialclear` · [ ] `/ialmark` *(recognised; mutating the live IAL needs a connection-control channel — see below)*
 - [ ] `/identd`
 - [x] `/if`
 - [ ] `/ignore` *(client ignore list exists in UI; verify `/ignore` command)*
