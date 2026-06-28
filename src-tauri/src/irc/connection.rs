@@ -100,13 +100,61 @@ pub async fn supervise(
     }
 }
 
-/// Decodes a raw IRC line: UTF-8 if valid, otherwise Latin-1 (every byte maps
-/// to a code point) so non-UTF-8 servers don't break the connection.
+/// Decodes a raw IRC line. UTF-8 when valid; otherwise a tolerant pass that
+/// rebuilds **CESU-8** surrogate pairs — how .NET/Java IRCX servers (IRC7 /
+/// MSN-Chat) encode emoji and other astral characters, as two 3-byte UTF-16
+/// surrogates, which is illegal in plain UTF-8 — and maps any remaining stray
+/// byte to its Latin-1 code point so a non-UTF-8 server never breaks the
+/// connection.
 fn decode_irc_line(bytes: &[u8]) -> String {
-    match std::str::from_utf8(bytes) {
-        Ok(s) => s.to_string(),
-        Err(_) => bytes.iter().map(|&b| b as char).collect(),
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        return s.to_string();
     }
+    let mut out = String::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some(ch) = cesu8_surrogate_pair(&bytes[i..]) {
+            out.push(ch);
+            i += 6;
+        } else if let Some(len) = valid_utf8_char(&bytes[i..]) {
+            out.push_str(std::str::from_utf8(&bytes[i..i + len]).unwrap());
+            i += len;
+        } else {
+            out.push(bytes[i] as char); // Latin-1 fallback for a stray byte
+            i += 1;
+        }
+    }
+    out
+}
+
+/// If `b` starts with a CESU-8 UTF-16 surrogate pair (high surrogate as 3 bytes,
+/// then low surrogate as 3 bytes), returns the astral char it encodes.
+fn cesu8_surrogate_pair(b: &[u8]) -> Option<char> {
+    if b.len() < 6 {
+        return None;
+    }
+    let hi = surrogate_unit(b[0], b[1], b[2])?;
+    let lo = surrogate_unit(b[3], b[4], b[5])?;
+    if !(0xD800..=0xDBFF).contains(&hi) || !(0xDC00..=0xDFFF).contains(&lo) {
+        return None;
+    }
+    let cp = 0x1_0000 + ((hi - 0xD800) << 10) + (lo - 0xDC00);
+    char::from_u32(cp)
+}
+
+/// Decodes a `0xED 0x80-0xBF 0x80-0xBF` group to its code point (the U+D000–DFFF
+/// range, which includes the UTF-16 surrogates CESU-8 uses).
+fn surrogate_unit(b0: u8, b1: u8, b2: u8) -> Option<u32> {
+    if b0 != 0xED || b1 & 0xC0 != 0x80 || b2 & 0xC0 != 0x80 {
+        return None;
+    }
+    Some(((b0 as u32 & 0x0F) << 12) | ((b1 as u32 & 0x3F) << 6) | (b2 as u32 & 0x3F))
+}
+
+/// Length (1–4) of the valid UTF-8 char at the start of `b`, if any.
+fn valid_utf8_char(b: &[u8]) -> Option<usize> {
+    let max = b.len().min(4);
+    (1..=max).find(|&n| std::str::from_utf8(&b[..n]).is_ok())
 }
 
 /// Writes one line to the socket and mirrors it to the raw console.
@@ -1462,6 +1510,19 @@ mod tests {
         assert_eq!(m, "xw");
         apply_user_modes(&mut m, "-xw");
         assert_eq!(m, "");
+    }
+
+    #[test]
+    fn decodes_cesu8_emoji_and_falls_back() {
+        // 🦊 (U+1F98A) as a .NET/IRCX CESU-8 surrogate pair: ED A0 BE ED B6 8A —
+        // illegal in plain UTF-8, so this is the `>í ¾í¶…` mojibake case.
+        let bytes = b"\x3e\xED\xA0\xBE\xED\xB6\x8A5833"; // ">🦊5833"
+        assert_eq!(decode_irc_line(bytes), ">🦊5833");
+        // Plain ASCII and ordinary (4-byte) UTF-8 still pass through unchanged.
+        assert_eq!(decode_irc_line(b"JOIN #chan"), "JOIN #chan");
+        assert_eq!(decode_irc_line("café 🚀".as_bytes()), "café 🚀");
+        // A stray non-UTF-8 byte still maps to its Latin-1 code point.
+        assert_eq!(decode_irc_line(&[0x68, 0x69, 0xC9]), "hiÉ");
     }
 
     fn profile() -> ServerProfile {

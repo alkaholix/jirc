@@ -11,6 +11,7 @@ pub mod eval;
 pub mod files;
 pub mod ident;
 pub mod ini;
+pub mod input;
 pub mod parser;
 pub mod socket;
 pub mod timer;
@@ -20,7 +21,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use ast::{PopupItem, Script};
-use eval::{wildcard_match, Action, EventVars, NoSockets, Runtime, ScriptSockets};
+use eval::{wildcard_match, Action, EventVars, NoInput, NoSockets, Runtime, ScriptInput, ScriptSockets};
 
 /// Connection context supplied by the caller for each run.
 pub struct RunCtx<'a> {
@@ -41,6 +42,7 @@ struct Inner {
     bins: binvar::BinStore,
     windows: window::WindowStore,
     sockets: std::sync::Arc<dyn ScriptSockets>,
+    input: std::sync::Arc<dyn ScriptInput>,
 }
 
 impl Inner {
@@ -53,6 +55,7 @@ impl Inner {
             bins: binvar::BinStore::default(),
             windows: window::WindowStore::default(),
             sockets: std::sync::Arc::new(NoSockets),
+            input: std::sync::Arc::new(NoInput),
         }
     }
 }
@@ -79,6 +82,11 @@ impl ScriptEngine {
     /// engine can run `/socklisten`/`/sockaccept`/`$sock(...)` against real sockets.
     pub fn set_sockets(&self, sockets: std::sync::Arc<dyn ScriptSockets>) {
         self.inner.lock().unwrap().sockets = sockets;
+    }
+
+    /// Installs the (production) `$input` prompt backend; called once at startup.
+    pub fn set_input(&self, input: std::sync::Arc<dyn ScriptInput>) {
+        self.inner.lock().unwrap().input = input;
     }
 
     /// Compiles the combined source of all loaded script files.
@@ -137,6 +145,7 @@ impl ScriptEngine {
             data_dir: ctx.data_dir.clone(),
             state: ctx.state.clone(),
             sockets: g.sockets.clone(),
+            input: g.input.clone(),
             caller: "menu",
         };
         eval_popup_labels(&mut rt, &raw)
@@ -183,6 +192,7 @@ impl ScriptEngine {
             data_dir: ctx.data_dir.clone(),
             state: ctx.state.clone(),
             sockets: g.sockets.clone(),
+            input: g.input.clone(),
             caller: "command",
         };
         rt.run(&alias.body);
@@ -234,6 +244,7 @@ impl ScriptEngine {
             data_dir: ctx.data_dir.clone(),
             state: ctx.state.clone(),
             sockets: g.sockets.clone(),
+            input: g.input.clone(),
             caller: "command",
         };
         rt.run(&body);
@@ -294,6 +305,7 @@ impl ScriptEngine {
                 data_dir: ctx.data_dir.clone(),
                 state: ctx.state.clone(),
                 sockets: g.sockets.clone(),
+            input: g.input.clone(),
                 caller: "event",
             };
             rt.run(&ev.body);
@@ -1113,7 +1125,6 @@ pub fn script_run_input(
 #[allow(clippy::too_many_arguments)]
 pub fn script_run_popup(
     app: AppHandle,
-    engine: State<'_, ScriptEngine>,
     server_id: String,
     target: String,
     my_nick: String,
@@ -1121,18 +1132,24 @@ pub fn script_run_popup(
     command: String,
     params: Vec<String>,
 ) {
-    let ctx = RunCtx {
-        my_nick: &my_nick,
-        network: &network,
-        server: "",
-        data_dir: script_data_dir(&app),
-        state: app
-            .try_state::<crate::irc::state::StateStore>()
-            .map(|s| s.get(&server_id))
-            .unwrap_or_default(),
-    };
-    let actions = engine.run_command(&ctx, &target, &command, &params);
-    apply_actions(&app, &server_id, &my_nick, &network, "", actions);
+    // A popup command may call `$input`, which blocks the run waiting for the UI
+    // dialog. Run it on a blocking thread so the main thread (and WebView2) stay
+    // responsive — a sync command blocking the main thread deadlocks the webview.
+    tauri::async_runtime::spawn_blocking(move || {
+        let engine = app.state::<ScriptEngine>();
+        let ctx = RunCtx {
+            my_nick: &my_nick,
+            network: &network,
+            server: "",
+            data_dir: script_data_dir(&app),
+            state: app
+                .try_state::<crate::irc::state::StateStore>()
+                .map(|s| s.get(&server_id))
+                .unwrap_or_default(),
+        };
+        let actions = engine.run_command(&ctx, &target, &command, &params);
+        apply_actions(&app, &server_id, &my_nick, &network, "", actions);
+    });
 }
 
 /// Drives event handlers from a UI event produced by the connection. Returns
@@ -1382,6 +1399,40 @@ mod tests {
             data_dir: std::env::temp_dir(),
             state: std::sync::Arc::new(Default::default()),
         }
+    }
+
+    #[test]
+    fn regsubex_subtext_handles_structural_chars() {
+        // A captured mSL-structural char ( ( ) [ ] $ % , & … ) must not corrupt
+        // `$asc(\1)` — byte builders depend on it. "a(b]c" -> the asc of each
+        // char, separators intact (a captured "(" used to make `$asc(()` and
+        // drop/merge bytes, which corrupted GKSSP HMAC/gkid responses).
+        let engine = ScriptEngine::new();
+        engine.load(r#"alias t { var %x = a(b]c | /echo -a [ $+ $regsubex(%x,/(.)/g,$asc(\1) $+ $chr(32)) $+ ] }"#);
+        let actions = engine.run_alias(&ctx(), "", "t", "");
+        assert_eq!(actions, vec![Action::Echo { target: "(status)".into(), text: "[97 40 98 93 99 ]".into() }]);
+    }
+
+    #[test]
+    fn regsubex_keeps_unknown_escape_backslash() {
+        // mIRC keeps an unrecognised escape literal: `\*` stays "\*" (used as a
+        // wildcard to tell an escape sequence from a plain char). Input "a\0b" ->
+        // 'a' and 'b' are plain (asc 97/98), only "\0" matches the "\*" wildcard.
+        let engine = ScriptEngine::new();
+        engine.load(r#"alias t { /echo -a [ $+ $regsubex(a\0b,/(\\?.)/g,$iif(\* iswm \1,ESC,$asc(\1)) $+ $chr(32)) $+ ] }"#);
+        let actions = engine.run_alias(&ctx(), "", "t", "");
+        assert_eq!(actions, vec![Action::Echo { target: "(status)".into(), text: "[97 ESC 98 ]".into() }]);
+    }
+
+    #[test]
+    fn input_returns_default_without_ui() {
+        // With no UI backend installed (NoInput), $input returns its default (4th
+        // arg) so a non-interactive/test run proceeds. The production backend
+        // shows a dialog and blocks for the answer.
+        let engine = ScriptEngine::new();
+        engine.load("alias t { /echo -a [ $+ $input(msg,e,title,thedefault) $+ ] }");
+        let actions = engine.run_alias(&ctx(), "", "t", "");
+        assert_eq!(actions, vec![Action::Echo { target: "(status)".into(), text: "[thedefault]".into() }]);
     }
 
     #[test]
@@ -2221,6 +2272,19 @@ mod tests {
         engine.load("on *:SOCKREAD:bot:{ /msg #c hit }");
         let other = EventVars { chan: "other".into(), target: "other".into(), ..Default::default() };
         assert!(engine.dispatch_event(&ctx(), "SOCKREAD", other).is_empty());
+    }
+
+    #[test]
+    fn sockwrite_sends_binvar_bytes() {
+        let engine = ScriptEngine::new();
+        // `/sockwrite name &v` must emit the binary variable's raw bytes, not the
+        // literal text "&v" (binary protocols build their packet in a &binvar).
+        engine.load("alias t { bset &v 1 72 105 33 | sockwrite sk &v }");
+        let actions = engine.run_alias(&ctx(), "", "t", "");
+        assert_eq!(
+            actions,
+            vec![Action::SockWrite { name: "sk".into(), data: vec![72, 105, 33] }]
+        );
     }
 
     #[test]

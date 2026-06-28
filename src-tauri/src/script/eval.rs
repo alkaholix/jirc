@@ -151,6 +151,24 @@ impl ScriptSockets for NoSockets {
     }
 }
 
+/// A text prompt the engine shows *during* a run for `$input`, blocking until
+/// the user answers (like mIRC's modal prompt). The production backend drives
+/// the UI dialog; tests use [`NoInput`].
+pub trait ScriptInput: Send + Sync {
+    /// Shows a prompt pre-filled with `default`; returns the entered text, or
+    /// `None` if cancelled.
+    fn prompt(&self, message: &str, title: &str, default: &str) -> Option<String>;
+}
+
+/// A no-op input backend (tests / before a real one is installed): returns the
+/// default so a non-interactive run proceeds without a UI.
+pub struct NoInput;
+impl ScriptInput for NoInput {
+    fn prompt(&self, _: &str, _: &str, default: &str) -> Option<String> {
+        Some(default.to_string())
+    }
+}
+
 /// The execution context for a single alias/event run.
 pub struct Runtime<'a> {
     pub script: &'a Script,
@@ -175,6 +193,8 @@ pub struct Runtime<'a> {
     pub state: std::sync::Arc<crate::irc::state::StateSnapshot>,
     /// Synchronous socket backend for `/socklisten`/`/sockaccept`/`$sock(...)`.
     pub sockets: std::sync::Arc<dyn ScriptSockets>,
+    /// Backend for `$input` prompts.
+    pub input: std::sync::Arc<dyn ScriptInput>,
     /// Open file handles for `/fopen`/`/fwrite`/`$fread`/`$fopen(...)`.
     pub files: &'a mut crate::script::files::FileStore,
     /// Binary variables for `/bset`/`/bunset`/`$bvar`/`$bfind`/`&binvar`.
@@ -283,7 +303,12 @@ impl<'a> Runtime<'a> {
 
     fn dispatch(&mut self, name: &str, raw_args: &str) {
         let lname = name.to_ascii_lowercase();
-        match lname.as_str() {
+        // mIRC's silent prefix: `.command` runs the command but suppresses its
+        // output. We don't echo command output anyway, so just drop a leading
+        // dot — otherwise `.timer`, `.msg`, `.notice`, … fail to match and get
+        // mis-sent to the server as a raw line.
+        let lname = lname.strip_prefix('.').unwrap_or(lname.as_str());
+        match lname {
             "echo" => self.cmd_echo(raw_args),
             "say" => {
                 let text = self.expand(raw_args);
@@ -1379,14 +1404,23 @@ impl<'a> Runtime<'a> {
             }
             rest = more.trim();
         }
-        let (name, text) = match rest.split_once(char::is_whitespace) {
-            Some((n, t)) => (self.expand(n), self.expand(t)),
-            None => (self.expand(rest), String::new()),
+        let (name_tok, data_tok) = match rest.split_once(char::is_whitespace) {
+            Some((n, t)) => (n, t.trim()),
+            None => (rest, ""),
         };
+        let name = self.expand(name_tok);
         if name.is_empty() {
             return;
         }
-        let mut data = text.into_bytes();
+        // `/sockwrite name &binvar` sends the binary variable's bytes verbatim —
+        // binary protocols build their packet in a &binvar (e.g. a crypto auth
+        // response). Anything else is text, expanded as usual.
+        let mut data = match data_tok.strip_prefix('&') {
+            Some(bin) if !bin.is_empty() && !bin.contains(char::is_whitespace) => {
+                self.bins.get(data_tok).cloned().unwrap_or_default()
+            }
+            _ => self.expand(data_tok).into_bytes(),
+        };
         if newline {
             data.extend_from_slice(b"\r\n");
         }
@@ -1981,9 +2015,16 @@ fn read_balanced(chars: &[char], i: &mut usize) -> String {
     out
 }
 
-/// Splits identifier arguments on top-level commas.
+/// Splits identifier arguments on top-level commas. Each arg is trimmed (mIRC
+/// tolerates spaces around commas, and much of the engine relies on it), EXCEPT
+/// a whitespace-only arg is kept intact so a deliberate single space survives:
+/// `$asc(" ")` is 32, which byte-list builders like
+/// `$regsubex(text,/(.)/g,$asc(\1) $+ $chr(32))` depend on. Empty input = no args.
 fn split_args(s: &str) -> Vec<String> {
-    let mut args = Vec::new();
+    if s.is_empty() {
+        return Vec::new();
+    }
+    let mut raw: Vec<String> = Vec::new();
     let mut depth = 0;
     let mut cur = String::new();
     for c in s.chars() {
@@ -1996,17 +2037,21 @@ fn split_args(s: &str) -> Vec<String> {
                 depth -= 1;
                 cur.push(c);
             }
-            ',' if depth == 0 => {
-                args.push(cur.trim().to_string());
-                cur.clear();
-            }
+            ',' if depth == 0 => raw.push(std::mem::take(&mut cur)),
             _ => cur.push(c),
         }
     }
-    if !cur.trim().is_empty() || !args.is_empty() {
-        args.push(cur.trim().to_string());
-    }
-    args
+    raw.push(cur);
+    raw.into_iter()
+        .map(|seg| {
+            let t = seg.trim();
+            if t.is_empty() && !seg.is_empty() {
+                seg // whitespace-only: keep so `$asc(" ")` stays a space
+            } else {
+                t.to_string()
+            }
+        })
+        .collect()
 }
 
 fn split_params(s: &str) -> Vec<String> {
@@ -2133,7 +2178,18 @@ fn eval_term_with(s: &str, leaf: &dyn Fn(&str) -> Option<bool>) -> bool {
     if let Some(rest) = s.strip_prefix('!') {
         // Don't mistake the `!=` operator for a negation prefix.
         if !rest.starts_with('=') {
-            return !eval_term_with(rest.trim(), leaf);
+            let rest = rest.trim();
+            // `!(expr)` or a multi-token expression negates the evaluated boolean.
+            // A bare `!operand` negates the operand's *truthiness* — mIRC negates
+            // the value, it does not re-parse a bare value as a comparison. So
+            // `if (!$2)` where $2 is data containing `<`/`=`/`>` stays an emptiness
+            // test instead of being misread as `a < b` (which would pick the wrong
+            // branch). Mirrors the multi-word `!= $null` handling below.
+            return if rest.starts_with('(') || rest.contains(char::is_whitespace) {
+                !eval_term_with(rest, leaf)
+            } else {
+                !truthy(rest)
+            };
         }
     }
     // A fully-parenthesised term: re-evaluate its contents so nested grouping
@@ -2148,12 +2204,31 @@ fn eval_term_with(s: &str, leaf: &dyn Fn(&str) -> Option<bool>) -> bool {
     let toks: Vec<&str> = s.split_whitespace().collect();
     match toks.len() {
         0 => false,
+        // A lone comparison operator means both operands expanded to empty
+        // (`$null != $null`); compare empty-to-empty rather than reading the bare
+        // operator as a truthy string.
+        1 if is_cmp_op(toks[0]) => compare("", toks[0], ""),
         // A lone token may be a spaceless comparison (`5==X`); else it's truthy.
         1 => match split_spaceless_op(toks[0]) {
             Some((a, op, b)) => compare(a, op, b),
             None => truthy(toks[0]),
         },
+        // Two tokens are normally a unary test (`%x isnum`). But a comparison
+        // whose other operand expanded to empty — the ubiquitous `%x == $null`,
+        // where `$null` -> "" — also collapses to two tokens, because
+        // split_whitespace drops the empty side. Route a bare comparison
+        // operator to `compare` with that empty operand instead of mistaking the
+        // whole thing for a (truthy) unary expression.
+        2 if is_cmp_op(toks[1]) => compare(toks[0], toks[1], ""),
+        2 if is_cmp_op(toks[0]) => compare("", toks[0], toks[1]),
         2 => unary_op(toks[0], toks[1]),
+        // 3+ tokens are normally `a OP rest`. But when an operand expands to a
+        // multi-word value, an equality test against `$null` (which becomes "")
+        // leaves the operator as the LAST token — `if (%line == $null)` with a
+        // space-containing %line expands to `word1 word2 … ==`. Detect a trailing
+        // `==`/`===`/`!=` as that emptiness test. (`<`/`>` stay positional — they
+        // also occur as literal characters, e.g. a `>guest` nick prefix.)
+        len if is_eq_op(toks[len - 1]) => compare(&toks[..len - 1].join(" "), toks[len - 1], ""),
         _ => compare(toks[0], toks[1], &toks[2..].join(" ")),
     }
 }
@@ -2286,6 +2361,20 @@ fn compare(a: &str, op: &str, b: &str) -> bool {
         },
         _ => false,
     }
+}
+
+/// True for the exclusively-binary comparison operators (the same set
+/// `split_spaceless_op` recognises). Lets a collapsed comparison with an empty
+/// operand (`%x == $null`) be told apart from a unary `is*` test.
+fn is_cmp_op(op: &str) -> bool {
+    matches!(op, "===" | "==" | "!=" | "<=" | ">=" | "<" | ">")
+}
+
+/// The equality operators only. Safe to locate positionally even when an operand
+/// expanded to a multi-word value — unlike `<`/`>`, which also occur as literal
+/// characters and so can't be assumed to be operators.
+fn is_eq_op(op: &str) -> bool {
+    matches!(op, "==" | "===" | "!=")
 }
 
 /// Splits a spaceless `a<op>b` comparison (e.g. `5==X`, `%n>=3`) into its parts,
@@ -2422,6 +2511,55 @@ mod tests {
         assert!(!eval_bool("!5"));
         assert!(eval_bool("!")); // empty operand -> negation of false
         assert!(!eval_bool("!(5 == 5)"));
+    }
+
+    #[test]
+    fn empty_operand_comparisons() {
+        // `%x == $null` is the canonical mSL emptiness test. After expansion
+        // `$null` is "", so the term becomes `value ==` (whitespace splitting
+        // drops the empty side). It must compare against empty, not read as a
+        // truthy unary expression.
+        assert!(!eval_bool("abc =="), "nonempty == $null must be false");
+        assert!(eval_bool("abc !="), "nonempty != $null must be true");
+        assert!(!eval_bool("abc <"), "nonempty < $null (empty !numeric) is false");
+        // The operand that expanded to empty may be on the left, too.
+        assert!(!eval_bool("== abc"));
+        assert!(eval_bool("!= abc"));
+        // Both operands empty (`$null == $null`) -> just the operator.
+        assert!(eval_bool("=="));
+        assert!(!eval_bool("!="));
+        // Genuine unary tests must not be mistaken for collapsed comparisons.
+        assert!(eval_bool("5 isnum"));
+        assert!(eval_bool("abc isletter"));
+
+        // A multi-word value tested against $null: the value's spaces make the
+        // operator land last (`if (%line != $null)` with a spacey %line). This is
+        // the canonical socket-read guard.
+        assert!(eval_bool("AUTH GateKeeper S :GKSSP x !="));
+        assert!(!eval_bool("AUTH GateKeeper S :GKSSP x =="));
+        // A literal `>` / `<` as a real right-hand operand stays a comparison, not
+        // a mistaken emptiness test (e.g. `if ($left(%nick,1) == >)`).
+        assert!(eval_bool("> == >"));
+        assert!(!eval_bool("a == >"));
+
+        // `!operand` negates the operand's truthiness even when the value holds
+        // comparison characters — `if (!$2)` is an emptiness test, not `a < b`.
+        assert!(!eval_bool("!abc"));
+        assert!(!eval_bool("!a<b"));
+        assert!(!eval_bool("!x>y=z"));
+        assert!(eval_bool("!")); // empty value -> !false
+        assert!(eval_bool("!0")); // 0 is falsy -> !false
+        assert!(!eval_bool("!(5 == 5)"));
+    }
+
+    #[test]
+    fn split_args_keeps_whitespace_only() {
+        // mIRC keeps a deliberate space — `$asc(" ")` is 32 — but still trims
+        // ordinary args (much of the engine relies on it).
+        assert_eq!(split_args(""), Vec::<String>::new());
+        assert_eq!(split_args(" "), vec![" ".to_string()]);
+        assert_eq!(split_args("a, b"), vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(split_args("a,"), vec!["a".to_string(), String::new()]);
     }
 
     #[test]

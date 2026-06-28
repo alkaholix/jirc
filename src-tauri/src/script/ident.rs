@@ -243,6 +243,9 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             .next()
             .map(|c| (c as u32).to_string())
             .unwrap_or_default(),
+        // $input(message, type, title, default, …) — a modal text prompt. We
+        // drive the edit form; returns the entered text, or empty if cancelled.
+        "input" => rt.input.prompt(&a(0), &a(2), &a(3)).unwrap_or_default(),
         "str" => {
             let n: usize = a(1).parse().unwrap_or(0);
             a(0).repeat(n)
@@ -799,11 +802,14 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "sockerr" => "0".to_string(),
         "replace" => {
             // $replace(text, from1, to1, from2, to2, ...) -> sequential replaces.
+            // Case-INSENSITIVE in mIRC ($replacecs is the case-sensitive form);
+            // hex byte-escapers rely on this (matching lowercase `$hmac` output
+            // against uppercase `0A`/`5C`/… literals).
             let mut text = a(0);
             let mut i = 1;
             while i + 1 < args.len() {
                 if !args[i].is_empty() {
-                    text = text.replace(args[i].as_str(), args[i + 1].as_str());
+                    text = replace_ci(&text, &args[i], &args[i + 1]);
                 }
                 i += 2;
             }
@@ -811,9 +817,10 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         }
         "remove" => {
             // $remove(text, substr1, substr2, ...) -> remove all of each.
+            // Case-insensitive in mIRC (matches lowercase/uppercase alike).
             let mut text = a(0);
             for s in args.iter().skip(1).filter(|s| !s.is_empty()) {
-                text = text.replace(s.as_str(), "");
+                text = replace_ci(&text, s, "");
             }
             text
         }
@@ -841,7 +848,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             let out: Vec<String> = a(0)
                 .split(sep)
                 .map(|t| {
-                    if t == token {
+                    if t.eq_ignore_ascii_case(&token) {
                         count += 1;
                         if n == 0 || count == n {
                             return new.clone();
@@ -861,7 +868,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 "0".to_string()
             } else {
                 let n = a(2).parse::<usize>().unwrap_or(1).max(1);
-                let positions: Vec<usize> = hay.match_indices(&needle).map(|(i, _)| i).collect();
+                let positions = ci_match_indices(&hay, &needle);
                 if positions.len() >= n {
                     let byte_idx = positions[positions.len() - n];
                     (hay[..byte_idx].chars().count() + 1).to_string()
@@ -876,22 +883,9 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             let needle = a(1);
             let hay = a(0);
             let n = a(2).parse::<usize>().unwrap_or(1).max(1);
-            if needle.is_empty() {
-                "0".to_string()
-            } else {
-                let mut from = 0usize;
-                let mut found = 0usize;
-                let mut result = 0usize;
-                while let Some(rel) = hay.get(from..).and_then(|h| h.find(&needle)) {
-                    let byte_idx = from + rel;
-                    found += 1;
-                    if found == n {
-                        result = hay[..byte_idx].chars().count() + 1;
-                        break;
-                    }
-                    from = byte_idx + needle.len();
-                }
-                result.to_string()
+            match ci_match_indices(&hay, &needle).get(n - 1) {
+                Some(&byte_idx) => (hay[..byte_idx].chars().count() + 1).to_string(),
+                None => "0".to_string(),
             }
         }
         "count" => {
@@ -901,7 +895,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 .iter()
                 .skip(1)
                 .filter(|s| !s.is_empty())
-                .map(|s| hay.matches(s.as_str()).count())
+                .map(|s| ci_match_indices(&hay, s).len())
                 .sum();
             total.to_string()
         }
@@ -915,7 +909,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "addtok" => {
             // $addtok(list, token, sepcode)
             let sep = sep_code(&a(2));
-            let exists = a(0).split(sep).any(|t| t == a(1));
+            let exists = a(0).split(sep).any(|t| t.eq_ignore_ascii_case(&a(1)));
             if exists || a(1).is_empty() {
                 a(0)
             } else if a(0).is_empty() {
@@ -927,7 +921,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "istok" => {
             // $istok(list, token, sepcode) -> $true/$false
             let sep = sep_code(&a(2));
-            if !a(1).is_empty() && a(0).split(sep).any(|t| t == a(1)) {
+            if !a(1).is_empty() && a(0).split(sep).any(|t| t.eq_ignore_ascii_case(&a(1))) {
                 "$true".to_string()
             } else {
                 "$false".to_string()
@@ -940,7 +934,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             let mut seen = 0;
             let mut result = 0;
             for (i, t) in a(0).split(sep).enumerate() {
-                if t == a(1) {
+                if t.eq_ignore_ascii_case(&a(1)) {
                     seen += 1;
                     if seen == n {
                         result = i + 1;
@@ -974,7 +968,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             let mut seen = 0;
             list.split(sep)
                 .filter(|t| {
-                    if *t == token {
+                    if t.eq_ignore_ascii_case(&token) {
                         seen += 1;
                         seen != n
                     } else {
@@ -1365,6 +1359,16 @@ fn mirc_regex(pat: &str) -> Result<regex::Regex, String> {
         (Some(_), Some(close)) if close > 0 => (&p[1..close], &p[close + 1..]),
         _ => (p, ""),
     };
+    // mIRC patterns may lead with PCRE global verbs — (*UTF8), (*UCP), … — to
+    // force Unicode handling. Rust's regex is always UTF-8/Unicode, so they are
+    // no-ops it can't parse; strip them so such patterns still compile.
+    let mut body = body.trim_start();
+    while let Some(rest) = body.strip_prefix("(*") {
+        match rest.find(')') {
+            Some(close) => body = rest[close + 1..].trim_start(),
+            None => break,
+        }
+    }
     let inline: String = flags.chars().filter(|c| matches!(c, 'i' | 'm' | 's' | 'x')).collect();
     let full = if inline.is_empty() {
         body.to_string()
@@ -1417,6 +1421,26 @@ pub fn eval_regsubex(rt: &mut Runtime, raw: &[String]) -> String {
     out
 }
 
+/// Encodes a captured group value so it survives being substituted into the
+/// regsubex subtext and re-evaluated. mSL-structural characters — `( ) [ ] { }
+/// $ % , &` — would otherwise re-parse (e.g. a captured `(` makes `$asc(\1)`
+/// become `$asc(()`, which mis-matches parens and corrupts/drops the byte).
+/// Each is replaced by the `$chr(N)` that evaluates back to it, so the value is
+/// preserved exactly while the surrounding subtext still parses. mIRC binds `\1`
+/// as a value rather than re-tokenizing it, so this matches its behaviour.
+fn subtext_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '(' | ')' | '[' | ']' | '{' | '}' | '$' | '%' | ',' | '&' => {
+                out.push_str(&format!("$chr({})", c as u32));
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// Substitutes the `$regsubex` subtext markers for one match.
 fn regsubex_fill(subtext: &str, groups: &[String], match_num: usize, group_count: usize) -> String {
     let chars: Vec<char> = subtext.chars().collect();
@@ -1427,20 +1451,27 @@ fn regsubex_fill(subtext: &str, groups: &[String], match_num: usize, group_count
             let c = chars[i + 1];
             i += 2;
             match c {
-                't' => out.push_str(groups.first().map_or("", |s| s)),
+                't' => out.push_str(&subtext_literal(groups.first().map_or("", |s| s))),
                 'n' => out.push_str(&match_num.to_string()),
-                'a' => out.push_str(&groups.iter().skip(1).cloned().collect::<Vec<_>>().join(" ")),
-                'A' => out.push_str(&groups.iter().skip(1).cloned().collect::<String>()),
+                'a' => out.push_str(&subtext_literal(&groups.iter().skip(1).cloned().collect::<Vec<_>>().join(" "))),
+                'A' => out.push_str(&subtext_literal(&groups.iter().skip(1).cloned().collect::<String>())),
                 '0'..='9' => {
                     let idx = c as usize - '0' as usize;
                     if idx == 0 {
                         out.push_str(&group_count.to_string());
                     } else {
-                        out.push_str(groups.get(idx).map_or("", |s| s));
+                        out.push_str(&subtext_literal(groups.get(idx).map_or("", |s| s)));
                     }
                 }
                 '\\' => out.push('\\'),
-                other => out.push(other),
+                // An unrecognised escape keeps its backslash — mIRC leaves `\*`
+                // etc. literal, which scripts rely on (e.g. `\* iswm \1` uses the
+                // wildcard "\*" to tell an escape sequence from a plain char when
+                // converting text to bytes for HMAC).
+                other => {
+                    out.push('\\');
+                    out.push(other);
+                }
             }
         } else {
             out.push(chars[i]);
@@ -1652,6 +1683,38 @@ fn find_entries(
             find_entries(&path, wild, want_dirs, max_depth, depth + 1, out);
         }
     }
+}
+
+/// Byte offsets of every non-overlapping, case-insensitive match of `needle` in
+/// `hay`. ASCII case-folding keeps offsets aligned with the original string.
+fn ci_match_indices(hay: &str, needle: &str) -> Vec<usize> {
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    hay.to_ascii_lowercase()
+        .match_indices(&needle.to_ascii_lowercase())
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Case-insensitive substring replace (mIRC's `$replace`). ASCII-case-folding
+/// keeps byte offsets aligned, so non-ASCII text is preserved correctly.
+fn replace_ci(text: &str, from: &str, to: &str) -> String {
+    if from.is_empty() {
+        return text.to_string();
+    }
+    let hay = text.to_ascii_lowercase();
+    let needle = from.to_ascii_lowercase();
+    let mut out = String::new();
+    let mut last = 0;
+    while let Some(rel) = hay[last..].find(&needle) {
+        let at = last + rel;
+        out.push_str(&text[last..at]);
+        out.push_str(to);
+        last = at + from.len();
+    }
+    out.push_str(&text[last..]);
+    out
 }
 
 fn replacex(s: &str, pairs: &[(String, String)]) -> String {
@@ -2121,6 +2184,17 @@ mod tests {
     }
 
     #[test]
+    fn regex_strips_pcre_global_verbs() {
+        // (*UTF8)/(*UCP) lead many mIRC patterns; Rust's regex can't parse them,
+        // so they must be stripped or the pattern fails to compile (and e.g.
+        // $regsubex silently returns its input unchanged).
+        assert!(mirc_regex("/(*UTF8)(.)/g").is_ok());
+        assert!(mirc_regex("/(*UTF8)(*UCP)\\w+/").is_ok());
+        let re = mirc_regex("/(*UTF8)(.)/").unwrap();
+        assert!(re.is_match("A"));
+    }
+
+    #[test]
     fn string_helpers_via_eval() {
         use crate::script::ast::Script;
         use crate::script::eval::{EventVars, Runtime};
@@ -2151,9 +2225,14 @@ mod tests {
             data_dir: std::env::temp_dir(),
             state: std::sync::Arc::new(Default::default()),
             sockets: std::sync::Arc::new(crate::script::eval::NoSockets),
+            input: std::sync::Arc::new(crate::script::eval::NoInput),
             caller: "command",
         };
         assert_eq!(eval_ident(&mut rt, "replace", &["abcabc".into(), "b".into(), "X".into()], ""), "aXcaXc");
+        // $replace is case-INSENSITIVE in mIRC (a lowercase pattern matches
+        // uppercase text); hex byte-escapers depend on it.
+        assert_eq!(eval_ident(&mut rt, "replace", &["0A".into(), "0a".into(), "n".into()], ""), "n");
+        assert_eq!(eval_ident(&mut rt, "replace", &["AbAb".into(), "ab".into(), "X".into()], ""), "XX");
         assert_eq!(eval_ident(&mut rt, "remove", &["abcabc".into(), "a".into()], ""), "bcbc");
         assert_eq!(eval_ident(&mut rt, "pos", &["hello".into(), "l".into()], ""), "3");
         assert_eq!(eval_ident(&mut rt, "count", &["banana".into(), "a".into()], ""), "3");
@@ -2175,6 +2254,15 @@ mod tests {
         assert_eq!(id("instok", &["a.b.c", "X", "2", "46"]), "a.X.b.c");
         assert_eq!(id("reptok", &["a.b.a.c", "a", "X", "2", "46"]), "a.b.X.c");
         assert_eq!(id("reptok", &["a.b.a", "a", "X", "0", "46"]), "X.b.X");
+        // Case-INSENSITIVITY (mIRC default): token/substring ops match across case.
+        assert_eq!(id("istok", &["Foo.Bar", "foo", "46"]), "$true");
+        assert_eq!(id("addtok", &["Foo.Bar", "FOO", "46"]), "Foo.Bar"); // CI dedup
+        assert_eq!(id("findtok", &["a.B.c", "b", "1", "46"]), "2");
+        assert_eq!(id("remtok", &["a.B.c", "b", "1", "46"]), "a.c");
+        assert_eq!(id("reptok", &["a.B.c", "b", "X", "1", "46"]), "a.X.c");
+        assert_eq!(id("pos", &["Hello", "L"]), "3");
+        assert_eq!(id("count", &["BaNaNa", "a"]), "3");
+        assert_eq!(id("remove", &["aAbB", "a", "b"]), "");
         // mIRC /pattern/flags regex: i = case-insensitive; bare = case-sensitive.
         assert_eq!(id("regex", &["Hello", "/hello/i"]), "1");
         assert_eq!(id("regex", &["Hello", "hello"]), "0");
@@ -2343,6 +2431,7 @@ mod tests {
             data_dir: std::env::temp_dir(),
             state: std::sync::Arc::new(Default::default()),
             sockets: std::sync::Arc::new(crate::script::eval::NoSockets),
+            input: std::sync::Arc::new(crate::script::eval::NoInput),
             caller: "command",
         }
     }

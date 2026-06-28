@@ -517,9 +517,17 @@ fn parse_popup_body(src: &str) -> Vec<PopupItem> {
             ));
             continue;
         }
-        let (label, command) = match rest.split_once(':') {
-            Some((l, c)) => (l.trim().to_string(), c.trim().to_string()),
-            None => (rest.to_string(), String::new()),
+        // A popup item takes its command either as `Label:commands` or
+        // `Label { commands }` (single line) — mIRC accepts both. Handle the brace
+        // form first so a `{ … }` body isn't left sitting in the label (which
+        // surfaced the raw popup code in the menu).
+        let (label, command) = if let Some(open) = rest.find('{') {
+            let close = rest.rfind('}').filter(|&c| c > open).unwrap_or(rest.len());
+            (rest[..open].trim().to_string(), rest[open + 1..close].trim().to_string())
+        } else if let Some((l, c)) = rest.split_once(':') {
+            (l.trim().to_string(), c.trim().to_string())
+        } else {
+            (rest.to_string(), String::new())
         };
         flat.push((
             depth,
@@ -839,6 +847,27 @@ mod tests {
         let items = s.popup_items("nicklist");
         assert_eq!(items.len(), 4);
         assert!(s.popup_items("query").is_empty());
+    }
+
+    #[test]
+    fn parses_popup_brace_command_form() {
+        // mIRC's `Label { command }` form (plus `.`/`..` submenu nesting and a
+        // status/menubar context), as socket-script menus use. The braces must
+        // not leak into the label (which showed the raw popup code).
+        let s = parse(
+            "menu status,menubar {\n  i7flood\n  .Start... { i7f_menu_start }\n  .Nick style\n  ..Numbers : i7floodnick numbers\n  .Stop { i7floodstop }\n}",
+        );
+        let p = &s.popups[0];
+        assert_eq!(p.contexts, vec!["status", "menubar"]);
+        let top = &p.items[0];
+        assert_eq!(top.label, "i7flood");
+        assert_eq!(top.children[0].label, "Start...");
+        assert_eq!(top.children[0].command, "i7f_menu_start");
+        assert_eq!(top.children[1].label, "Nick style");
+        assert_eq!(top.children[1].children[0].label, "Numbers");
+        assert_eq!(top.children[1].children[0].command, "i7floodnick numbers");
+        assert_eq!(top.children[2].label, "Stop");
+        assert_eq!(top.children[2].command, "i7floodstop");
     }
 
     #[test]

@@ -35,6 +35,7 @@ pub fn run() {
         .manage(script::timer::TimerManager::new())
         .manage(irc::state::StateStore::new())
         .manage(irc::dcc::DccManager::new())
+        .manage(script::input::PromptRegistry::default())
         .setup(|app| {
             // Rename the legacy `com.jirc.app` data folder to `jIRC` (once) before
             // anything reads profiles/scripts/logs.
@@ -46,6 +47,12 @@ pub fn run() {
             // Install the real socket backend so /socklisten/$sock(...) work.
             engine.set_sockets(std::sync::Arc::new(script::socket::EngineSockets::new(
                 app.handle().clone(),
+            )));
+            // Install the `$input` prompt backend (shares the managed registry).
+            let registry = app.state::<script::input::PromptRegistry>().inner().clone();
+            engine.set_input(std::sync::Arc::new(script::input::EngineInput::new(
+                app.handle().clone(),
+                registry,
             )));
             script::load_persisted(app.handle(), &engine);
             Ok(())
@@ -105,6 +112,7 @@ pub fn run() {
             script::script_sockets,
             script::script_popups,
             script::script_run_popup,
+            script::input::script_prompt_reply,
         ])
         .run(tauri::generate_context!())
         .expect("error while running jIRC");

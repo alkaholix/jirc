@@ -64,7 +64,11 @@ Live network tests are `#[ignore]`d:
   - `auth.rs` — CAP + SASL PLAIN.
   - `ircx.rs` — IRCX numerics (800–999) and commands.
 - `script/` — the mSL engine (`parser`, `ast`, `eval`, `ident`, `mod`). Pure;
-  produces `Action`s applied by `apply_actions`.
+  produces `Action`s applied by `apply_actions`. The one exception is
+  `input.rs` (`$input`): it shows a modal prompt and **blocks the run** for the
+  answer, so any command that can reach `$input` (e.g. `script_run_popup`) runs
+  on a worker thread (`spawn_blocking`) — a sync command blocking the main
+  thread deadlocks WebView2 (same hazard as detached windows, below).
 
 ## Frontend layout (`src/`)
 

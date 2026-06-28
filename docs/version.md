@@ -13,6 +13,53 @@ three places that carry it:
 
 Newest first.
 
+## 26.6.28
+
+Running a real, heavy mIRC script end-to-end — an **IRC7 GateKeeper** socket
+load-tester that does GKSSP/HMAC challenge–response auth with byte-level
+`$regsubex`/binvar work — surfaced a batch of mSL-engine fidelity bugs. With
+these, the script authenticates and joins exactly as it does in mIRC. Guiding
+principle: mIRC is the reference; a script that works there but not in jIRC is a
+jIRC bug.
+
+### Added
+- **`$input`** — mIRC's modal text prompt. `$input(message, type, title, default)`
+  now shows the in-app prompt dialog and **blocks until you answer** (the run
+  executes on a worker thread so the UI stays responsive), returning the entered
+  text, or empty if cancelled. Popup-menu items that gather input (a `Start…`
+  flow) work. New `ScriptInput` engine trait + `script-prompt`/`script_prompt_reply`
+  wiring; `script/input.rs`.
+
+### Fixed (mSL engine)
+- **Empty-value comparisons** — `if (%x == $null)` / `!= $null` always read true
+  (`$null` → "" collapsed the tokens). Now correct for single-word values,
+  multi-word values (`if (%line != $null)` where `%line` has spaces), and the
+  `!$value` truthiness form (which mis-fired when the value held `<`/`=`/`>`).
+- **`.command` silent prefix** — `.timer`/`.msg`/`.notice`/… were sent to the
+  server as raw lines instead of dispatching; the leading `.` is now stripped.
+- **`$asc(" ")`** — identifier arguments were trimmed, so `$asc(" ")` returned
+  empty; whitespace-only args are now preserved (byte builders rely on it).
+- **`sockwrite name &binvar`** — sent the literal text `&binvar`; now writes the
+  binary variable's bytes (needed for binary protocols).
+- **`$regsubex`** — three fidelity fixes: a leading `(*UTF8)`/`(*UCP)` PCRE verb
+  made the pattern fail (stripped now — Rust's regex is always UTF-8); an
+  unrecognised escape such as `\*` dropped its backslash (kept now); and a
+  captured group containing mSL-structural chars (`( ) [ ] { } $ % , &`) corrupted
+  `$asc(\1)`-style byte builders (now encoded so the value round-trips).
+- **Case-insensitive by default** — `$replace`, `$remove`, `$pos`, `$lastpos`,
+  `$count`, `$istok`, `$addtok`, `$findtok`, `$remtok`, `$reptok` were
+  case-sensitive; mIRC treats them case-insensitively (the `…cs` variants are the
+  case-sensitive ones).
+
+### Fixed (display / parsing)
+- **CESU-8 / emoji** — astral characters (emoji in nicks) that .NET/IRCX servers
+  send as CESU-8 surrogate pairs showed as mojibake; they're now decoded.
+- **CTCP ACTION** — an incoming `/me` left a trailing box (the CTCP `\x01` was
+  kept by a greedy match); it's stripped now.
+- **Popup menus** — the `Label { command }` brace form wasn't parsed (the braces
+  leaked into the label, surfacing raw popup code); both `{ }` and `:` command
+  forms now parse, with submenu nesting.
+
 ## 26.6.27
 
 ### Added

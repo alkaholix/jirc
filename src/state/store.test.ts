@@ -64,6 +64,22 @@ describe("channel routing", () => {
     expect(lines).toContain("hello");
   });
 
+  it("strips the trailing \\x01 from a CTCP ACTION (no leftover box char)", () => {
+    const s = useStore.getState();
+    s.handleEvent({
+      type: "message",
+      serverId: SID,
+      kind: "privmsg",
+      from: ">MightyPenguin81",
+      target: "%#the\\blobby",
+      text: "\x01ACTION eewwe\x01",
+      time: null,
+    });
+    const line = useStore.getState().buffers[bufferKey(SID, "%#the\\blobby")]?.lines.at(-1);
+    expect(line?.kind).toBe("action");
+    expect(line?.text).toBe("eewwe");
+  });
+
   it("drops messages from an ignored sender, but mode/events still show", () => {
     useSettings.getState().set("ignores", ["Spammer"]);
     const s = useStore.getState();

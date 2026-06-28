@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { api, IrcEvent, ServerProfile } from "./lib/api";
 import { STATUS, bufferKey, useStore } from "./state/store";
 import { Sidebar } from "./components/Sidebar";
@@ -22,6 +23,7 @@ import { UserDialogs } from "./components/UserDialogs";
 import { DetachedView } from "./components/DetachedView";
 import { thisWindowBufferKey, popOutBuffer, dockBackBuffer, detachedLabel } from "./lib/detach";
 import { confirmDialog } from "./state/confirm";
+import { promptDialog } from "./state/prompt";
 import { routeDialogEvent } from "./state/dialogs";
 import { routeNickIconEvent } from "./state/nickIcons";
 import { routeAwayEvent } from "./state/away";
@@ -88,6 +90,23 @@ function App() {
       unlisten.then((f) => f());
     };
   }, [handleEvent]);
+
+  // A script called $input: show the prompt dialog and send the answer back so
+  // the blocked script can resume. Handled only in the main window (avoid dupes).
+  useEffect(() => {
+    const unlisten = listen<{ id: number; message: string; title: string; default: string }>(
+      "script-prompt",
+      async (e) => {
+        if (detachedKey !== null) return;
+        const { id, message, title, default: initial } = e.payload;
+        const value = await promptDialog(message, { title, initial });
+        invoke("script_prompt_reply", { id, value }).catch(() => {});
+      }
+    );
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
 
   // A detached window asked to dock back in: clear its popped-out flag and show it.
   useEffect(() => {

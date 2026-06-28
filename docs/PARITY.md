@@ -218,7 +218,7 @@ out of scope.
 - [ ] `$inmidi`
 - [ ] `$inpaste`
 - [ ] `$inpoly`
-- [ ] `$input`
+- [x] `$input` *(modal text prompt; blocks the run for the answer, like mIRC)*
 - [ ] `$inrect`
 - [ ] `$inroundrect`
 - [ ] `$insong`
@@ -757,7 +757,7 @@ individually.)*
 
 ### Scripting UI
 - [x] popups (`menu nicklist { }`, submenus) · [x] custom dialogs (`dialog`/`/did`/`$did`/`on DIALOG`, partial controls)
-- [ ] script-driven toolbar/panel buttons · [ ] `$input`/`$?` prompt dialogs · [ ] `@window` drawing surface
+- [ ] script-driven toolbar/panel buttons · [x] `$input` prompt dialog · [ ] `$?` · [ ] `@window` drawing surface
 
 ### DCC & file transfer  *(entire bucket missing)*
 - [ ] DCC Chat · [ ] DCC Send · [ ] DCC Get · [ ] DCC Resume · [ ] passive/reverse DCC · [ ] DCC Server · [ ] Fileserver
