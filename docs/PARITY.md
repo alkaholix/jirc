@@ -370,7 +370,7 @@ out of scope.
 - [x] `$right`
 - [x] `$round`
 - [ ] `$samepath`
-- [ ] `$scid` *(cross-connection command context — Phase 2, with `/scid`/`/scon`)*
+- [ ] `$scid` *(identifier form; the `/scid` command works — see Commands)*
 - [x] `$scon` *(`$scon(0)` = connection count, `$scon(N)` = the Nth connection's cid)*
 - [ ] `$script`
 - [x] `$scriptdir`
@@ -619,7 +619,7 @@ out of scope.
 - [ ] `/savebuf` *(stub)*
 - [x] `/saveini` *(no-op: jIRC writes immediately, no cache)*
 - [x] `/say`
-- [ ] `/scid` · [ ] `/scon` *(multi-server scoping)*
+- [x] `/scid` · [x] `/scon` *(run a command on another connection, by cid / by index; runs in that connection's context)*
 - [x] `/server`
 - [ ] `/setlayer`
 - [ ] `/showmirc` *(stub)*

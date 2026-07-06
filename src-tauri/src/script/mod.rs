@@ -1009,6 +1009,28 @@ fn apply_actions_depth(
                     }
                 }
             }
+            Action::RunOn { server_id: target, command } => {
+                // /scon /scid: run the command in the target connection's context
+                // and route its output there. Depth-capped like /signal.
+                if depth < 24 {
+                    if let (Some(engine), Some(store)) = (
+                        app.try_state::<ScriptEngine>(),
+                        app.try_state::<crate::irc::state::StateStore>(),
+                    ) {
+                        let state = store.get(&target);
+                        let t_nick = state.nick.clone();
+                        let ctx = RunCtx {
+                            my_nick: &t_nick,
+                            network: "",
+                            server: "",
+                            data_dir: script_data_dir(app),
+                            state,
+                        };
+                        let more = engine.run_command(&ctx, "", &command, &[]);
+                        apply_actions_depth(app, &target, &t_nick, "", "", more, depth + 1);
+                    }
+                }
+            }
             Action::WindowOpen { name, kind, title } => {
                 let _ = app.emit(
                     IRC_EVENT,
@@ -2404,6 +2426,25 @@ mod tests {
             engine.run_command(&ctx(), "#c", "/msg #c n=$scon(0)", &[]),
             vec![Action::Send("PRIVMSG #c :n=1".into())]
         );
+    }
+
+    #[test]
+    fn scon_scid_dispatch() {
+        let engine = ScriptEngine::new();
+        engine.assign_cid("s1");
+        engine.assign_cid("s2");
+        // /scon N targets the Nth connection; the subcommand is carried raw to it.
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", "/scon 2 /msg #c hi", &[]),
+            vec![Action::RunOn { server_id: "s2".into(), command: "/msg #c hi".into() }]
+        );
+        // /scid targets by cid.
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", "/scid 1 /msg #c yo", &[]),
+            vec![Action::RunOn { server_id: "s1".into(), command: "/msg #c yo".into() }]
+        );
+        // An out-of-range selector produces nothing.
+        assert_eq!(engine.run_command(&ctx(), "#c", "/scon 9 /msg #c x", &[]), vec![]);
     }
 
     #[test]

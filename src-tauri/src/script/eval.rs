@@ -72,6 +72,9 @@ pub enum Action {
     /// Control the connect-time autojoin from within `on CONNECT` (`/autojoin`):
     /// `skip` cancels it, `delay_secs` > 0 postpones it that many seconds.
     Autojoin { skip: bool, delay_secs: u32 },
+    /// Run `command` on another connection (`/scon`/`/scid`): re-dispatched in
+    /// that connection's context so its output routes there.
+    RunOn { server_id: String, command: String },
 }
 
 /// Reserved `%var` key holding the byte count of the last `/sockread` (read by
@@ -549,6 +552,31 @@ impl<'a> Runtime<'a> {
                 // No-op: jIRC writes INI/JSON to disk immediately (no cache).
             }
             "reload" => self.actions.push(Action::ReloadScripts),
+            // /scon N command  — run `command` on the Nth connection.
+            // /scid cid command — run `command` on the connection with that cid.
+            // The number is evaluated now; the command runs in the target's context.
+            "scon" | "scid" => {
+                let raw = raw_args.trim();
+                let (sel, rest) = raw.split_once(char::is_whitespace).unwrap_or((raw, ""));
+                let sel = self.expand(sel);
+                let target = if lname == "scon" {
+                    sel.trim()
+                        .parse::<usize>()
+                        .ok()
+                        .and_then(|n| n.checked_sub(1))
+                        .and_then(|i| self.conns.entries.get(i))
+                        .map(|(_, s)| s.clone())
+                } else {
+                    sel.trim()
+                        .parse::<u32>()
+                        .ok()
+                        .and_then(|cid| self.conns.entries.iter().find(|(c, _)| *c == cid))
+                        .map(|(_, s)| s.clone())
+                };
+                if let (Some(server_id), false) = (target, rest.is_empty()) {
+                    self.actions.push(Action::RunOn { server_id, command: rest.to_string() });
+                }
+            }
             "signal" => {
                 // `/signal [-n] [-d] <name> [parameters]` fires `on *:SIGNAL:<name>`
                 // handlers ($signal = name, $1- = params). Switches are accepted

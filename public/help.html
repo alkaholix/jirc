@@ -638,6 +638,7 @@ each time you interact, so <code>$did</code> always reads the current form state
   <tr><td><code>/anick /mnick /fullname</code></td><td>Set your alternate nick, main nick, full name.</td></tr>
   <tr><td><code>/autojoin -n|-s|-dN</code></td><td>In <code>on CONNECT</code>: join now / skip / delay the autojoin.</td></tr>
   <tr><td><code>/reload</code> · <code>/unsetall</code></td><td>Recompile all scripts · clear all variables.</td></tr>
+  <tr><td><code>/scon N cmd</code> · <code>/scid cid cmd</code></td><td>Run a command on another connection — by index / by <code>$cid</code> — in that connection's context.</td></tr>
 </table>
 <div class="note">Unrecognized <em>client-side</em> commands (window/display/sound, e.g.
 <code>/clear</code>, <code>/window</code>, <code>/beep</code>, <code>/run</code>) are quietly ignored

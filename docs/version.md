@@ -13,6 +13,20 @@ three places that carry it:
 
 Newest first.
 
+## 26.7.11
+
+**`/scon` and `/scid`** — the second half of the numeric-connection work: run a
+command on *another* connection.
+
+- **`/scon N command`** — run `command` on the Nth connection.
+- **`/scid cid command`** — run it on the connection with that `$cid`.
+
+The command runs in the target connection's context (its nick/state) and its
+output is routed there — so `/scon 2 /msg #chan hi` sends to connection 2's
+`#chan`. Built on a new `RunOn` action that `apply_actions` re-dispatches, with
+the same 24-deep recursion cap as `/signal`. An out-of-range selector is a
+no-op. (Still Phase-2-pending: the `$scid` identifier form and `$wid`.)
+
 ## 26.7.10
 
 **Numeric connection ids** — for scripting across several servers at once (IRC,
