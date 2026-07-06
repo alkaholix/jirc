@@ -2312,6 +2312,25 @@ mod tests {
     }
 
     #[test]
+    fn v1_v2_and_lazy_iif() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias t1 { /msg #c $iif(hello,$v1,none) }\n\
+             alias t2 { /msg #c $iif($null,$v1,none) }\n\
+             alias t3 { /msg #c $iif(3 == 3,$v1-$v2,no) }\n\
+             alias t4 { if (foo isin foobar) { /msg #c $v1 in $v2 } }",
+        );
+        // The classic idiom: $iif(value, $v1, default) yields the value when truthy…
+        assert_eq!(engine.run_alias(&ctx(), "#c", "t1", ""), vec![Action::Send("PRIVMSG #c :hello".into())]);
+        // …and the default when the value is empty.
+        assert_eq!(engine.run_alias(&ctx(), "#c", "t2", ""), vec![Action::Send("PRIVMSG #c :none".into())]);
+        // A comparison sets both operands.
+        assert_eq!(engine.run_alias(&ctx(), "#c", "t3", ""), vec![Action::Send("PRIVMSG #c :3-3".into())]);
+        // $v1/$v2 also come from an `if` comparison (here a binary word operator).
+        assert_eq!(engine.run_alias(&ctx(), "#c", "t4", ""), vec![Action::Send("PRIVMSG #c :foo in foobar".into())]);
+    }
+
+    #[test]
     fn active_window_identifier() {
         // $active reflects the focused window the UI last reported.
         let engine = ScriptEngine::new();

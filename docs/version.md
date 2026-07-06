@@ -13,6 +13,18 @@ three places that carry it:
 
 Newest first.
 
+## 26.7.9
+
+**`$v1` / `$v2`** — the operands of the most recent comparison, and with them a
+real fidelity fix: **`$iif` now evaluates lazily**. It expands the condition,
+publishes `$v1`/`$v2`, then expands only the branch that's taken — so the
+ubiquitous mIRC idiom `$iif(getvalue, $v1, default)` finally works (it returns
+the value when truthy, the default otherwise), and the untaken branch isn't
+evaluated (matching mIRC). `if`/`while` conditions set `$v1`/`$v2` too: for
+`a == b` / `a isin b` they're the two operands, otherwise `$v1` is the whole
+value tested. Implemented via the same "don't pre-expand args" hook `$regsubex`
+already uses, so nothing else changed — all existing tests still pass.
+
 ## 26.7.8
 
 More mSL identifiers, working down the mIRC reference: the focused-window

@@ -447,8 +447,8 @@ out of scope.
 - [x] `$usermode`
 - [x] `$utfdecode`
 - [x] `$utfencode`
-- [ ] `$v1` *(needs lazy `$iif`/comparison eval — args are pre-expanded today, so `$iif(x,$v1,y)` expands `$v1` before the condition runs; high value, ~30 uses in i7.mrc)*
-- [ ] `$v2`
+- [x] `$v1` *(operands of the last comparison / truthiness value; `$iif` now evaluates lazily so `$iif(x,$v1,y)` works)*
+- [x] `$v2`
 - [ ] `$var`
 - [ ] `$vcmd`
 - [ ] `$vcmdstat`

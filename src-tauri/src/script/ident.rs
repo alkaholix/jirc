@@ -58,6 +58,11 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         // channel/query/status buffer). Empty ($null) if none reported yet, as in
         // mIRC. Set by the UI via `script_set_active` on every buffer switch.
         "active" => rt.active.clone(),
+        // $v1 / $v2 -> the operands of the most recent comparison (or the value
+        // whose truthiness was tested). Set by `if`/`while` conditions and lazy
+        // `$iif`; the classic `$iif(getvalue, $v1, default)` idiom reads $v1 here.
+        "v1" => rt.vars.get(super::eval::V1_KEY).cloned().unwrap_or_default(),
+        "v2" => rt.vars.get(super::eval::V2_KEY).cloned().unwrap_or_default(),
         "onchan" => {
             // $onchan(#chan) -> are you in that channel?
             if rt.state.channels.iter().any(|c| c.name.eq_ignore_ascii_case(&a(0))) {

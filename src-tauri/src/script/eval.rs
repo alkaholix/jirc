@@ -78,6 +78,11 @@ pub enum Action {
 /// `$sockbr`); the NUL char can't appear in a real variable name.
 pub const SOCK_BR_KEY: &str = "\u{0}sockbr";
 
+/// Special-var keys holding the operands of the most recent comparison, read
+/// back by `$v1`/`$v2` (the NUL prefix keeps them out of the `%var` namespace).
+pub const V1_KEY: &str = "\u{0}v1";
+pub const V2_KEY: &str = "\u{0}v2";
+
 /// Sentinel that `$style(N)` returns; consumed while building a popup menu (a
 /// Private-Use char, so it can't collide with a real label). The digit that
 /// follows is mIRC's style: 1 = checked, 2 = disabled, 3 = both.
@@ -1895,6 +1900,13 @@ impl<'a> Runtime<'a> {
             let inner = read_balanced(chars, i);
             return ident::eval_regsubex(self, &split_args(&inner));
         }
+        // $iif must evaluate lazily: expand the condition, set $v1/$v2, then expand
+        // only the taken branch — so `$iif(x,$v1,y)` sees $v1 (and skips the other
+        // branch, like mIRC). Pre-expanding the args would resolve $v1 too early.
+        if name.eq_ignore_ascii_case("iif") && chars.get(*i) == Some(&'(') {
+            let inner = read_balanced(chars, i);
+            return self.eval_iif(&split_args(&inner));
+        }
         // Optional (args).
         let (args, had_parens) = if chars.get(*i) == Some(&'(') {
             let inner = read_balanced(chars, i);
@@ -1950,11 +1962,56 @@ impl<'a> Runtime<'a> {
 
     fn eval_cond(&mut self, cond: &str) -> bool {
         let expanded = self.expand(cond);
+        self.record_v(&expanded);
         // Clone the Arc (cheap) so the leaf resolver can read channel state
         // without borrowing `self` across the evaluation.
         let state = self.state.clone();
         eval_bool_with(&expanded, &|term| state_op(&state, term))
     }
+
+    /// Lazy `$iif(cond, iftrue, iffalse)`: expand the condition, publish `$v1`/`$v2`,
+    /// then expand only the branch that's taken (so `$v1` inside it resolves, and
+    /// the other branch isn't evaluated — mIRC's behaviour).
+    fn eval_iif(&mut self, args: &[String]) -> String {
+        let cond = self.expand(args.first().map(String::as_str).unwrap_or(""));
+        self.record_v(&cond);
+        let taken = if eval_bool_public(&cond) { args.get(1) } else { args.get(2) };
+        taken.map(|a| self.expand(a)).unwrap_or_default()
+    }
+
+    /// Records `$v1`/`$v2` from an (already-expanded) condition: the two operands
+    /// of a binary comparison (`a == b`, `a isin b`, …), else `$v1` = the whole
+    /// value and `$v2` = empty (the truthiness form, `$iif(value, $v1, …)`).
+    fn record_v(&mut self, cond: &str) {
+        let (v1, v2) = split_v(cond);
+        self.vars.insert(V1_KEY.to_string(), v1);
+        self.vars.insert(V2_KEY.to_string(), v2);
+    }
+}
+
+/// Splits an expanded condition into `($v1, $v2)`. See [`Runtime::record_v`].
+fn split_v(cond: &str) -> (String, String) {
+    let c = cond.trim();
+    let toks: Vec<&str> = c.split_whitespace().collect();
+    match toks.as_slice() {
+        [] => (String::new(), String::new()),
+        [one] => match split_spaceless_op(one) {
+            Some((a, _, b)) => (a.to_string(), b.to_string()),
+            None => (one.to_string(), String::new()),
+        },
+        // `a <binary-op> b…` — symbolic (==, <, …) or a binary word operator.
+        [a, op, rest @ ..] if is_cmp_op(op) || is_binary_word_op(op) => {
+            (a.to_string(), rest.join(" "))
+        }
+        // A multi-word value, or a unary test (`%x isnum`): whole value is $v1.
+        _ => (c.to_string(), String::new()),
+    }
+}
+
+/// The comparison operators that take a right-hand operand and aren't symbolic
+/// (so aren't covered by [`is_cmp_op`]). Used only for `$v1`/`$v2` splitting.
+fn is_binary_word_op(op: &str) -> bool {
+    matches!(op.to_ascii_lowercase().as_str(), "isin" | "isincs" | "iswm" | "iswmcs")
 }
 
 /// Reads consecutive ASCII digits as a number (0 if none / on overflow).
