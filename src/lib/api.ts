@@ -134,8 +134,9 @@ export const api = {
     myNick: string,
     network: string,
     command: string,
-    params: string[]
-  ) => invoke("script_run_popup", { serverId, target, myNick, network, command, params }),
+    params: string[],
+    snicks?: string[]
+  ) => invoke("script_run_popup", { serverId, target, myNick, network, command, params, snicks }),
   scriptRunAlias: (
     serverId: string,
     target: string,
@@ -307,5 +308,9 @@ export interface PopupItem {
   label: string;
   command: string;
   separator: boolean;
+  /** `$style(1|3)` — render a check mark. */
+  checked?: boolean;
+  /** `$style(2|3)` — greyed and non-selectable. */
+  disabled?: boolean;
   children: PopupItem[];
 }

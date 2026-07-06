@@ -539,6 +539,19 @@ select {
 .context-menu button:hover {
   background: var(--panel2);
 }
+/* $style(2) disabled popup item: greyed, non-interactive, no hover feedback. */
+.context-menu button.pmenu-disabled,
+.context-menu button.pmenu-disabled:hover {
+  color: var(--muted);
+  background: transparent;
+  cursor: default;
+}
+/* $style(1) check mark, in a fixed column so labels stay aligned. */
+.pmenu-check {
+  display: inline-block;
+  width: 1.1em;
+  margin-left: -0.2em;
+}
 .context-menu button.danger:hover {
   background: var(--err);
   color: #fff;

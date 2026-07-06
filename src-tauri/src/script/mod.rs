@@ -209,6 +209,20 @@ impl ScriptEngine {
         command: &str,
         params: &[String],
     ) -> Vec<Action> {
+        self.run_command_snicks(ctx, target, command, params, &[])
+    }
+
+    /// Like [`run_command`], but also supplies the selected nicknames for a
+    /// nicklist popup run (`$snick`/`$snicks`). `params` still drive `$1..`
+    /// ($1 = the right-clicked nick); `snicks` is the full listbox selection.
+    pub fn run_command_snicks(
+        &self,
+        ctx: &RunCtx,
+        target: &str,
+        command: &str,
+        params: &[String],
+        snicks: &[String],
+    ) -> Vec<Action> {
         let body = parser::parse_body(command);
         let mut g = self.inner.lock().unwrap();
         let script = g.script.clone();
@@ -221,6 +235,7 @@ impl ScriptEngine {
             chan,
             target: target.to_string(),
             params: params.to_vec(),
+            snicks: snicks.to_vec(),
             ..Default::default()
         };
         let g = &mut *g;
@@ -325,7 +340,16 @@ fn eval_popup_labels(rt: &mut Runtime, items: &[PopupItem]) -> Vec<PopupItem> {
             out.push(item.clone());
             continue;
         }
-        let label = rt.expand(&item.label).trim().to_string();
+        // $submenu($id($1)) dynamically generates a flat list of items in place.
+        if let Some(arg) = parse_submenu_arg(&item.label) {
+            out.extend(expand_submenu(rt, &arg));
+            continue;
+        }
+        // A leading $style(N) sentinel (mIRC requires it be the first word) sets
+        // the item's check/disabled state and is stripped from the visible label.
+        let expanded = rt.expand(&item.label);
+        let (checked, disabled, rest) = split_style_marker(&expanded);
+        let label = rest.trim().to_string();
         if label.is_empty() {
             continue;
         }
@@ -333,10 +357,120 @@ fn eval_popup_labels(rt: &mut Runtime, items: &[PopupItem]) -> Vec<PopupItem> {
             label,
             command: item.command.clone(),
             separator: false,
+            checked,
+            disabled,
             children: eval_popup_labels(rt, &item.children),
         });
     }
     out
+}
+
+/// Splits a leading `$style(N)` sentinel off an expanded popup label, returning
+/// `(checked, disabled, remaining-label)`. Leading whitespace before the marker
+/// (e.g. from an `$iif(...)` that produced nothing) is tolerated.
+fn split_style_marker(s: &str) -> (bool, bool, &str) {
+    let trimmed = s.trim_start();
+    if let Some(rest) = trimmed.strip_prefix(crate::script::eval::STYLE_MARK) {
+        match rest.chars().next().and_then(|c| c.to_digit(10)) {
+            Some(n) => (n == 1 || n == 3, n == 2 || n == 3, &rest[1..]),
+            // A bare marker with no digit: drop it, no style.
+            None => (false, false, rest),
+        }
+    } else {
+        (false, false, s)
+    }
+}
+
+/// If `label` is a `$submenu($id($1))` item, returns the inner argument
+/// (e.g. `$animal($1)`); otherwise `None`. The match is case-insensitive and
+/// balances parentheses so a nested `(...)` in the argument is kept.
+fn parse_submenu_arg(label: &str) -> Option<String> {
+    let t = label.trim();
+    if !t.to_ascii_lowercase().starts_with("$submenu(") {
+        return None;
+    }
+    let rest = &t["$submenu(".len()..]; // "$submenu(" is 9 ASCII bytes
+    let mut depth = 1;
+    for (i, ch) in rest.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(rest[..i].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Expands a `$submenu` argument into a flat list of items, mIRC-style: call the
+/// argument with `$1` = `begin`, then `1, 2, …` until it returns empty, then
+/// `end`. `begin`/`end` let a script wrap the list in separators. A safety cap
+/// bounds a script that never returns empty; nested submenus aren't supported.
+fn expand_submenu(rt: &mut Runtime, arg: &str) -> Vec<PopupItem> {
+    const CAP: usize = 1000;
+    let saved = rt.event.params.clone();
+    let mut out = Vec::new();
+
+    rt.event.params = vec!["begin".to_string()];
+    if let Some(it) = make_generated_item(&rt.expand(arg)) {
+        out.push(it);
+    }
+    for i in 1..=CAP {
+        rt.event.params = vec![i.to_string()];
+        let r = rt.expand(arg);
+        if r.trim().is_empty() {
+            break;
+        }
+        if let Some(it) = make_generated_item(&r) {
+            out.push(it);
+        }
+    }
+    rt.event.params = vec!["end".to_string()];
+    if let Some(it) = make_generated_item(&rt.expand(arg)) {
+        out.push(it);
+    }
+
+    rt.event.params = saved;
+    out
+}
+
+/// Parses one generated `$submenu` line (`-` separator, or `label:command`, with
+/// an optional leading `$style` marker) into a flat popup item.
+fn make_generated_item(text: &str) -> Option<PopupItem> {
+    let t = text.trim();
+    if t.is_empty() {
+        return None;
+    }
+    if t == "-" {
+        return Some(PopupItem {
+            label: String::new(),
+            command: String::new(),
+            separator: true,
+            checked: false,
+            disabled: false,
+            children: Vec::new(),
+        });
+    }
+    let (checked, disabled, rest) = split_style_marker(t);
+    let (label, command) = match rest.split_once(':') {
+        Some((l, c)) => (l.trim().to_string(), c.trim().to_string()),
+        None => (rest.trim().to_string(), String::new()),
+    };
+    if label.is_empty() {
+        return None;
+    }
+    Some(PopupItem {
+        label,
+        command,
+        separator: false,
+        checked,
+        disabled,
+        children: Vec::new(),
+    })
 }
 
 fn is_channel(name: &str) -> bool {
@@ -1131,6 +1265,7 @@ pub fn script_run_popup(
     network: String,
     command: String,
     params: Vec<String>,
+    snicks: Option<Vec<String>>,
 ) {
     // A popup command may call `$input`, which blocks the run waiting for the UI
     // dialog. Run it on a blocking thread so the main thread (and WebView2) stay
@@ -1147,7 +1282,10 @@ pub fn script_run_popup(
                 .map(|s| s.get(&server_id))
                 .unwrap_or_default(),
         };
-        let actions = engine.run_command(&ctx, &target, &command, &params);
+        // A nicklist popup carries the listbox selection ($snick/$snicks); other
+        // contexts (channel/menubar) send none, so fall back to the item params.
+        let snicks = snicks.unwrap_or_else(|| params.clone());
+        let actions = engine.run_command_snicks(&ctx, &target, &command, &params, &snicks);
         apply_actions(&app, &server_id, &my_nick, &network, "", actions);
     });
 }
@@ -2155,6 +2293,105 @@ mod tests {
     }
 
     #[test]
+    fn snick_snicks_threaded_through_popup_run() {
+        let engine = ScriptEngine::new();
+        let sel = ["alice".to_string(), "bob".to_string(), "carol".to_string()];
+        // $snicks -> comma-separated selection.
+        assert_eq!(
+            engine.run_command_snicks(&ctx(), "#c", "/msg #c $snicks", &["alice".into()], &sel),
+            vec![Action::Send("PRIVMSG #c :alice,bob,carol".into())]
+        );
+        // $snick(#,0) -> count; $snick(#,N) -> Nth selected.
+        assert_eq!(
+            engine.run_command_snicks(
+                &ctx(),
+                "#c",
+                "/msg #c $snick(#c,0) $snick(#c,2)",
+                &["alice".into()],
+                &sel
+            ),
+            vec![Action::Send("PRIVMSG #c :3 bob".into())]
+        );
+        // A plain run (no popup selection, e.g. a timer) leaves the selection empty.
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", "/msg #c count=$snick(#c,0)", &[]),
+            vec![Action::Send("PRIVMSG #c :count=0".into())]
+        );
+    }
+
+    #[test]
+    fn popup_style_marks_checked_and_disabled() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "menu nicklist {\n\
+             $style(2) Disabled:noop\n\
+             $iif(1 == 1,$style(1)) Checked:noop\n\
+             $iif(1 == 2,$style(2)) Normal:noop\n\
+             }",
+        );
+        let items = engine.popups_evaluated(&ctx(), "nicklist", "bob", "#c");
+        assert_eq!(items.len(), 3);
+        // $style(2): greyed, label stripped of the marker.
+        assert_eq!(items[0].label, "Disabled");
+        assert!(items[0].disabled && !items[0].checked);
+        // $iif(...,$style(1)): the true branch checks the item.
+        assert_eq!(items[1].label, "Checked");
+        assert!(items[1].checked && !items[1].disabled);
+        // $iif false branch yields no marker -> a plain item.
+        assert_eq!(items[2].label, "Normal");
+        assert!(!items[2].checked && !items[2].disabled);
+    }
+
+    #[test]
+    fn popup_submenu_expands_dynamic_items() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias animal {\n\
+               if ($1 == begin) return -\n\
+               if ($1 == 1) return Cow:echo Cow\n\
+               if ($1 == 2) return Llama:echo Llama\n\
+               if ($1 == end) return -\n\
+             }\n\
+             menu nicklist {\n\
+               Animal\n\
+               .$submenu($animal($1))\n\
+             }",
+        );
+        let items = engine.popups_evaluated(&ctx(), "nicklist", "bob", "#c");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].label, "Animal");
+        // begin '-' → sep, then Cow, Llama (iteration stops at the empty $animal(3)),
+        // then end '-' → sep.
+        let kids = &items[0].children;
+        assert_eq!(kids.len(), 4);
+        assert!(kids[0].separator);
+        assert_eq!(kids[1].label, "Cow");
+        assert_eq!(kids[1].command, "echo Cow");
+        assert_eq!(kids[2].label, "Llama");
+        assert_eq!(kids[2].command, "echo Llama");
+        assert!(kids[3].separator);
+    }
+
+    #[test]
+    fn submenu_arg_parse() {
+        use super::parse_submenu_arg;
+        assert_eq!(parse_submenu_arg("$submenu($animal($1))").as_deref(), Some("$animal($1)"));
+        assert_eq!(parse_submenu_arg("  $SubMenu($x($1)) ").as_deref(), Some("$x($1)"));
+        assert_eq!(parse_submenu_arg("Plain:cmd"), None);
+    }
+
+    #[test]
+    fn style_marker_split() {
+        use super::split_style_marker;
+        let m = crate::script::eval::STYLE_MARK;
+        assert_eq!(split_style_marker(&format!("{m}3 Both")), (true, true, " Both"));
+        assert_eq!(split_style_marker(&format!("  {m}2 Off")), (false, true, " Off"));
+        assert_eq!(split_style_marker("Plain"), (false, false, "Plain"));
+        // A bare marker (no digit) is dropped, no style applied.
+        assert_eq!(split_style_marker(&format!("{m} x")), (false, false, " x"));
+    }
+
+    #[test]
     fn break_and_continue() {
         // /break exits the loop: msgs 1, 2 then breaks at 3.
         let engine = ScriptEngine::new();
@@ -2926,12 +3163,13 @@ mod tests {
     fn per_mode_events_fire() {
         let engine = ScriptEngine::new();
         engine.load(
-            "on *:OP:#:{ /msg $chan $nick opped $opnick }\non *:BAN:#:{ /msg $chan $nick banned $bnick }",
+            "on *:OP:#:{ /msg $chan $nick opped $opnick }\n\
+             on *:BAN:#:{ /msg $chan banned bnick=$bnick mask=$banmask }",
         );
         let ev = UiEvent::Mode {
             server_id: "s".into(),
             target: "#c".into(),
-            modes: "+o bob -v alice +b m!*@*".into(),
+            modes: "+o bob +b m!*@* +b *!*@evil.host".into(),
             by: Some("op".into()),
         };
         let actions = drive_event(&engine, &ctx(), &ev);
@@ -2939,7 +3177,10 @@ mod tests {
             actions,
             vec![
                 Action::Send("PRIVMSG #c :op opped bob".into()),
-                Action::Send("PRIVMSG #c :op banned m!*@*".into()),
+                // $bnick = the mask's nick part; $banmask = the whole mask.
+                Action::Send("PRIVMSG #c :banned bnick=m mask=m!*@*".into()),
+                // A nickless mask (*!*@host): $bnick is $null (empty), mask intact.
+                Action::Send("PRIVMSG #c :banned bnick= mask=*!*@evil.host".into()),
             ]
         );
     }

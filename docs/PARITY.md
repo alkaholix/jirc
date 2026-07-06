@@ -71,7 +71,7 @@ out of scope.
 - [x] `$away`
 - [x] `$awaymsg`
 - [x] `$awaytime`
-- [ ] `$banmask`
+- [x] `$banmask` *(the full mask in on BAN/UNBAN; `$bnick` is now its nick part, `$null` if none)*
 - [x] `$base`
 - [x] `$bfind`
 - [ ] `$bigfloat`
@@ -163,7 +163,7 @@ out of scope.
 - [x] `$feof`
 - [x] `$ferr`
 - [x] `$fgetc`
-- [ ] `$file`
+- [x] `$file` *(size/mtime/ctime/atime/name/ext/path/attr; sandboxed like `$isfile`. Windows sig/version → empty)*
 - [ ] `$filename`
 - [ ] `$filtered`
 - [x] `$finddir`
@@ -311,7 +311,7 @@ out of scope.
 - [x] `$nopath`
 - [x] `$noqt`
 - [x] `$not`
-- [ ] `$notags`
+- [x] `$notags` *(strips a leading IRCv3 message-tag block from a line)*
 - [ ] `$notify`
 - [x] `$null`
 - [x] `$numeric`
@@ -391,8 +391,8 @@ out of scope.
 - [x] `$sin`
 - [x] `$site`
 - [ ] `$sline`
-- [ ] `$snick`
-- [ ] `$snicks`
+- [x] `$snick` *(nicklist popup selection; `$snick(#,N)`, N=0 → count)*
+- [x] `$snicks` *(comma-separated selection; single-select nicklist for now)*
 - [ ] `$snotify`
 - [x] `$sock` *(existence + `.port`/`.mark`/`.status`; `.property` suffix parsing landed)*
 - [x] `$sockbr`
@@ -415,8 +415,8 @@ out of scope.
 - [x] `$str`
 - [x] `$strip`
 - [ ] `$stripped`
-- [ ] `$style`
-- [ ] `$submenu`
+- [x] `$style` *(popup menu: 1 checked, 2 disabled, 3 both; must be the item's first word)*
+- [x] `$submenu` *(dynamic menu: calls `$id(begin)`, `$id(1..)` until empty, `$id(end)`; flat list, no nesting)*
 - [ ] `$switchbar`
 - [ ] `$sysdir`
 - [x] `$tan`

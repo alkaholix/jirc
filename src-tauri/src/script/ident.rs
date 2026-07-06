@@ -32,7 +32,15 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         }
         // The secondary nick/target: kicked user (on KICK), new nick (on NICK),
         // or the affected nick/mask in per-mode events (on OP/BAN/VOICE/…).
-        "knick" | "newnick" | "opnick" | "bnick" | "vnick" | "hnick" => rt.event.knick.clone(),
+        "knick" | "newnick" | "opnick" | "vnick" | "hnick" => rt.event.knick.clone(),
+        // In on BAN/UNBAN the affected value is a mask. $banmask is the whole mask;
+        // $bnick is just its nick part — and, like mIRC, $null when the mask carries
+        // no real nick (e.g. *!*@host).
+        "banmask" => rt.event.knick.clone(),
+        "bnick" => match rt.event.knick.split_once('!') {
+            Some((nick, _)) if !nick.is_empty() && nick != "*" => nick.to_string(),
+            _ => String::new(),
+        },
         "chan" => {
             // $chan = event channel; $chan(N) = Nth joined channel (N=0 → count).
             if args.is_empty() {
@@ -52,6 +60,33 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 "$true".to_string()
             } else {
                 "$false".to_string()
+            }
+        }
+        // $style(N) marks the popup item it prefixes: 1 checked, 2 disabled, 3
+        // both. Returns a sentinel consumed when the menu is built (harmless and
+        // inert anywhere else, matching mIRC — it's only meaningful in a menu).
+        "style" => {
+            let n = a(0);
+            format!("{}{}", super::eval::STYLE_MARK, if n.is_empty() { "0" } else { &n })
+        }
+        // Selected nicknames in a nicklist popup (empty in any other context).
+        // $snicks -> comma-separated list; matches mIRC's nick1,nick2,...
+        "snicks" => rt.event.snicks.join(","),
+        // $snick(#,N) -> Nth selected nick (1-based); N=0 -> count. With no N,
+        // the whole selection space-separated. The channel arg is accepted for
+        // mIRC compatibility but not filtered on — a popup run carries the one
+        // listbox selection it was invoked from.
+        "snick" => {
+            let sel = &rt.event.snicks;
+            if args.len() >= 2 {
+                let n: usize = a(1).parse().unwrap_or(0);
+                if n == 0 {
+                    sel.len().to_string()
+                } else {
+                    sel.get(n - 1).cloned().unwrap_or_default()
+                }
+            } else {
+                sel.join(" ")
             }
         }
         "did" => {
@@ -303,6 +338,51 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         // $longfn/$shortfn -> long / 8.3-short filename; we pass through (modern
         // filesystems use the long form).
         "longfn" | "shortfn" => a(0),
+        // $file(name).prop -> file info. Sandboxed to the script-data dir like
+        // $isfile/$read (sandbox_path keeps only the leaf name). Times are unix
+        // seconds ($ctime-style). attr is best-effort/cross-platform; the
+        // Windows-only sig/version return empty. Bare $file(name) -> the resolved
+        // path if it exists, else $null.
+        "file" => {
+            let path = super::eval::sandbox_path(&rt.data_dir, &a(0));
+            let md = std::fs::metadata(&path).ok();
+            let secs = |t: Option<SystemTime>| {
+                t.and_then(|st| st.duration_since(UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs().to_string())
+                    .unwrap_or_default()
+            };
+            let leaf = || a(0).rsplit(['\\', '/']).next().unwrap_or("").to_string();
+            match prop.to_ascii_lowercase().as_str() {
+                "" | "longfn" | "shortfn" => {
+                    md.as_ref().map(|_| path.display().to_string()).unwrap_or_default()
+                }
+                "size" => md.as_ref().map(|m| m.len().to_string()).unwrap_or_default(),
+                "mtime" => secs(md.as_ref().and_then(|m| m.modified().ok())),
+                "ctime" => secs(md.as_ref().and_then(|m| m.created().ok())),
+                "atime" => secs(md.as_ref().and_then(|m| m.accessed().ok())),
+                "name" => leaf(),
+                "ext" => leaf().rsplit_once('.').map(|(_, e)| e.to_string()).unwrap_or_default(),
+                "path" => {
+                    let p = a(0);
+                    p.rfind(['\\', '/']).map(|i| p[..=i].to_string()).unwrap_or_default()
+                }
+                "attr" => md
+                    .as_ref()
+                    .map(|m| {
+                        let mut s = String::new();
+                        if m.is_dir() {
+                            s.push('d');
+                        }
+                        if m.permissions().readonly() {
+                            s.push('r');
+                        }
+                        s
+                    })
+                    .unwrap_or_default(),
+                // Windows PE signature/version — not meaningful cross-platform.
+                _ => String::new(),
+            }
+        }
         "scriptdir" | "mircdir" => {
             format!("{}{}", rt.data_dir.display(), std::path::MAIN_SEPARATOR)
         }
@@ -1081,6 +1161,16 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             }
         }
         "strip" => strip_codes(&a(0)),
+        // $notags(line) -> the line with a leading IRCv3 message-tag block
+        // (`@key=val;... `) removed. Tags only ever prefix a line, so drop up to
+        // the first space; a tags-only string becomes empty.
+        "notags" => {
+            let t = a(0);
+            match t.strip_prefix('@') {
+                Some(rest) => rest.split_once(' ').map_or(String::new(), |(_, r)| r.to_string()),
+                None => t,
+            }
+        }
         "regex" => {
             // $regex([name,] text, pattern) -> match count; stores the first
             // match's capture groups for $regml. The optional name is ignored.
@@ -2278,6 +2368,13 @@ mod tests {
         assert_eq!(id("regmlex", &["2", "2"]), "2");
         assert_eq!(id("regmlex", &["3", "1"]), "c");
         assert_eq!(id("regml", &["1"]), "a"); // first match still flat for $regml
+        // $notags — strip a leading IRCv3 message-tag block
+        assert_eq!(
+            id("notags", &["@time=x;id=5 :nick!u@h PRIVMSG #c :hi"]),
+            ":nick!u@h PRIVMSG #c :hi"
+        );
+        assert_eq!(id("notags", &[":nick PRIVMSG #c :no tags"]), ":nick PRIVMSG #c :no tags");
+        assert_eq!(id("notags", &["@only=tags"]), ""); // tags-only -> empty
         // file-name identifiers
         assert_eq!(id("nopath", &["C:\\folder\\file.txt"]), "file.txt");
         assert_eq!(id("nopath", &["/usr/bin/foo"]), "foo");
@@ -2391,6 +2488,93 @@ mod tests {
         // the `id` closure's final use, so its borrow of `rt` has ended.
         assert_eq!(eval_ident(&mut rt, "sin", &["90".into()], "deg"), "1");
         assert_eq!(eval_ident(&mut rt, "atan", &["1".into()], "deg"), "45");
+    }
+
+    #[test]
+    fn file_identifier() {
+        use crate::script::ast::Script;
+        use crate::script::eval::{EventVars, Runtime};
+        use std::collections::HashMap;
+
+        // A private sandbox dir so the test is hermetic and parallel-safe.
+        let dir = std::env::temp_dir().join(format!(
+            "jirc_file_test_{}_{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("probe.dat"), b"hello").unwrap(); // 5 bytes
+
+        let script = Script::default();
+        let mut vars = HashMap::new();
+        let mut hashes = HashMap::new();
+        let mut files = crate::script::files::FileStore::default();
+        let mut bins = crate::script::binvar::BinStore::default();
+        let mut windows = crate::script::window::WindowStore::default();
+        let mut rt = Runtime {
+            script: &script,
+            my_nick: "me",
+            network: "n",
+            server: "s",
+            vars: &mut vars,
+            hashes: &mut hashes,
+            files: &mut files,
+            bins: &mut bins,
+            windows: &mut windows,
+            event: EventVars::default(),
+            actions: vec![],
+            halted: false,
+            steps: 0,
+            depth: 0,
+            ret: None,
+            goto: None,
+            data_dir: dir.clone(),
+            state: std::sync::Arc::new(Default::default()),
+            sockets: std::sync::Arc::new(crate::script::eval::NoSockets),
+            input: std::sync::Arc::new(crate::script::eval::NoInput),
+            caller: "command",
+        };
+        let f = |rt: &mut Runtime, prop: &str| eval_ident(rt, "file", &["probe.dat".into()], prop);
+
+        assert_eq!(f(&mut rt, "size"), "5");
+        assert_eq!(f(&mut rt, "name"), "probe.dat");
+        assert_eq!(f(&mut rt, "ext"), "dat");
+        assert!(f(&mut rt, "mtime").parse::<u64>().map(|t| t > 0).unwrap_or(false));
+        assert!(!f(&mut rt, "").is_empty()); // bare -> resolved path (exists)
+        // The path is sandboxed to the data dir like $isfile/$read: a leading
+        // path is stripped to the leaf, so i7.mrc's $file($scriptdir\x) resolves.
+        assert_eq!(
+            eval_ident(&mut rt, "file", &["C:\\anywhere\\probe.dat".into()], "size"),
+            "5"
+        );
+        // A missing file -> empty for every property (and bare).
+        assert_eq!(eval_ident(&mut rt, "file", &["nope.dat".into()], "size"), "");
+        assert_eq!(eval_ident(&mut rt, "file", &["nope.dat".into()], ""), "");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn snick_identifiers() {
+        use crate::script::ast::Script;
+        use std::collections::HashMap;
+        let script = Script::default();
+        let mut vars = HashMap::new();
+        let mut hashes = HashMap::new();
+        let mut files = crate::script::files::FileStore::default();
+        let mut bins = crate::script::binvar::BinStore::default();
+        let mut windows = crate::script::window::WindowStore::default();
+        let mut rt = rt_for(&script, &mut vars, &mut hashes, &mut files, &mut bins, &mut windows);
+        rt.event.snicks = vec!["alice".into(), "bob".into(), "carol".into()];
+        assert_eq!(eval_ident(&mut rt, "snicks", &[], ""), "alice,bob,carol");
+        assert_eq!(eval_ident(&mut rt, "snick", &["#c".into(), "0".into()], ""), "3");
+        assert_eq!(eval_ident(&mut rt, "snick", &["#c".into(), "2".into()], ""), "bob");
+        assert_eq!(eval_ident(&mut rt, "snick", &["#c".into(), "9".into()], ""), ""); // out of range
+        assert_eq!(eval_ident(&mut rt, "snick", &["#c".into()], ""), "alice bob carol"); // no N
+        // No selection (a timer / typed command) -> empty list, count 0.
+        rt.event.snicks.clear();
+        assert_eq!(eval_ident(&mut rt, "snicks", &[], ""), "");
+        assert_eq!(eval_ident(&mut rt, "snick", &["#c".into(), "0".into()], ""), "0");
     }
 
     #[test]

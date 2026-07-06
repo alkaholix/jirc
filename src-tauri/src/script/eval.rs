@@ -78,6 +78,11 @@ pub enum Action {
 /// `$sockbr`); the NUL char can't appear in a real variable name.
 pub const SOCK_BR_KEY: &str = "\u{0}sockbr";
 
+/// Sentinel that `$style(N)` returns; consumed while building a popup menu (a
+/// Private-Use char, so it can't collide with a real label). The digit that
+/// follows is mIRC's style: 1 = checked, 2 = disabled, 3 = both.
+pub const STYLE_MARK: char = '\u{E000}';
+
 /// Per-invocation variables ($nick, $chan, params, …).
 #[derive(Debug, Clone, Default)]
 pub struct EventVars {
@@ -86,6 +91,9 @@ pub struct EventVars {
     pub target: String,
     pub text: String,
     pub params: Vec<String>,
+    /// Selected nicknames for a nicklist popup run, exposed as `$snick`/`$snicks`.
+    /// Empty for every other run (timers, typed commands, events).
+    pub snicks: Vec<String>,
     /// Secondary nick for events that involve two people (e.g. `on KICK`'s
     /// kicked user, exposed as `$knick`).
     pub knick: String,

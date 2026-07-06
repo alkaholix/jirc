@@ -28,21 +28,33 @@ export function SubMenu({ item, onRun }: { item: PopupItem; onRun: (command: str
   );
 }
 
-/** Recursively renders script-defined popup items. */
+/** Recursively renders script-defined popup items. `$style` from the engine
+ *  surfaces as `checked` (a ✓) and `disabled` (greyed, non-selectable — which
+ *  also blocks a submenu from opening, matching mIRC). */
 export function PopupItems({ items, onRun }: { items: PopupItem[]; onRun: (command: string) => void }) {
   return (
     <>
-      {items.map((item, i) =>
-        item.separator ? (
-          <div key={i} className="menu-sep" />
-        ) : item.children.length > 0 ? (
-          <SubMenu key={i} item={item} onRun={onRun} />
-        ) : (
-          <button key={i} onClick={() => onRun(item.command)}>
+      {items.map((item, i) => {
+        if (item.separator) return <div key={i} className="menu-sep" />;
+        const label = (
+          <>
+            {item.checked && <span className="pmenu-check">✓</span>}
             {item.label}
+          </>
+        );
+        if (item.disabled)
+          return (
+            <button key={i} className="pmenu-disabled" disabled>
+              {label}
+            </button>
+          );
+        if (item.children.length > 0) return <SubMenu key={i} item={item} onRun={onRun} />;
+        return (
+          <button key={i} onClick={() => onRun(item.command)}>
+            {label}
           </button>
-        )
-      )}
+        );
+      })}
     </>
   );
 }

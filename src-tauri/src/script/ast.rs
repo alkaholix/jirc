@@ -53,6 +53,12 @@ pub struct PopupItem {
     /// The command to run (unexpanded). Empty for separators and submenu parents.
     pub command: String,
     pub separator: bool,
+    /// `$style(1|3)` — show a check mark. Set at menu-build time.
+    #[serde(default)]
+    pub checked: bool,
+    /// `$style(2|3)` — greyed, non-selectable. Set at menu-build time.
+    #[serde(default)]
+    pub disabled: bool,
     pub children: Vec<PopupItem>,
 }
 

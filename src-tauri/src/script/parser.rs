@@ -512,6 +512,8 @@ fn parse_popup_body(src: &str) -> Vec<PopupItem> {
                     label: String::new(),
                     command: String::new(),
                     separator: true,
+                    checked: false,
+                    disabled: false,
                     children: Vec::new(),
                 },
             ));
@@ -535,6 +537,8 @@ fn parse_popup_body(src: &str) -> Vec<PopupItem> {
                 label,
                 command,
                 separator: false,
+                checked: false,
+                disabled: false,
                 children: Vec::new(),
             },
         ));

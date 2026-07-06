@@ -13,6 +13,39 @@ three places that carry it:
 
 Newest first.
 
+## 26.7.7
+
+mSL engine fidelity: the popup / nicklist identifiers that real mIRC scripts
+(like the IRC7 client scripts) lean on, plus file info and ban-event identifiers —
+and a help file brought back in sync with what the engine actually does.
+
+### Added (mSL identifiers)
+- **`$snick` / `$snicks`** — the nicklist popup selection. `$snicks` is the
+  comma-separated list; `$snick(#, N)` is the Nth selected nick (`N=0` → count).
+  Threaded from the frontend through the popup run.
+- **`$style(N)`** — as a popup item's first word: `1` adds a check mark, `2` greys
+  it out (disabled, and a disabled submenu parent won't open), `3` both. Rendered
+  in the popup menu.
+- **`$submenu($id($1))`** — dynamic menu generation: calls `$id` with `$1` =
+  `begin`, then `1, 2, …` until it returns nothing, then `end`, building a flat
+  list in place (mIRC semantics; no nesting).
+- **`$file(name)`** — file info (`.size`, `.mtime`, `.ctime`, `.atime`, `.name`,
+  `.ext`, `.path`, `.attr`), sandboxed to the script-data dir like `$isfile`.
+- **`$banmask`** — the full mask set in `on BAN`/`on UNBAN`.
+- **`$notags(line)`** — a line with its leading IRCv3 message-tag block removed.
+
+### Fixed
+- **`$bnick`** now returns just the *nick part* of a ban mask (`$null` when the
+  mask has no real nick, e.g. `*!*@host`), matching mIRC — it was returning the
+  whole mask. Use `$banmask` for the full mask.
+
+### Docs
+- **Help file** (`/help`): added a **Thanks & credits** section (JD's `ircx-sspi`
+  NTLM SSPI, Ricardo's help with the AUTH, Sky's testing); documented the new
+  identifiers; and corrected a stale "not supported" list that still claimed
+  `$md5`/`$hmac`/`$regsubex`/`$input`/`.ini`/binary vars/DCC/custom `@windows`
+  were unavailable when they've long since landed.
+
 ## 26.7.6
 
 IRCX **owner/host key** management, born from running jIRC as an owner on a live

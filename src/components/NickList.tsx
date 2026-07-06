@@ -160,9 +160,11 @@ export function NickList({ buffer }: { buffer: Buffer }) {
   };
 
   // Runs a script popup command with $1 = selected nick, $chan = channel.
+  // The nicklist is single-select, so the clicked nick is also the whole
+  // selection exposed via $snick/$snicks.
   const runPopup = (command: string, nick: string) => {
     api
-      .scriptRunPopup(serverId, channel, server?.nick ?? "", server?.name ?? "", command, [nick])
+      .scriptRunPopup(serverId, channel, server?.nick ?? "", server?.name ?? "", command, [nick], [nick])
       .catch(() => {});
     setMenu(null);
   };

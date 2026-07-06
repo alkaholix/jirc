@@ -94,6 +94,8 @@
   <a href="#sockets">Sockets</a>
   <h2>Notes</h2>
   <a href="#limits">What's not supported</a>
+  <h2>About</h2>
+  <a href="#thanks">Thanks &amp; credits</a>
 </nav>
 
 <main>
@@ -513,6 +515,26 @@ a line that is just <code>-</code> is a separator. In the nick-list menu,
   Slap:<span class="k">/me</span> slaps <span class="i">$1</span> around a bit
 }
 </code></pre>
+<h3>Selected nicks, styles &amp; dynamic items</h3>
+<table>
+  <tr><th>In a popup…</th><th>Gives you</th></tr>
+  <tr><td><code>$snicks</code></td><td>the selected nicks as <code>nick1,nick2,…</code></td></tr>
+  <tr><td><code>$snick(#, N)</code></td><td>the Nth selected nick (<code>$snick(#, 0)</code> = count)</td></tr>
+  <tr><td><code>$style(N)</code></td><td>as an item's <strong>first word</strong>: <code>1</code> adds a check mark, <code>2</code> greys it out (disabled), <code>3</code> both</td></tr>
+  <tr><td><code>$submenu($id($1))</code></td><td>build items dynamically — calls your <code>$id</code> with <code>$1</code> = <code>begin</code>, then <code>1, 2, …</code> until it returns nothing, then <code>end</code></td></tr>
+</table>
+<pre><code><span class="k">menu</span> nicklist {
+  <span class="c">; grey out "Whois" when you click your own name</span>
+  <span class="i">$iif</span>(<span class="i">$1</span> == <span class="i">$me</span>,<span class="i">$style</span>(2)) Whois <span class="i">$1</span>:<span class="k">/whois</span> <span class="i">$1</span>
+  -
+  Colour the channel
+  .<span class="i">$submenu</span>(<span class="i">$colour</span>(<span class="i">$1</span>))
+}
+<span class="k">alias</span> colour {
+  <span class="k">if</span> (<span class="i">$1</span> == 1) <span class="k">/return</span> Red:<span class="k">/msg</span> <span class="i">$chan</span> red
+  <span class="k">if</span> (<span class="i">$1</span> == 2) <span class="k">/return</span> Blue:<span class="k">/msg</span> <span class="i">$chan</span> blue
+}
+</code></pre>
 
 <h2 id="dialogs">Custom dialogs</h2>
 <p>Build your own pop-up windows with input fields, dropdowns and buttons. Unlike
@@ -752,6 +774,7 @@ write anywhere else on your disk.</p>
   <tr><td><code>$read(file, n)</code></td><td>line number n</td></tr>
   <tr><td><code>$lines(file)</code></td><td>number of lines</td></tr>
   <tr><td><code>$isfile(file)</code> · <code>$isdir(d)</code> · <code>$exists(f)</code></td><td><code>$true</code>/<code>$false</code></td></tr>
+  <tr><td><code>$file(name).size</code> · <code>.mtime</code> · <code>.ctime</code> · <code>.name</code> · <code>.ext</code></td><td>file info: size in bytes, modified / created unix time, leaf name, extension</td></tr>
   <tr><td><code>$scriptdir</code></td><td>the sandbox folder path (with trailing separator)</td></tr>
 </table>
 <pre><code><span class="c">; a simple quotes database</span>
@@ -837,30 +860,51 @@ against jIRC being cross-platform and safe to share:
 </ul>
 </div>
 
+<h3>Now supported</h3>
+<div class="note">
+Landed since early builds — these <strong>do</strong> work now: <strong>DCC</strong>
+(chat + file send/get), custom <code>@windows</code>, binary variables
+(<code>&amp;binvar</code>/<code>$bvar</code>/<code>/bset</code>), <code>$regsubex</code>,
+crypto (<code>$md5</code>/<code>$sha1</code>/<code>$hmac</code>), <code>$input</code>,
+<code>.ini</code> files (<code>$readini</code>/<code>/writeini</code>), most
+<code>.property</code> suffixes (<code>$sock(x).status</code>, <code>$hget(t,N).item</code>),
+and IRCX owner/host keys. Some aren't in the reference tables above yet.
+</div>
+
 <h3>Not yet (may come later)</h3>
 <div class="note warn">
 Planned or possible future work — scripts using these won't work today:
 <ul style="margin:.5rem 0 0">
-  <li><strong>DCC</strong> file transfer / chat.</li>
-  <li>Custom <code>@windows</code> / picture windows, and window/notify lifecycle events
-    (<code>on OPEN/CLOSE/SNOTICE/NOTIFY</code>).</li>
-  <li><strong>Property suffixes</strong> like <code>$sock(x).status</code>,
-    <code>$hget(t,N).item</code>, <code>$chan(#).topic</code> — the base identifiers work,
-    the <code>.property</code> part doesn't yet.</li>
-  <li>Binary variables (<code>&amp;binvar</code>, <code>$bvar</code>, <code>/bset</code>),
-    <code>$regsubex</code>, and crypto identifiers (<code>$md5</code>, <code>$hmac</code>,
-    <code>$sha1</code>).</li>
-  <li><code>$input</code> and other modal dialog identifiers, <code>.ini</code> files
-    (<code>$readini</code>/<code>/writeini</code>), and a long tail of rarely-used identifiers.</li>
+  <li>Picture / drawing <code>@windows</code>, and some lifecycle events
+    (<code>on OPEN</code>, <code>on CLOSE</code>, <code>on NOTIFY</code>).</li>
+  <li>A few <strong>property suffixes</strong> such as <code>$chan(#).topic</code> — most
+    now work, just not every one.</li>
+  <li>A long tail of rarely-used identifiers.</li>
 </ul>
 </div>
 
 <p>Two gotchas worth remembering:</p>
 <ul>
-  <li>An <strong>unknown identifier</strong> prints as literal text (e.g. <code>$sha1</code> shows up as the word "$sha1").</li>
+  <li>An <strong>unknown identifier</strong> prints as literal text (e.g. a typo like <code>$madeupname</code> shows up as the words "$madeupname").</li>
   <li>An unknown <strong>client-side</strong> command (windows/display/sound) is ignored;
     any other unknown command is sent to the server as a raw IRC line.</li>
 </ul>
+
+<h2 id="thanks">Thanks &amp; credits</h2>
+<p>jIRC's IRCX authentication stands on the shoulders of people who generously
+shared their work, their code and their time. A special shout-out to:</p>
+<div class="note">
+<ul style="margin:0">
+  <li><strong>JD</strong> — for his <strong>ircx-sspi</strong>, the NTLM Security
+    Support Provider Interface (SSPI) that jIRC's IRCX / IRC7 authentication is built on.
+    None of the login flow would exist without it.</li>
+  <li><strong>Ricardo</strong> — for the help with the <strong>AUTH</strong>, built on
+    JD's ircx-sspi, that got IRC7 sign-in working end-to-end.</li>
+  <li><strong>Sky</strong> — for the patient <strong>testing</strong> and feedback
+    that shook the bugs loose and kept everything honest.</li>
+</ul>
+</div>
+<p>Thank you — jIRC is better because of you. &#10084;</p>
 
 <footer>
 jIRC help &amp; scripting guide — generated for the current build. As jIRC grows, this
