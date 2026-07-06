@@ -1058,6 +1058,8 @@ fn handle_mode(
     let mut tokens: Vec<String> = Vec::new();
     let mut adding = true;
     let mut prefix_changed = false;
+    let mut got_owner = false;
+    let mut lost_owner = false;
     for letter in modestring.chars() {
         match letter {
             '+' => adding = true,
@@ -1072,6 +1074,14 @@ fn handle_mode(
                     if let Some(nick) = &arg {
                         ctx.state.apply_prefix_mode(&target, nick, letter, adding);
                         prefix_changed = true;
+                        // Our own ownership changed (+q/-q on our own nick).
+                        if letter == 'q' && nick.eq_ignore_ascii_case(&ctx.state.nick) {
+                            if adding {
+                                got_owner = true;
+                            } else {
+                                lost_owner = true;
+                            }
+                        }
                     }
                 } else if letter == 'b' {
                     if let Some(mask) = &arg {
@@ -1087,12 +1097,31 @@ fn handle_mode(
         }
     }
 
+    // Someone else stripped our +q — capture the offender for takeover protection.
+    let revoked_by = if lost_owner {
+        by.clone().filter(|b| !b.eq_ignore_ascii_case(&ctx.state.nick))
+    } else {
+        None
+    };
     fx.events.push(UiEvent::Mode {
         server_id: server_id.to_string(),
         target: target.clone(),
         modes: tokens.join(" "),
         by,
     });
+    if got_owner {
+        fx.events.push(UiEvent::OwnerGranted {
+            server_id: server_id.to_string(),
+            channel: target.clone(),
+        });
+    }
+    if let Some(by) = revoked_by {
+        fx.events.push(UiEvent::OwnerRevoked {
+            server_id: server_id.to_string(),
+            channel: target.clone(),
+            by,
+        });
+    }
     if prefix_changed {
         if let Some(ch) = ctx.state.channels.get(&target) {
             fx.events.push(UiEvent::Names {
@@ -2004,6 +2033,44 @@ mod tests {
         }
         // owner's '.' (founder) prefix was removed
         assert_eq!(s.channels["%#chan"].members["owner"], "");
+    }
+
+    #[test]
+    fn owner_granted_only_when_we_get_plus_q() {
+        let mut s = SessionState { nick: "me".into(), ..Default::default() };
+        s.isupport.parse_token("CHANTYPES=%#");
+        s.isupport.parse_token("PREFIX=(qov)~@+");
+        let mut accum = HashMap::new();
+        // +q on us -> OwnerGranted for the channel.
+        let fx = run_line(&mut s, &mut accum, ":host!u@h MODE %#room +q me");
+        assert!(fx
+            .events
+            .iter()
+            .any(|e| matches!(e, UiEvent::OwnerGranted { channel, .. } if channel == "%#room")));
+        // +q on someone else, or -q on us -> no OwnerGranted.
+        let fx = run_line(&mut s, &mut accum, ":host!u@h MODE %#room +q bob");
+        assert!(!fx.events.iter().any(|e| matches!(e, UiEvent::OwnerGranted { .. })));
+        let fx = run_line(&mut s, &mut accum, ":host!u@h MODE %#room -q me");
+        assert!(!fx.events.iter().any(|e| matches!(e, UiEvent::OwnerGranted { .. })));
+    }
+
+    #[test]
+    fn owner_revoked_only_when_someone_else_takes_our_q() {
+        let mut s = SessionState { nick: "me".into(), ..Default::default() };
+        s.isupport.parse_token("CHANTYPES=%#");
+        s.isupport.parse_token("PREFIX=(qov)~@+");
+        let mut accum = HashMap::new();
+        // -q on us by someone else -> OwnerRevoked naming the offender.
+        let fx = run_line(&mut s, &mut accum, ":taker!u@h MODE %#room -q me");
+        assert!(fx.events.iter().any(|e| matches!(
+            e,
+            UiEvent::OwnerRevoked { channel, by, .. } if channel == "%#room" && by == "taker"
+        )));
+        // -q on someone else, or -q we set ourselves -> no OwnerRevoked.
+        let fx = run_line(&mut s, &mut accum, ":taker!u@h MODE %#room -q bob");
+        assert!(!fx.events.iter().any(|e| matches!(e, UiEvent::OwnerRevoked { .. })));
+        let fx = run_line(&mut s, &mut accum, ":me!u@h MODE %#room -q me");
+        assert!(!fx.events.iter().any(|e| matches!(e, UiEvent::OwnerRevoked { .. })));
     }
 
     #[test]

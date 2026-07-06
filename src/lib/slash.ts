@@ -58,11 +58,21 @@ export async function handleInput(input: string, buffer: Buffer): Promise<void> 
     return;
   }
 
-  // Strip the leading slash; `//cmd` (mIRC's "evaluate then run") is treated
-  // like `/cmd` here, so drop a second leading slash too.
+  // `//cmd` is mIRC's "evaluate then run": hand the line to the mSL engine,
+  // whose commands evaluate identifiers ($me, $chan, …) like a script would.
+  // A single `/cmd` stays literal, exactly like mIRC's editbox.
   const afterSlash = text.slice(1);
-  const line = afterSlash.startsWith("/") ? afterSlash.slice(1) : afterSlash;
-  const [cmd, ...rest] = line.split(" ");
+  if (afterSlash.startsWith("/")) {
+    const [cmd, ...rest] = afterSlash.slice(1).split(" ");
+    if (cmd) {
+      const target = kind === "status" ? "" : name;
+      await api
+        .scriptRunCommand(serverId, target, nick, srv?.name ?? "", cmd.toLowerCase(), rest.join(" "))
+        .catch(() => {});
+    }
+    return;
+  }
+  const [cmd, ...rest] = afterSlash.split(" ");
   const args = rest.join(" ");
   const command = cmd.toLowerCase();
 
@@ -261,7 +271,10 @@ export async function handleInput(input: string, buffer: Buffer): Promise<void> 
       }
       break;
     case "mode":
-      if (args) await api.sendRaw(serverId, `MODE ${args.startsWith("#") ? "" : name + " "}${args}`.trim());
+      // Prepend the active buffer only for a bare modestring (/mode +h key).
+      // Anything else is an explicit target — a nick or a channel of any prefix
+      // (#chan, IRCX %#chan) — and must go to the server untouched.
+      if (args) await api.sendRaw(serverId, /^[+-]/.test(args) ? `MODE ${name} ${args}` : `MODE ${args}`);
       break;
     case "whisper":
     case "w": {

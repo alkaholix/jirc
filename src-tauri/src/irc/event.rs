@@ -52,6 +52,20 @@ pub enum UiEvent {
         server_id: String,
         reason: String,
     },
+    /// We were just granted channel ownership (`+q` on our own nick) — the client
+    /// provisions IRCX owner/host keys + access for the channel.
+    OwnerGranted {
+        server_id: String,
+        channel: String,
+    },
+    /// Someone else removed our channel ownership (`-q` on our own nick) — the
+    /// client runs takeover protection (reclaim owner with the stored key,
+    /// clear the owner access list, kick `by`).
+    OwnerRevoked {
+        server_id: String,
+        channel: String,
+        by: String,
+    },
     /// A raw protocol line, for the raw console.
     Raw {
         server_id: String,

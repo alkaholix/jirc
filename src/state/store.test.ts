@@ -6,10 +6,12 @@ vi.mock("../lib/api", () => ({
     logAppend: vi.fn().mockResolvedValue(undefined),
     logRead: vi.fn().mockResolvedValue(""),
     join: vi.fn().mockResolvedValue(undefined),
+    ircxOwnerProtect: vi.fn().mockResolvedValue(undefined),
   },
 }));
 vi.mock("../lib/notify", () => ({ notify: vi.fn() }));
 
+import { api } from "../lib/api";
 import { useStore, bufferKey, STATUS } from "./store";
 import { useSettings } from "./settings";
 
@@ -337,5 +339,14 @@ describe("renameBuffer (/queryrn)", () => {
     expect(st.active).toBe(newKey);
     expect(st.order).toContain(newKey);
     expect(st.order).not.toContain(oldKey);
+  });
+});
+
+describe("IRCX owner protection", () => {
+  it("runs takeover protection when someone else strips our +q", () => {
+    useStore
+      .getState()
+      .handleEvent({ type: "ownerRevoked", serverId: SID, channel: "%#room", by: "taker" });
+    expect(api.ircxOwnerProtect).toHaveBeenCalledWith(SID, "TestNet", "%#room", "taker");
   });
 });

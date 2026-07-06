@@ -36,6 +36,7 @@ pub fn run() {
         .manage(irc::state::StateStore::new())
         .manage(irc::dcc::DccManager::new())
         .manage(script::input::PromptRegistry::default())
+        .manage(irc::ircx_keys::IrcxKeyStore::new())
         .setup(|app| {
             // Rename the legacy `com.jirc.app` data folder to `jIRC` (once) before
             // anything reads profiles/scripts/logs.
@@ -54,6 +55,11 @@ pub fn run() {
                 app.handle().clone(),
                 registry,
             )));
+            // Load persisted IRCX owner/host keys into the in-memory cache.
+            if let Ok(dir) = storage::config_dir(app.handle()) {
+                app.state::<irc::ircx_keys::IrcxKeyStore>()
+                    .load(dir.join("ircx-keys.json"));
+            }
             script::load_persisted(app.handle(), &engine);
             Ok(())
         })
@@ -113,6 +119,9 @@ pub fn run() {
             script::script_popups,
             script::script_run_popup,
             script::input::script_prompt_reply,
+            irc::ircx_keys::ircx_claim_owner,
+            irc::ircx_keys::ircx_owner_protect,
+            irc::ircx_keys::ircx_keys_get,
         ])
         .run(tauri::generate_context!())
         .expect("error while running jIRC");

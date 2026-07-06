@@ -13,6 +13,31 @@ three places that carry it:
 
 Newest first.
 
+## 26.7.6
+
+IRCX **owner/host key** management, born from running jIRC as an owner on a live
+IRC7 server: the client now provisions and defends channel ownership itself.
+
+### Added
+- **IRCX key provisioning** — on getting `+q`, jIRC generates fresh
+  OWNERKEY/HOSTKEY, sets them via `PROP`, grants owner+host `ACCESS` to your
+  username mask, and stores the keys per network/channel in `ircx-keys.json`
+  in the data folder (human-readable; cached in memory for instant lookup).
+- **Owner takeover protection** — if someone else strips your `+q`, jIRC
+  reclaims owner with the stored OWNERKEY (`MODE you +h key`), clears the owner
+  access list, kicks the offender, and — via the re-triggered provisioning —
+  rotates both keys as the final step.
+- **`//command` evaluation** — mIRC's "evaluate then run": `//mode $me +h key`
+  runs through the mSL engine so identifiers (`$me`, `$chan`, …) evaluate.
+  A single `/command` stays literal, exactly like mIRC's editbox.
+
+### Fixed
+- **`/mode` target mangling** — an explicit target (`/mode nick +h key`,
+  `/mode %#chan +o nick`) no longer gets the active channel prepended; only a
+  bare modestring (`/mode +m`) targets the current channel. This broke IRCX
+  self-promotion (`MODE <nick> +h <ownerkey|hostkey>`), which the server
+  answered with `472`/`482`.
+
 ## 26.6.28
 
 Running a real, heavy mIRC script end-to-end — an **IRC7 GateKeeper** socket

@@ -43,6 +43,13 @@ export interface DataLocation {
   forced: boolean;
 }
 
+/** A channel's generated IRCX owner/host keys. */
+export interface IrcxChannelKeys {
+  ownerkey: string;
+  hostkey: string;
+  updated: number;
+}
+
 export const api = {
   coreVersion: () => invoke<string>("core_version"),
 
@@ -95,6 +102,14 @@ export const api = {
   ircxPropSet: (serverId: string, object: string, property: string, value: string) =>
     invoke("ircx_prop_set", { serverId, object, property, value }),
   ircxListx: (serverId: string, mask?: string) => invoke("ircx_listx", { serverId, mask }),
+  /** On `+q`: generate + set OWNERKEY/HOSTKEY, grant owner/host access, store the keys. */
+  ircxClaimOwner: (serverId: string, network: string, channel: string) =>
+    invoke<IrcxChannelKeys>("ircx_claim_owner", { serverId, network, channel }),
+  /** Takeover protection: reclaim owner with the stored key, clear owner access, kick. */
+  ircxOwnerProtect: (serverId: string, network: string, channel: string, offender: string) =>
+    invoke("ircx_owner_protect", { serverId, network, channel, offender }),
+  ircxKeysGet: (network: string, channel: string) =>
+    invoke<IrcxChannelKeys | null>("ircx_keys_get", { network, channel }),
 
   profilesLoad: () => invoke<ServerProfile[]>("profiles_load"),
   profilesSave: (profiles: ServerProfile[]) => invoke("profiles_save", { profiles }),
@@ -174,6 +189,8 @@ export type IrcEvent =
   | { type: "connected"; serverId: string }
   | { type: "registered"; serverId: string; nick: string }
   | { type: "disconnected"; serverId: string; reason: string }
+  | { type: "ownerGranted"; serverId: string; channel: string }
+  | { type: "ownerRevoked"; serverId: string; channel: string; by: string }
   | { type: "raw"; serverId: string; direction: "in" | "out"; line: string }
   | {
       type: "message";
