@@ -182,6 +182,26 @@ impl ScriptInput for NoInput {
     }
 }
 
+/// A per-run view of the connection registry, for `$cid`/`$scon`/`$activecid`.
+#[derive(Clone, Default)]
+pub struct ConnsView {
+    /// `(cid, server_id)` for every live connection, in ascending cid order.
+    pub entries: Vec<(u32, String)>,
+    /// The active window's connection cid (0 = none reported).
+    pub active_cid: u32,
+}
+
+impl ConnsView {
+    /// The cid for a server id (0 if unknown) — backs `$cid`.
+    pub fn cid_of(&self, server_id: &str) -> u32 {
+        self.entries
+            .iter()
+            .find(|(_, id)| id == server_id)
+            .map(|(c, _)| *c)
+            .unwrap_or(0)
+    }
+}
+
 /// The execution context for a single alias/event run.
 pub struct Runtime<'a> {
     pub script: &'a Script,
@@ -207,6 +227,8 @@ pub struct Runtime<'a> {
     pub data_dir: std::path::PathBuf,
     /// Live channel/member snapshot for state-aware identifiers.
     pub state: std::sync::Arc<crate::irc::state::StateSnapshot>,
+    /// Connection registry view for `$cid`/`$scon`/`$activecid`.
+    pub conns: ConnsView,
     /// Synchronous socket backend for `/socklisten`/`/sockaccept`/`$sock(...)`.
     pub sockets: std::sync::Arc<dyn ScriptSockets>,
     /// Backend for `$input` prompts.

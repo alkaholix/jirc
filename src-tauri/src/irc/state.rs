@@ -162,6 +162,8 @@ impl ChannelState {
 #[derive(Debug, Default)]
 pub struct SessionState {
     pub nick: String,
+    /// This connection's id (the StateStore key), surfaced in the snapshot for `$cid`.
+    pub server_id: String,
     pub channels: BTreeMap<String, ChannelState>,
     pub isupport: Isupport,
     /// Connection facts (seeded from the profile) for $port/$ssl/$anick/$fullname.
@@ -278,6 +280,8 @@ pub struct ChannelView {
 #[derive(Debug, Default, Clone)]
 pub struct StateSnapshot {
     pub nick: String,
+    /// The connection's id (StateStore key), so `$cid` can map it to its number.
+    pub server_id: String,
     pub channels: Vec<ChannelView>,
     /// (lowercase nick, full `nick!user@host`) pairs for `$address`/`$ial`.
     pub ial: Vec<(String, String)>,
@@ -306,6 +310,7 @@ impl SessionState {
     pub fn snapshot(&self) -> StateSnapshot {
         StateSnapshot {
             nick: self.nick.clone(),
+            server_id: self.server_id.clone(),
             channels: self
                 .channels
                 .iter()

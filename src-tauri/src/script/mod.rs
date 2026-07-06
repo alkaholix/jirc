@@ -45,6 +45,8 @@ struct Inner {
     input: std::sync::Arc<dyn ScriptInput>,
     /// The frontend's currently-focused window/buffer name, for `$active`.
     active: String,
+    /// Numeric connection-id registry for `$cid`/`$scon`/`$activecid`.
+    conns: ConnReg,
 }
 
 impl Inner {
@@ -59,7 +61,45 @@ impl Inner {
             sockets: std::sync::Arc::new(NoSockets),
             input: std::sync::Arc::new(NoInput),
             active: String::new(),
+            conns: ConnReg::default(),
         }
+    }
+}
+
+/// Assigns each connection a small, stable number (`$cid`) in connect order and
+/// tracks which one owns the active window (`$activecid`).
+#[derive(Default)]
+struct ConnReg {
+    next: u32,
+    /// `(cid, server_id)` in ascending cid order.
+    entries: Vec<(u32, String)>,
+    /// The active window's server id.
+    active: String,
+}
+
+impl ConnReg {
+    /// Assigns a cid for a server id (idempotent — a reconnect keeps its number).
+    fn assign(&mut self, server_id: &str) -> u32 {
+        if let Some((c, _)) = self.entries.iter().find(|(_, id)| id == server_id) {
+            return *c;
+        }
+        self.next += 1;
+        self.entries.push((self.next, server_id.to_string()));
+        self.next
+    }
+
+    fn forget(&mut self, server_id: &str) {
+        self.entries.retain(|(_, id)| id != server_id);
+    }
+
+    fn view(&self) -> crate::script::eval::ConnsView {
+        let active_cid = self
+            .entries
+            .iter()
+            .find(|(_, id)| *id == self.active)
+            .map(|(c, _)| *c)
+            .unwrap_or(0);
+        crate::script::eval::ConnsView { entries: self.entries.clone(), active_cid }
     }
 }
 
@@ -95,6 +135,21 @@ impl ScriptEngine {
     /// Records the frontend's currently-focused window/buffer name (for `$active`).
     pub fn set_active(&self, name: &str) {
         self.inner.lock().unwrap().active = name.to_string();
+    }
+
+    /// Assigns (idempotently) the numeric `$cid` for a connection; returns it.
+    pub fn assign_cid(&self, server_id: &str) -> u32 {
+        self.inner.lock().unwrap().conns.assign(server_id)
+    }
+
+    /// Drops a connection's `$cid` entry (on disconnect).
+    pub fn forget_cid(&self, server_id: &str) {
+        self.inner.lock().unwrap().conns.forget(server_id);
+    }
+
+    /// Records which connection owns the active window (for `$activecid`).
+    pub fn set_active_conn(&self, server_id: &str) {
+        self.inner.lock().unwrap().conns.active = server_id.to_string();
     }
 
     /// Compiles the combined source of all loaded script files.
@@ -153,6 +208,7 @@ impl ScriptEngine {
             data_dir: ctx.data_dir.clone(),
             state: ctx.state.clone(),
             active: g.active.clone(),
+            conns: g.conns.view(),
             sockets: g.sockets.clone(),
             input: g.input.clone(),
             caller: "menu",
@@ -201,6 +257,7 @@ impl ScriptEngine {
             data_dir: ctx.data_dir.clone(),
             state: ctx.state.clone(),
             active: g.active.clone(),
+            conns: g.conns.view(),
             sockets: g.sockets.clone(),
             input: g.input.clone(),
             caller: "command",
@@ -269,6 +326,7 @@ impl ScriptEngine {
             data_dir: ctx.data_dir.clone(),
             state: ctx.state.clone(),
             active: g.active.clone(),
+            conns: g.conns.view(),
             sockets: g.sockets.clone(),
             input: g.input.clone(),
             caller: "command",
@@ -331,6 +389,7 @@ impl ScriptEngine {
                 data_dir: ctx.data_dir.clone(),
                 state: ctx.state.clone(),
             active: g.active.clone(),
+            conns: g.conns.view(),
                 sockets: g.sockets.clone(),
             input: g.input.clone(),
                 caller: "event",
@@ -1193,11 +1252,12 @@ pub fn script_sockets(socks: State<'_, socket::SocketManager>) -> Vec<String> {
     socks.names()
 }
 
-/// Records the currently-focused window/buffer name so scripts can read `$active`.
-/// The frontend calls this whenever the active buffer changes.
+/// Records the currently-focused window (`$active`) and its connection
+/// (`$activecid`). The frontend calls this whenever the active buffer changes.
 #[tauri::command]
-pub fn script_set_active(engine: State<'_, ScriptEngine>, name: String) {
+pub fn script_set_active(engine: State<'_, ScriptEngine>, name: String, server_id: String) {
     engine.set_active(&name);
+    engine.set_active_conn(&server_id);
 }
 
 /// Runs a typed command line through the engine (built-in script commands like
@@ -2308,6 +2368,41 @@ mod tests {
                 Action::Send("PRIVMSG #c :command/identifier".into()),
                 Action::Send("PRIVMSG #c :$false/$true".into()),
             ]
+        );
+    }
+
+    #[test]
+    fn numeric_connection_ids() {
+        let engine = ScriptEngine::new();
+        assert_eq!((engine.assign_cid("s1"), engine.assign_cid("s2")), (1, 2));
+        assert_eq!(engine.assign_cid("s1"), 1); // idempotent — a reconnect keeps its number
+        engine.set_active_conn("s2");
+
+        // $scon(0) = count, $scon(N) = Nth cid, $activecid = the active connection.
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", "/msg #c n=$scon(0) first=$scon(1) act=$activecid", &[]),
+            vec![Action::Send("PRIVMSG #c :n=2 first=1 act=2".into())]
+        );
+
+        // $cid is the *run's own* connection, read from the state snapshot.
+        let snap = crate::irc::state::StateSnapshot { server_id: "s2".into(), ..Default::default() };
+        let ctx2 = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(snap),
+        };
+        assert_eq!(
+            engine.run_command(&ctx2, "#c", "/msg #c cid=$cid", &[]),
+            vec![Action::Send("PRIVMSG #c :cid=2".into())]
+        );
+
+        // Forgetting a connection drops it from $scon.
+        engine.forget_cid("s1");
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", "/msg #c n=$scon(0)", &[]),
+            vec![Action::Send("PRIVMSG #c :n=1".into())]
         );
     }
 

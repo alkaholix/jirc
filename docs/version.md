@@ -13,6 +13,25 @@ three places that carry it:
 
 Newest first.
 
+## 26.7.10
+
+**Numeric connection ids** — for scripting across several servers at once (IRC,
+IRCv3, IRCX, IRCwX). Each connection gets a small, stable number in connect
+order (kept across a reconnect), and scripts can enumerate and target them.
+
+### Added (mSL identifiers)
+- **`$cid`** — the current run's connection number (from the state snapshot's
+  server id).
+- **`$scon(0)`** — how many connections are open; **`$scon(N)`** — the Nth
+  connection's `$cid`.
+- **`$activecid`** — the `$cid` of the connection that owns the focused window
+  (reported by the frontend along with `$active`).
+
+A new `ConnReg` on the engine assigns/forgets cids as connections open and
+close; the current server id now rides along in the state snapshot. Still to
+come (Phase 2): `$scid`/`$wid` and the `/scid`/`/scon` cross-connection command
+context.
+
 ## 26.7.9
 
 **`$v1` / `$v2`** — the operands of the most recent comparison, and with them a

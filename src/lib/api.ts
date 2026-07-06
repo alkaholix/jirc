@@ -153,8 +153,9 @@ export const api = {
     text: string
   ) => invoke<boolean>("script_run_input", { serverId, target, myNick, network, text }),
   scriptSockets: () => invoke<string[]>("script_sockets"),
-  /** Tell the engine which window is focused, so scripts can read `$active`. */
-  scriptSetActive: (name: string) => invoke("script_set_active", { name }),
+  /** Tell the engine which window/connection is focused ($active/$activecid). */
+  scriptSetActive: (name: string, serverId: string) =>
+    invoke("script_set_active", { name, serverId }),
   openHelp: () => invoke<void>("open_help"),
   openUrl: (url: string) => invoke<void>("open_url", { url }),
   exitApp: () => invoke<void>("exit_app"),

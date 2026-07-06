@@ -63,6 +63,25 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         // `$iif`; the classic `$iif(getvalue, $v1, default)` idiom reads $v1 here.
         "v1" => rt.vars.get(super::eval::V1_KEY).cloned().unwrap_or_default(),
         "v2" => rt.vars.get(super::eval::V2_KEY).cloned().unwrap_or_default(),
+        // Numeric connection ids. $cid = this run's connection; $activecid = the
+        // connection owning the focused window; both $null when unknown.
+        "cid" => match rt.conns.cid_of(&rt.state.server_id) {
+            0 => String::new(),
+            c => c.to_string(),
+        },
+        "activecid" => match rt.conns.active_cid {
+            0 => String::new(),
+            c => c.to_string(),
+        },
+        // $scon(0) = number of connections; $scon(N) = the Nth connection's cid.
+        "scon" => {
+            let n: usize = a(0).parse().unwrap_or(0);
+            if n == 0 {
+                rt.conns.entries.len().to_string()
+            } else {
+                rt.conns.entries.get(n - 1).map(|(c, _)| c.to_string()).unwrap_or_default()
+            }
+        }
         "onchan" => {
             // $onchan(#chan) -> are you in that channel?
             if rt.state.channels.iter().any(|c| c.name.eq_ignore_ascii_case(&a(0))) {
@@ -2326,6 +2345,7 @@ mod tests {
             data_dir: std::env::temp_dir(),
             state: std::sync::Arc::new(Default::default()),
             active: String::new(),
+            conns: Default::default(),
             sockets: std::sync::Arc::new(crate::script::eval::NoSockets),
             input: std::sync::Arc::new(crate::script::eval::NoInput),
             caller: "command",
@@ -2544,6 +2564,7 @@ mod tests {
             data_dir: dir.clone(),
             state: std::sync::Arc::new(Default::default()),
             active: String::new(),
+            conns: Default::default(),
             sockets: std::sync::Arc::new(crate::script::eval::NoSockets),
             input: std::sync::Arc::new(crate::script::eval::NoInput),
             caller: "command",
@@ -2629,6 +2650,7 @@ mod tests {
             data_dir: std::env::temp_dir(),
             state: std::sync::Arc::new(Default::default()),
             active: String::new(),
+            conns: Default::default(),
             sockets: std::sync::Arc::new(crate::script::eval::NoSockets),
             input: std::sync::Arc::new(crate::script::eval::NoInput),
             caller: "command",

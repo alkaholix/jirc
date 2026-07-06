@@ -282,6 +282,7 @@ async fn run_once(
 
     let mut state = SessionState {
         nick: profile.nick.clone(),
+        server_id: server_id.to_string(),
         server_port: profile.port,
         tls: profile.tls,
         alt_nick: profile.alt_nick.clone().unwrap_or_default(),
@@ -289,6 +290,11 @@ async fn run_once(
         realname: profile.realname.clone().unwrap_or_default(),
         ..Default::default()
     };
+    // Ensure this connection has a stable numeric id ($cid); idempotent across
+    // the supervise reconnect loop, so the number survives a reconnect.
+    if let Some(engine) = app.try_state::<crate::script::ScriptEngine>() {
+        engine.assign_cid(server_id);
+    }
     let mut names_accum: HashMap<String, Vec<String>> = HashMap::new();
     let mut whois_accum: HashMap<String, Vec<String>> = HashMap::new();
     let mut auth = AuthState::default();

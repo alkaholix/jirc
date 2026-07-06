@@ -55,6 +55,10 @@ impl ConnectionManager {
             if let Some(mgr) = app_run.try_state::<ConnectionManager>() {
                 mgr.forget(&id_cleanup);
             }
+            // Release its `$cid` too, so `$scon` stops listing a dead connection.
+            if let Some(engine) = app_run.try_state::<crate::script::ScriptEngine>() {
+                engine.forget_cid(&id_cleanup);
+            }
         });
 
         self.conns

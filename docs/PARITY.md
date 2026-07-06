@@ -46,7 +46,7 @@ out of scope.
 - [x] `$abs`
 - [x] `$acos`
 - [x] `$active` *(focused window name, reported by the UI on buffer switch; status = "Status Window")*
-- [ ] `$activecid` *(no numeric connection-id model in jIRC)*
+- [x] `$activecid` *(cid of the connection owning the focused window)*
 - [ ] `$activewid` *(no numeric window-id model in jIRC)*
 - [x] `$address`
 - [x] `$addtok`
@@ -92,7 +92,7 @@ out of scope.
 - [x] `$chantypes`
 - [ ] `$chat`
 - [x] `$chr`
-- [ ] `$cid`
+- [x] `$cid` *(this connection's number; assigned in connect order, stable across reconnect)*
 - [ ] `$clevel`
 - [ ] `$click`
 - [ ] `$cmdbox`
@@ -370,8 +370,8 @@ out of scope.
 - [x] `$right`
 - [x] `$round`
 - [ ] `$samepath`
-- [ ] `$scid`
-- [ ] `$scon`
+- [ ] `$scid` *(cross-connection command context — Phase 2, with `/scid`/`/scon`)*
+- [x] `$scon` *(`$scon(0)` = connection count, `$scon(N)` = the Nth connection's cid)*
 - [ ] `$script`
 - [x] `$scriptdir`
 - [ ] `$scriptline`
