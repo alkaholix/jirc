@@ -43,6 +43,8 @@ struct Inner {
     windows: window::WindowStore,
     sockets: std::sync::Arc<dyn ScriptSockets>,
     input: std::sync::Arc<dyn ScriptInput>,
+    /// The frontend's currently-focused window/buffer name, for `$active`.
+    active: String,
 }
 
 impl Inner {
@@ -56,6 +58,7 @@ impl Inner {
             windows: window::WindowStore::default(),
             sockets: std::sync::Arc::new(NoSockets),
             input: std::sync::Arc::new(NoInput),
+            active: String::new(),
         }
     }
 }
@@ -87,6 +90,11 @@ impl ScriptEngine {
     /// Installs the (production) `$input` prompt backend; called once at startup.
     pub fn set_input(&self, input: std::sync::Arc<dyn ScriptInput>) {
         self.inner.lock().unwrap().input = input;
+    }
+
+    /// Records the frontend's currently-focused window/buffer name (for `$active`).
+    pub fn set_active(&self, name: &str) {
+        self.inner.lock().unwrap().active = name.to_string();
     }
 
     /// Compiles the combined source of all loaded script files.
@@ -144,6 +152,7 @@ impl ScriptEngine {
             goto: None,
             data_dir: ctx.data_dir.clone(),
             state: ctx.state.clone(),
+            active: g.active.clone(),
             sockets: g.sockets.clone(),
             input: g.input.clone(),
             caller: "menu",
@@ -191,6 +200,7 @@ impl ScriptEngine {
             goto: None,
             data_dir: ctx.data_dir.clone(),
             state: ctx.state.clone(),
+            active: g.active.clone(),
             sockets: g.sockets.clone(),
             input: g.input.clone(),
             caller: "command",
@@ -258,6 +268,7 @@ impl ScriptEngine {
             goto: None,
             data_dir: ctx.data_dir.clone(),
             state: ctx.state.clone(),
+            active: g.active.clone(),
             sockets: g.sockets.clone(),
             input: g.input.clone(),
             caller: "command",
@@ -319,6 +330,7 @@ impl ScriptEngine {
                 goto: None,
                 data_dir: ctx.data_dir.clone(),
                 state: ctx.state.clone(),
+            active: g.active.clone(),
                 sockets: g.sockets.clone(),
             input: g.input.clone(),
                 caller: "event",
@@ -1179,6 +1191,13 @@ pub fn script_run_dialog(
 #[tauri::command]
 pub fn script_sockets(socks: State<'_, socket::SocketManager>) -> Vec<String> {
     socks.names()
+}
+
+/// Records the currently-focused window/buffer name so scripts can read `$active`.
+/// The frontend calls this whenever the active buffer changes.
+#[tauri::command]
+pub fn script_set_active(engine: State<'_, ScriptEngine>, name: String) {
+    engine.set_active(&name);
 }
 
 /// Runs a typed command line through the engine (built-in script commands like
@@ -2289,6 +2308,38 @@ mod tests {
                 Action::Send("PRIVMSG #c :command/identifier".into()),
                 Action::Send("PRIVMSG #c :$false/$true".into()),
             ]
+        );
+    }
+
+    #[test]
+    fn active_window_identifier() {
+        // $active reflects the focused window the UI last reported.
+        let engine = ScriptEngine::new();
+        engine.set_active("#focused");
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", "/msg #c here=$active", &[]),
+            vec![Action::Send("PRIVMSG #c :here=#focused".into())]
+        );
+        // Also visible inside an event handler, not just typed commands.
+        engine.load("on *:TEXT:*:#:{ /msg $chan active=$active }");
+        engine.set_active("#lobby");
+        let ev = UiEvent::Message {
+            server_id: "s".into(),
+            kind: crate::irc::event::MessageKind::Privmsg,
+            from: Some("bob".into()),
+            target: "#c".into(),
+            text: "hi".into(),
+            time: None,
+        };
+        assert_eq!(
+            drive_event(&engine, &ctx(), &ev),
+            vec![Action::Send("PRIVMSG #c :active=#lobby".into())]
+        );
+        // $null (empty) until the UI reports one.
+        let fresh = ScriptEngine::new();
+        assert_eq!(
+            fresh.run_command(&ctx(), "#c", "/msg #c here=$active", &[]),
+            vec![Action::Send("PRIVMSG #c :here=".into())]
         );
     }
 

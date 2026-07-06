@@ -183,6 +183,9 @@ pub struct Runtime<'a> {
     pub my_nick: &'a str,
     pub network: &'a str,
     pub server: &'a str,
+    /// The name of the frontend's currently-focused window/buffer, for `$active`
+    /// (empty when unknown — mIRC's `$active` may be `$null` too).
+    pub active: String,
     pub vars: &'a mut HashMap<String, String>,
     pub hashes: &'a mut HashMap<String, HashMap<String, String>>,
     pub event: EventVars,

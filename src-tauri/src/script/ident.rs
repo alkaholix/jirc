@@ -54,6 +54,10 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 }
             }
         }
+        // $active -> the name of the frontend's currently-focused window (the
+        // channel/query/status buffer). Empty ($null) if none reported yet, as in
+        // mIRC. Set by the UI via `script_set_active` on every buffer switch.
+        "active" => rt.active.clone(),
         "onchan" => {
             // $onchan(#chan) -> are you in that channel?
             if rt.state.channels.iter().any(|c| c.name.eq_ignore_ascii_case(&a(0))) {
@@ -564,6 +568,8 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         }
         // $os — OS family. mIRC returns a Windows version; we are cross-platform.
         "os" => std::env::consts::OS.to_string(),
+        // $version -> the jIRC client version (its own CalVer, not an mIRC number).
+        "version" => env!("CARGO_PKG_VERSION").to_string(),
         // $mircexe — full path to the jIRC executable.
         "mircexe" => std::env::current_exe()
             .map(|p| p.to_string_lossy().into_owned())
@@ -2314,6 +2320,7 @@ mod tests {
             goto: None,
             data_dir: std::env::temp_dir(),
             state: std::sync::Arc::new(Default::default()),
+            active: String::new(),
             sockets: std::sync::Arc::new(crate::script::eval::NoSockets),
             input: std::sync::Arc::new(crate::script::eval::NoInput),
             caller: "command",
@@ -2458,6 +2465,7 @@ mod tests {
         assert_eq!(id("decode", &["a%20b%26c", "x"]), "a b&c");
         // $mircexe non-empty; $tempfn contains a "tmp" component
         assert!(!id("mircexe", &[]).is_empty());
+        assert!(id("version", &[]).contains('.')); // jIRC CalVer, e.g. 26.7.x
         assert!(id("tempfn", &[]).contains("tmp"));
         // $rands in range; $isalias false with no aliases loaded
         let rv: i64 = id("rands", &["1", "3"]).parse().unwrap();
@@ -2530,6 +2538,7 @@ mod tests {
             goto: None,
             data_dir: dir.clone(),
             state: std::sync::Arc::new(Default::default()),
+            active: String::new(),
             sockets: std::sync::Arc::new(crate::script::eval::NoSockets),
             input: std::sync::Arc::new(crate::script::eval::NoInput),
             caller: "command",
@@ -2614,6 +2623,7 @@ mod tests {
             goto: None,
             data_dir: std::env::temp_dir(),
             state: std::sync::Arc::new(Default::default()),
+            active: String::new(),
             sockets: std::sync::Arc::new(crate::script::eval::NoSockets),
             input: std::sync::Arc::new(crate::script::eval::NoInput),
             caller: "command",

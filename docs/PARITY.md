@@ -45,9 +45,9 @@ out of scope.
 - [ ] `$abook`
 - [x] `$abs`
 - [x] `$acos`
-- [ ] `$active`
-- [ ] `$activecid`
-- [ ] `$activewid`
+- [x] `$active` *(focused window name, reported by the UI on buffer switch; status = "Status Window")*
+- [ ] `$activecid` *(no numeric connection-id model in jIRC)*
+- [ ] `$activewid` *(no numeric window-id model in jIRC)*
 - [x] `$address`
 - [x] `$addtok`
 - [ ] `$agent`
@@ -447,13 +447,13 @@ out of scope.
 - [x] `$usermode`
 - [x] `$utfdecode`
 - [x] `$utfencode`
-- [ ] `$v1`
+- [ ] `$v1` *(needs lazy `$iif`/comparison eval — args are pre-expanded today, so `$iif(x,$v1,y)` expands `$v1` before the condition runs; high value, ~30 uses in i7.mrc)*
 - [ ] `$v2`
 - [ ] `$var`
 - [ ] `$vcmd`
 - [ ] `$vcmdstat`
 - [ ] `$vcmdver`
-- [ ] `$version`
+- [x] `$version` *(jIRC's own CalVer, not an mIRC version number)*
 - [x] `$vnick`
 - [ ] `$vol`
 - [ ] `$wid`

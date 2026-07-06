@@ -13,6 +13,23 @@ three places that carry it:
 
 Newest first.
 
+## 26.7.8
+
+More mSL identifiers, working down the mIRC reference: the focused-window
+identifier that state-aware scripts lean on, plus the client version.
+
+### Added (mSL identifiers)
+- **`$active`** — the name of the window you currently have focused (mIRC's
+  status window reads as `Status Window`). The frontend reports the focused
+  buffer to the engine on every switch, so `$active` is correct in typed
+  commands *and* inside event handlers, not just where a command was run.
+- **`$version`** — the jIRC client version (its own CalVer, e.g. `26.7.8` — not
+  an mIRC version number).
+
+Note: `$v1`/`$v2` (the operands of the last comparison — heavily used by real
+scripts) are still pending; they need lazy `$iif`/comparison evaluation, since
+identifier arguments are currently expanded before the condition runs.
+
 ## 26.7.7
 
 mSL engine fidelity: the popup / nicklist identifiers that real mIRC scripts
