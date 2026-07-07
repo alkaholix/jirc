@@ -642,6 +642,10 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "os" => std::env::consts::OS.to_string(),
         // $version -> the jIRC client version (its own CalVer, not an mIRC number).
         "version" => env!("CARGO_PKG_VERSION").to_string(),
+        // Safe script string-length limits (mIRC's current values).
+        "maxlenl" => "10240".to_string(),
+        "maxlenm" => "2048".to_string(),
+        "maxlens" => "512".to_string(),
         // $mircexe — full path to the jIRC executable.
         "mircexe" => std::env::current_exe()
             .map(|p| p.to_string_lossy().into_owned())
@@ -2671,6 +2675,9 @@ mod tests {
         assert_eq!(id("mid", &["abcdefghij", "-6", "2"]), "ef"); // 6th from end, 2 chars
         assert_eq!(id("mid", &["abcdefghij", "-6"]), "efghij"); // 6th from end, to end
         assert_eq!(id("mid", &["abcdefghij", "3", "-2"]), "cdefgh"); // from 3, drop last 2
+        assert_eq!(id("maxlenl", &[]), "10240");
+        assert_eq!(id("maxlenm", &[]), "2048");
+        assert_eq!(id("maxlens", &[]), "512");
         assert_eq!(id("count", &["banana", "a", "n"]), "5");
         assert_eq!(id("replace", &["abcabc", "a", "X", "c", "Y"]), "XbYXbY");
         assert_eq!(id("remove", &["abcabc", "a", "c"]), "bb");

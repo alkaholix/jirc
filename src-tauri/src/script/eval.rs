@@ -2020,10 +2020,15 @@ impl<'a> Runtime<'a> {
             }
             return val;
         }
-        // Identifier name.
-        let name = read_name(chars, i);
+        // Identifier name. An empty name immediately followed by `(` is the
+        // `$(text[, N])` short form of `$eval` (mIRC's delayed-evaluation form).
+        let mut name = read_name(chars, i);
         if name.is_empty() {
-            return "$".to_string();
+            if chars.get(*i) == Some(&'(') {
+                name = "eval".to_string();
+            } else {
+                return "$".to_string();
+            }
         }
         // $regsubex evaluates its subtext once per match, so its args must NOT be
         // pre-expanded here — hand the raw args to a dedicated handler.

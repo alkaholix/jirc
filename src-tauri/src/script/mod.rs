@@ -2857,6 +2857,24 @@ mod tests {
     }
 
     #[test]
+    fn eval_short_form() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias t {\n\
+               set %y hello\n\
+               set %x % $+ y\n\
+               /msg #c $(%x,2) and $(%x,1)\n\
+             }",
+        );
+        // $(text,N) == $eval(text,N): $(%x,2) evaluates %x's value ("%y") once more
+        // -> "hello"; $(%x,1) leaves it "%y".
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :hello and %y".into())]
+        );
+    }
+
+    #[test]
     fn dynamic_variable_brackets() {
         let engine = ScriptEngine::new();
         engine.load(

@@ -12,6 +12,13 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🔧 26.7.27 — `$(...)` and length limits
+
+- **`$(...)`** — the short form of `$eval`, so `$(%x, 2)` re-evaluates a value (handy for dynamic lookups).
+- **`$maxlenl` / `$maxlenm` / `$maxlens`** — the safe text-length limits (10240 / 2048 / 512) for scripts that split long messages.
+
+---
+
 ## 🧮 26.7.26 — Dynamic variables
 
 - The classic **`%color. [ $+ [ $nick ] ]`** pattern works now — build a variable name on the fly and read it. Great for per-user or per-channel data (`%greet. [ $+ [ $nick ] ]`) and array-style loops (`%item. [ $+ [ %i ] ]`).
