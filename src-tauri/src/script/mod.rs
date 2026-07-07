@@ -2857,6 +2857,23 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_variable_brackets() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias t {\n\
+               set %color.John blue\n\
+               var %who John\n\
+               /msg #c %color. [ $+ [ %who ] ] and %color. [ $+ [ $1 ] ]\n\
+             }",
+        );
+        // `%color. [ $+ [ x ] ]` reads the variable %color.<value of x>.
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", "John"),
+            vec![Action::Send("PRIVMSG #c :blue and blue".into())]
+        );
+    }
+
+    #[test]
     fn v1_v2_and_lazy_iif() {
         let engine = ScriptEngine::new();
         engine.load(

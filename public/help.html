@@ -341,6 +341,15 @@ for the words the user typed after it.</p>
   <span class="k">/while</span> (<span class="v">%i</span> &lt; 3) { <span class="k">/inc</span> <span class="v">%i</span> | <span class="k">/echo</span> tick <span class="v">%i</span> }
 }
 </code></pre>
+<h3>Dynamic variables</h3>
+<p>You can build a variable name on the fly with
+<code><span class="v">%name.</span> [ $+ [ &lt;value&gt; ] ]</code> — the part in brackets is
+worked out first and stuck onto the name. Handy for per-person data or
+array-style lists:</p>
+<pre><code><span class="k">on</span> *:TEXT:!setcolor &amp;:#:{ <span class="k">/set</span> <span class="v">%color.</span> $+ <span class="i">$nick</span> <span class="i">$2</span> }
+<span class="k">on</span> *:TEXT:!mycolor:#:{ <span class="k">/msg</span> <span class="i">$chan</span> <span class="i">$nick</span> $+ 's colour is <span class="v">%color.</span> [ $+ [ <span class="i">$nick</span> ] ] }
+</code></pre>
+<p>The <code>$eval($+(%color.,<span class="i">$nick</span>),2)</code> form does the same thing if you prefer it.</p>
 
 <h2 id="customid">Custom identifiers (return a value)</h2>
 <p>Any alias can be used as an <code>$identifier</code> if it returns a value with

@@ -1898,12 +1898,42 @@ impl<'a> Runtime<'a> {
         let mut join_next = false;
         // Split on spaces, but keep `$ident(a b c)` whole (spaces inside the
         // parentheses are part of the identifier's arguments).
-        for tok in split_top_level(text) {
+        let tokens = split_top_level(text);
+        let mut i = 0;
+        while i < tokens.len() {
+            let tok = &tokens[i];
+            // Dynamic-variable evaluation brackets: `PREV [ $+ [ INNER ] ]` yields
+            // the value of the identifier/variable named by the *literal* PREV token
+            // concatenated with the *evaluated* INNER — e.g. `%color. [ $+ [ $nick ] ]`
+            // reads `%color.<nick>`. Only this specific shape is treated as an eval
+            // bracket; every other `[ ]` stays literal (matching jIRC's history and
+            // keeping the common `[ $+ x $+ ]` display idiom working).
+            if tok == "["
+                && !join_next
+                && i > 0
+                && !tokens[i - 1].is_empty()
+                && (i < 2 || tokens[i - 2] != "$+")
+                && tokens.get(i + 1).map(String::as_str) == Some("$+")
+                && tokens.get(i + 2).map(String::as_str) == Some("[")
+            {
+                if let Some((lo, hi, outer)) = dynvar_span(&tokens, i) {
+                    let inner_val = self.expand(&tokens[lo..hi].join(" "));
+                    let prev_literal = tokens[i - 1].clone();
+                    // PREV was already evaluated into `parts`; drop it and rebuild
+                    // from its literal name plus the inner value.
+                    parts.pop();
+                    let val = self.eval_token(&format!("{prev_literal}{inner_val}"));
+                    parts.push(val);
+                    i = outer + 1;
+                    continue;
+                }
+            }
             if tok == "$+" {
                 join_next = true;
+                i += 1;
                 continue;
             }
-            let v = self.eval_token(&tok);
+            let v = self.eval_token(tok);
             if join_next {
                 if let Some(last) = parts.last_mut() {
                     last.push_str(&v);
@@ -1914,6 +1944,7 @@ impl<'a> Runtime<'a> {
             } else {
                 parts.push(v);
             }
+            i += 1;
         }
         parts.join(" ")
     }
@@ -2269,6 +2300,32 @@ pub fn sandbox_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
 
 /// Splits text on spaces at parenthesis depth 0, so `$ident(a b c)` (whose
 /// arguments may contain spaces) stays a single token for expansion.
+/// For a dynamic-variable bracket at `outer` (`[` followed by `$+` then `[`),
+/// returns `(inner_content_lo, inner_content_hi, outer_close)` where the inner
+/// `[ … ]` content is `tokens[lo..hi]` and `outer_close` is the closing `]`.
+/// The inner close is matched with a depth counter (so a nested bracket inside
+/// the inner group is handled), and the very next token must be the outer `]`.
+fn dynvar_span(tokens: &[String], outer: usize) -> Option<(usize, usize, usize)> {
+    let inner_open = outer + 2;
+    let mut depth = 0i32;
+    let mut j = inner_open;
+    while j < tokens.len() {
+        match tokens[j].as_str() {
+            "[" => depth += 1,
+            "]" => {
+                depth -= 1;
+                if depth == 0 {
+                    return (tokens.get(j + 1).map(String::as_str) == Some("]"))
+                        .then_some((inner_open + 1, j, j + 1));
+                }
+            }
+            _ => {}
+        }
+        j += 1;
+    }
+    None
+}
+
 fn split_top_level(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();

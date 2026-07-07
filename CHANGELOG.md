@@ -12,6 +12,13 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🧮 26.7.26 — Dynamic variables
+
+- The classic **`%color. [ $+ [ $nick ] ]`** pattern works now — build a variable name on the fly and read it. Great for per-user or per-channel data (`%greet. [ $+ [ $nick ] ]`) and array-style loops (`%item. [ $+ [ %i ] ]`).
+- Done carefully so nothing else changes: only this exact shape is treated specially; every other use of `[ ]` behaves exactly as it did before.
+
+---
+
 ## 🎚️ 26.7.25 — `$show` and `$result`
 
 - **`$show`** lets an alias tell whether it was run normally or silently (with a `.` prefix) — so it can be chatty or quiet to match.
