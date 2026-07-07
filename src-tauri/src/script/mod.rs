@@ -2875,6 +2875,24 @@ mod tests {
     }
 
     #[test]
+    fn prop_and_unsafe() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias conv {\n\
+               if ($prop == double) return $calc($1 * 2)\n\
+               if ($prop == triple) return $calc($1 * 3)\n\
+               return $1\n\
+             }\n\
+             alias t { /msg #c $conv(5).double $conv(5).triple $conv(5) $unsafe(hi) }",
+        );
+        // $prop is the `.property`; $unsafe is a passthrough.
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :10 15 5 hi".into())]
+        );
+    }
+
+    #[test]
     fn dynamic_variable_brackets() {
         let engine = ScriptEngine::new();
         engine.load(

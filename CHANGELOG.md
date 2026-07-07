@@ -12,6 +12,13 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🏷️ 26.7.28 — `$prop` for custom identifiers
+
+- **`$prop`** lets your own identifiers read the `.property` they were called with — e.g. `$temp(20).celsius` vs `$temp(20).fahrenheit` can now do different things.
+- **`$unsafe`** is accepted (it's a no-op in jIRC, which never double-evaluates).
+
+---
+
 ## 🔧 26.7.27 — `$(...)` and length limits
 
 - **`$(...)`** — the short form of `$eval`, so `$(%x, 2)` re-evaluates a value (handy for dynamic lookups).

@@ -248,6 +248,11 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "show" => bool_str(rt.show),
         // $result -> the value returned by the most recently called alias.
         "result" => rt.vars.get(super::eval::RESULT_KEY).cloned().unwrap_or_default(),
+        // $prop -> the `.property` the current custom identifier was called with.
+        "prop" => rt.vars.get(PROP_KEY).cloned().unwrap_or_default(),
+        // $unsafe(text): mIRC delays one evaluation level to survive double-eval
+        // contexts (timers etc.); jIRC evaluates once, so it's a passthrough.
+        "unsafe" => a(0),
         "comchan" => {
             // $comchan(nick, N) -> Nth channel you share with nick (N=0 → count).
             let who = a(0).to_lowercase();
@@ -1574,15 +1579,24 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 let body = alias.body.clone();
                 // This alias is being used as an identifier — flag it for
                 // $caller/$isid, keep $show true (identifiers aren't silenced),
-                // and record its return for $result.
+                // expose the `.property` as $prop, and record its return for $result.
                 let saved = rt.caller;
                 let saved_show = rt.show;
+                let saved_prop = rt.vars.insert(PROP_KEY.to_string(), prop.to_string());
                 rt.caller = "identifier";
                 rt.show = true;
                 let result = rt.call_alias(&body, args.to_vec());
                 rt.vars.insert(super::eval::RESULT_KEY.to_string(), result.clone());
                 rt.caller = saved;
                 rt.show = saved_show;
+                match saved_prop {
+                    Some(v) => {
+                        rt.vars.insert(PROP_KEY.to_string(), v);
+                    }
+                    None => {
+                        rt.vars.remove(PROP_KEY);
+                    }
+                }
                 return result;
             }
             // Unknown identifier: render literally so it is visible.
@@ -2237,6 +2251,9 @@ fn num2(a: &str, b: &str, f: fn(f64, f64) -> f64) -> String {
 
 /// Key under which `$read` records the matched line number for `$readn`.
 const READN_KEY: &str = "\u{0}readn";
+
+/// Key holding the `.property` of the custom identifier being evaluated, for `$prop`.
+const PROP_KEY: &str = "\u{0}prop";
 
 /// `$read(file [, ntswrp] [, matchtext] [, N])`. Without switches it returns the
 /// Nth line (1-based) or a random line. The `w`/`s`/`r` switches search from line
