@@ -12,6 +12,13 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## ✂️ 26.7.18 — Sharper `$mid` and `$strip`
+
+- **`$strip(text, c)`** can now remove just the thing you ask for (colour, bold, underline, …) instead of everything.
+- **`$mid`** handles negative positions and lengths like mIRC (count from the end, or drop the last few characters).
+
+---
+
 ## 🧮 26.7.17 — `/var` maths + safer, smarter `$iif`
 
 - **`/var` and `/set` do maths**: `var %a 1 + 2` sets `%a` to `3` (one operation, e.g. `+ - * / % ^`). Things that aren't a clean number-operator-number, or use `-n`, stay as text — just like mIRC. The `=` is now optional too (`var %a 1 + 2`).

@@ -317,14 +317,27 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             take_right(&a(0), n)
         }
         "mid" => {
-            // $mid(text, S, N) -> N chars from position S; N=0 (or absent) = to end.
-            let start: usize = a(1).parse().unwrap_or(1);
-            let count = a(2).parse::<usize>().ok().filter(|&c| c > 0).unwrap_or(usize::MAX);
-            a(0)
-                .chars()
-                .skip(start.saturating_sub(1))
-                .take(count)
-                .collect()
+            // $mid(text, S [, N]). S is 1-based; negative = from the end; 0 = 1.
+            // N absent = to the end; N=0 = the numeric length of the remainder;
+            // N<0 = the remainder except the last |N| chars (all mIRC-exact).
+            let text: Vec<char> = a(0).chars().collect();
+            let len = text.len() as i64;
+            let s: i64 = a(1).trim().parse().unwrap_or(1);
+            let start = (if s < 0 { (len + s).max(0) } else { s.max(1) - 1 } as usize).min(text.len());
+            let n_arg = a(2);
+            if n_arg.is_empty() {
+                text[start..].iter().collect()
+            } else {
+                let n: i64 = n_arg.trim().parse().unwrap_or(0);
+                if n == 0 {
+                    (text.len() - start).to_string()
+                } else if n < 0 {
+                    let end = ((len + n).max(start as i64) as usize).min(text.len());
+                    text[start..end].iter().collect()
+                } else {
+                    text[start..].iter().take(n as usize).collect()
+                }
+            }
         }
         "chr" => a(0)
             .parse::<u32>()
@@ -1221,7 +1234,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 comma_format(n as i64)
             }
         }
-        "strip" => strip_codes(&a(0)),
+        "strip" => strip_codes_opts(&a(0), &a(1)),
         // $notags(line) -> the line with a leading IRCv3 message-tag block
         // (`@key=val;... `) removed. Tags only ever prefix a line, so drop up to
         // the first space; a tags-only string becomes empty.
@@ -1736,14 +1749,30 @@ fn parse_range(spec: &str, len: usize) -> (usize, usize) {
 }
 
 /// Removes mIRC formatting control codes (bold, colour, underline, …).
-fn strip_codes(s: &str) -> String {
+/// `$strip(text[, options])` — remove control codes. Options select which:
+/// b=bold u=underline r=reverse c=colour i=italics e=strikethrough. With no
+/// options everything is stripped (reset/monospace too); with options, only the
+/// chosen codes (reset/monospace left in place).
+fn strip_codes_opts(s: &str, options: &str) -> String {
+    let opts = options.to_lowercase();
+    let all = opts.trim().is_empty();
+    let has = |c: char| all || opts.contains(c);
+    let (bold, uline, rev, color, ital, strike) =
+        (has('b'), has('u'), has('r'), has('c'), has('i'), has('e'));
     let chars: Vec<char> = s.chars().collect();
     let mut out = String::new();
     let mut i = 0;
     while i < chars.len() {
         match chars[i] {
-            '\u{2}' | '\u{f}' | '\u{16}' | '\u{1d}' | '\u{1e}' | '\u{1f}' | '\u{11}' => i += 1,
-            '\u{3}' => {
+            '\u{2}' if bold => i += 1,
+            '\u{1f}' if uline => i += 1,
+            '\u{16}' if rev => i += 1,
+            '\u{1d}' if ital => i += 1,
+            '\u{1e}' if strike => i += 1,
+            // Reset and monospace have no option letter — strip only in the
+            // default "remove everything" mode.
+            '\u{f}' | '\u{11}' if all => i += 1,
+            '\u{3}' if color => {
                 i += 1;
                 let mut d = 0;
                 while d < 2 && matches!(chars.get(i), Some(c) if c.is_ascii_digit()) {
@@ -1759,7 +1788,7 @@ fn strip_codes(s: &str) -> String {
                     }
                 }
             }
-            '\u{4}' => {
+            '\u{4}' if color => {
                 i += 1;
                 let mut d = 0;
                 while d < 6 && matches!(chars.get(i), Some(c) if c.is_ascii_hexdigit()) {
@@ -2400,8 +2429,12 @@ mod tests {
         assert_eq!(id("pos", &["hello", "l", "3"]), "0");
         assert_eq!(id("lastpos", &["hello", "l"]), "4");
         assert_eq!(id("lastpos", &["hello", "l", "2"]), "3");
-        assert_eq!(id("mid", &["hello", "2", "0"]), "ello");
+        // $mid mIRC-exact: N=0 -> length of the remainder; negatives supported.
+        assert_eq!(id("mid", &["hello", "2", "0"]), "4"); // len of "ello"
         assert_eq!(id("mid", &["hello", "2", "3"]), "ell");
+        assert_eq!(id("mid", &["abcdefghij", "-6", "2"]), "ef"); // 6th from end, 2 chars
+        assert_eq!(id("mid", &["abcdefghij", "-6"]), "efghij"); // 6th from end, to end
+        assert_eq!(id("mid", &["abcdefghij", "3", "-2"]), "cdefgh"); // from 3, drop last 2
         assert_eq!(id("count", &["banana", "a", "n"]), "5");
         assert_eq!(id("replace", &["abcabc", "a", "X", "c", "Y"]), "XbYXbY");
         assert_eq!(id("remove", &["abcabc", "a", "c"]), "bb");
@@ -2719,6 +2752,9 @@ mod tests {
         assert_eq!(e("wildtok", &["cat car dog", "ca*", "0", "32"]), "2");
         assert_eq!(e("matchtok", &["cat car dog", "ar", "1", "32"]), "car");
         assert_eq!(e("strip", &["\u{2}bold\u{f} \u{3}4red"]), "bold red");
+        // $strip options: strip only the requested code (colour), keep the rest.
+        assert_eq!(e("strip", &["\u{2}b\u{3}4c", "c"]), "\u{2}bc"); // only colour removed
+        assert_eq!(e("strip", &["\u{2}b\u{3}4c", "b"]), "b\u{3}4c"); // only bold removed
         assert_eq!(e("qt", &["a b"]), "\"a b\"");
         // Regex: $regex sets up captures that $regml reads back.
         assert_eq!(e("regex", &["abc123", "([a-z]+)(\\d+)"]), "1");
