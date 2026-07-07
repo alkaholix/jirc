@@ -32,3 +32,6 @@ test-scripts/
 
 # Local design mockups (throwaway UI previews).
 window-mockups.html
+
+# Local copy of the mIRC help file (fidelity reference; not part of the repo).
+*.chm

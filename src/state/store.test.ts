@@ -353,3 +353,58 @@ describe("IRCX owner protection", () => {
     expect(api.ircxOwnerProtect).toHaveBeenCalledWith(SID, "TestNet", "%#room", "taker");
   });
 });
+
+describe("rejoin on kick / disconnect", () => {
+  const kickSelf = (channel: string) =>
+    useStore.getState().handleEvent({
+      type: "kick",
+      serverId: SID,
+      channel,
+      nick: "me",
+      by: "op",
+      reason: "bye",
+      isSelf: true,
+    });
+
+  it("rejoins channels after a disconnect — even if the windows were closed", () => {
+    useSettings.getState().set("rejoinOnReconnect", true);
+    useSettings.getState().set("keepOpenOnKickQuit", false); // windows close on disconnect
+    const s = useStore.getState();
+    s.handleEvent({ type: "registered", serverId: SID, nick: "me" });
+    s.handleEvent({ type: "join", serverId: SID, channel: "#chan", nick: "me" });
+    vi.mocked(api.join).mockClear();
+
+    s.handleEvent({ type: "disconnected", serverId: SID, reason: "ping timeout" });
+    // The channel window is gone, but the channel was remembered…
+    expect(useStore.getState().buffers[bufferKey(SID, "#chan")]).toBeUndefined();
+    s.handleEvent({ type: "registered", serverId: SID, nick: "me" });
+    expect(api.join).toHaveBeenCalledWith(SID, "#chan");
+  });
+
+  it("does not rejoin after a disconnect when the setting is off", () => {
+    useSettings.getState().set("rejoinOnReconnect", false);
+    useSettings.getState().set("keepOpenOnKickQuit", true);
+    const s = useStore.getState();
+    s.handleEvent({ type: "registered", serverId: SID, nick: "me" });
+    s.handleEvent({ type: "join", serverId: SID, channel: "#chan", nick: "me" });
+    vi.mocked(api.join).mockClear();
+    s.handleEvent({ type: "disconnected", serverId: SID, reason: "x" });
+    s.handleEvent({ type: "registered", serverId: SID, nick: "me" });
+    expect(api.join).not.toHaveBeenCalled();
+  });
+
+  it("rejoins a channel on self-kick only when the setting is on", () => {
+    const s = useStore.getState();
+    s.handleEvent({ type: "registered", serverId: SID, nick: "me" });
+    s.handleEvent({ type: "join", serverId: SID, channel: "#chan", nick: "me" });
+
+    useSettings.getState().set("rejoinOnKick", false);
+    vi.mocked(api.join).mockClear();
+    kickSelf("#chan");
+    expect(api.join).not.toHaveBeenCalled();
+
+    useSettings.getState().set("rejoinOnKick", true);
+    kickSelf("#chan");
+    expect(api.join).toHaveBeenCalledWith(SID, "#chan");
+  });
+});

@@ -299,8 +299,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
           {tab === "behaviour" && (
             <>
-              {toggle("rejoinOnKick", "Rejoin a channel when kicked")}
-              {toggle("rejoinOnReconnect", "Rejoin open channels after auto-reconnect")}
+              {toggle("rejoinOnKick", "Rejoin channels when kicked")}
+              {toggle("rejoinOnReconnect", "Rejoin channels after a disconnect")}
               {toggle("keepOpenOnKickQuit", "Keep channel windows open on kick / disconnect")}
               {toggle("showAway", "Show when users go away / come back")}
               <div className="settings-label">Data folder</div>

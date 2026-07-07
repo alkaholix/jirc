@@ -13,6 +13,23 @@ three places that carry it:
 
 Newest first.
 
+## 26.7.13
+
+Settings → Behaviour: the two channel-rejoin options are now clearly labelled and
+the disconnect one actually works in every configuration.
+
+### Changed
+- Relabelled the toggles to match what they do: **"Rejoin channels when kicked"**
+  and **"Rejoin channels after a disconnect"** (was "…after auto-reconnect", which
+  was hard to find when you were looking for "disconnect").
+
+### Fixed
+- **Rejoin after a disconnect** now remembers the channels you were in when the
+  connection dropped and rejoins them on reconnect — so it works even when
+  "Keep channel windows open on kick / disconnect" is **off** (previously it only
+  rejoined channels whose windows were still open, so it silently did nothing in
+  that config).
+
 ## 26.7.12
 
 Finishes the numeric-id family — the window side, plus the `$scid` identifier.
