@@ -2300,6 +2300,8 @@ mod tests {
         engine.run_command(&rctx, "#c", "/write -c data.txt apple red", &[]);
         engine.run_command(&rctx, "#c", "/write data.txt banana yellow", &[]);
         engine.run_command(&rctx, "#c", "/write data.txt cherry red", &[]);
+        engine.run_command(&rctx, "#c", "/write data.txt yesterday news", &[]);
+        engine.run_command(&rctx, "#c", "/write data.txt yes sir", &[]);
         // w: first line matching a wildcard -> the whole line; $readn = line number.
         engine.load("alias t { /msg #c $read(data.txt, w, *yellow*) @ $readn }");
         assert_eq!(
@@ -2317,6 +2319,12 @@ mod tests {
         assert_eq!(
             engine.run_alias(&rctx, "#c", "t3", ""),
             vec![Action::Send("PRIVMSG #c :found=0".into())]
+        );
+        // s matches a whole token: `yes` skips "yesterday news" and hits "yes sir".
+        engine.load("alias t4 { /msg #c $read(data.txt, s, yes) @ $readn }");
+        assert_eq!(
+            engine.run_alias(&rctx, "#c", "t4", ""),
+            vec![Action::Send("PRIVMSG #c :sir @ 5".into())]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

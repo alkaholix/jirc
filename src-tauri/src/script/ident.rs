@@ -980,14 +980,17 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         }
         "instok" => {
             // $instok(text, token, N, C) -> insert token at the Nth position.
+            // Negative N counts from the end (-1 = before the last element).
             let sep = sep_code(&a(3));
             let mut toks: Vec<String> = if a(0).is_empty() {
                 Vec::new()
             } else {
                 a(0).split(sep).map(String::from).collect()
             };
-            let n = a(2).parse::<usize>().unwrap_or(1).max(1);
-            let idx = (n - 1).min(toks.len());
+            let len = toks.len() as i64;
+            let raw: i64 = a(2).trim().parse().unwrap_or(1);
+            let idx = (if raw < 0 { (len + raw).max(0) } else { raw.max(1) - 1 } as usize)
+                .min(toks.len());
             toks.insert(idx, a(1));
             toks.join(&sep.to_string())
         }
@@ -1133,12 +1136,15 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 .join(&sep.to_string())
         }
         "puttok" => {
-            // $puttok(list, token, N, sepcode) -> replace the Nth token
+            // $puttok(list, token, N, sepcode) -> replace the Nth token.
+            // Negative N counts from the end (-1 = last token).
             let sep = sep_code(&a(3));
-            let n = a(2).parse::<usize>().unwrap_or(0);
             let mut toks: Vec<String> = a(0).split(sep).map(String::from).collect();
-            if n >= 1 && n <= toks.len() {
-                toks[n - 1] = a(1);
+            let len = toks.len() as i64;
+            let raw: i64 = a(2).trim().parse().unwrap_or(0);
+            let n = if raw < 0 { len + raw + 1 } else { raw };
+            if n >= 1 && n <= len {
+                toks[(n - 1) as usize] = a(1);
             }
             toks.join(&sep.to_string())
         }
@@ -2115,8 +2121,12 @@ fn eval_read(rt: &mut Runtime, args: &[String]) -> String {
         }
         if sw.contains('s') {
             let ml = matchtext.to_lowercase();
+            let ml_sp = format!("{ml} ");
             for (i, line) in lines.iter().enumerate().skip(from) {
-                if line.to_lowercase().starts_with(&ml) {
+                let ll = line.to_lowercase();
+                // Whole-token match: the line equals matchtext or begins with
+                // "matchtext " — so `s,yes` matches "yes ..." but not "yesterday".
+                if ll == ml || ll.starts_with(&ml_sp) {
                     rt.vars.insert(READN_KEY.into(), (i + 1).to_string());
                     return line[matchtext.len()..].trim_start_matches(' ').to_string();
                 }
@@ -2519,6 +2529,8 @@ mod tests {
         assert_eq!(id("replace", &["abcabc", "a", "X", "c", "Y"]), "XbYXbY");
         assert_eq!(id("remove", &["abcabc", "a", "c"]), "bb");
         assert_eq!(id("instok", &["a.b.c", "X", "2", "46"]), "a.X.b.c");
+        // negative N: -1 inserts before the last element.
+        assert_eq!(id("instok", &["a.b.c", "X", "-1", "46"]), "a.b.X.c");
         assert_eq!(id("reptok", &["a.b.a.c", "a", "X", "2", "46"]), "a.b.X.c");
         assert_eq!(id("reptok", &["a.b.a", "a", "X", "0", "46"]), "X.b.X");
         // Case-INSENSITIVITY (mIRC default): token/substring ops match across case.
@@ -2825,6 +2837,8 @@ mod tests {
         assert_eq!(e("deltok", &["a b c d", "2-3", "32"]), "a d");
         assert_eq!(e("remtok", &["a b a c", "a", "2", "32"]), "a b c");
         assert_eq!(e("puttok", &["a b c", "X", "2", "32"]), "a X c");
+        // negative N: -1 replaces the last token.
+        assert_eq!(e("puttok", &["a b c d", "X", "-1", "32"]), "a b c X");
         assert_eq!(e("sorttok", &["c a b", "32"]), "a b c");
         assert_eq!(e("sorttok", &["3 1 2", "32", "n"]), "1 2 3");
         assert_eq!(e("sorttok", &["a b c", "32", "r"]), "c b a");

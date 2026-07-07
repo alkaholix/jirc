@@ -12,6 +12,13 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🧭 26.7.22 — Token tweaks
+
+- **`$puttok`** and **`$instok`** accept negative positions now (`-1` = from the end), matching `$gettok`.
+- **`$read(file, s, word)`** matches whole words — `s, yes` no longer accidentally matches a line starting with `yesterday`.
+
+---
+
 ## 📖 26.7.21 — `$read` can search files
 
 - **`$read`** now searches: `$read(file, w, *pattern*)` finds the first line matching a wildcard, `$read(file, s, text)` finds the first line starting with some text, and `$read(file, r, regex)` uses a regex.
