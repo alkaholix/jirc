@@ -12,6 +12,15 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🪟 26.7.15 — Window events
+
+Scripts can now react when windows open and close:
+
+- **`on OPEN`** and **`on CLOSE`** fire for query (`?`), channel (`#`), and custom (`@name`) windows — e.g. `on *:CLOSE:?:/echo you closed $target`.
+- A query window gives you `$nick` (the other person) and `$target` (the window).
+
+---
+
 ## 🧩 26.7.14 — Script lifecycle events
 
 Your scripts can now react to the client's own lifecycle:

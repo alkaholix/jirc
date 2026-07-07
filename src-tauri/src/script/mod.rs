@@ -1375,16 +1375,49 @@ pub fn script_set_active(engine: State<'_, ScriptEngine>, name: String, server_i
     engine.set_active_win(&server_id, &name);
 }
 
-/// The UI opened a window/buffer — assign its `$wid`.
+/// The UI opened a window/buffer — assign its `$wid` and fire `on OPEN`.
 #[tauri::command]
-pub fn script_window_open(engine: State<'_, ScriptEngine>, server_id: String, name: String) {
-    engine.window_open(&server_id, &name);
+pub fn script_window_open(app: AppHandle, server_id: String, name: String) {
+    app.state::<ScriptEngine>().window_open(&server_id, &name);
+    fire_window_event(&app, &server_id, &name, "OPEN");
 }
 
-/// The UI closed a window/buffer — release its `$wid`.
+/// The UI closed a window/buffer — release its `$wid` and fire `on CLOSE`.
 #[tauri::command]
-pub fn script_window_close(engine: State<'_, ScriptEngine>, server_id: String, name: String) {
-    engine.window_close(&server_id, &name);
+pub fn script_window_close(app: AppHandle, server_id: String, name: String) {
+    app.state::<ScriptEngine>().window_close(&server_id, &name);
+    fire_window_event(&app, &server_id, &name, "CLOSE");
+}
+
+/// Dispatches `on OPEN`/`on CLOSE` for a window. A plain nick is a query window
+/// (empty `$chan` so the `?` target matches, `$nick` = the other party); a
+/// channel / `@window` keeps its name as `$chan` for `#` / `@name` targets. The
+/// status window is always present, so mIRC fires neither for it.
+fn fire_window_event(app: &AppHandle, server_id: &str, name: &str, kind: &str) {
+    if name.eq_ignore_ascii_case("Status Window") {
+        return;
+    }
+    let state = app
+        .try_state::<crate::irc::state::StateStore>()
+        .map(|s| s.get(server_id))
+        .unwrap_or_default();
+    let my_nick = state.nick.clone();
+    let is_query = !is_channel(name) && !name.starts_with('@') && !name.starts_with('=');
+    let vars = EventVars {
+        nick: if is_query { name.to_string() } else { String::new() },
+        chan: if is_query { String::new() } else { name.to_string() },
+        target: name.to_string(),
+        ..Default::default()
+    };
+    let ctx = RunCtx {
+        my_nick: &my_nick,
+        network: "",
+        server: "",
+        data_dir: script_data_dir(app),
+        state,
+    };
+    let actions = app.state::<ScriptEngine>().dispatch_event(&ctx, kind, vars);
+    apply_actions(app, server_id, &my_nick, "", "", actions);
 }
 
 /// Runs a typed command line through the engine (built-in script commands like
@@ -2620,6 +2653,29 @@ mod tests {
         let bare = ScriptEngine::new();
         bare.load("alias x { /echo hi }");
         assert!(bare.dispatch_event(&ctx(), "START", EventVars::default()).is_empty());
+    }
+
+    #[test]
+    fn open_close_window_events() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "on *:OPEN:?:*:{ /echo -s opened query $target }\n\
+             on *:CLOSE:?:{ /echo -s closed query $target }\n\
+             on *:OPEN:#:*:{ /echo -s opened chan $chan }",
+        );
+        let echoed = |acts: Vec<Action>, want: &str| {
+            acts.iter().any(|a| matches!(a, Action::Echo { text, .. } if text == want))
+        };
+        // A query window (empty $chan so `?` matches; $target = the other party).
+        let q = EventVars { nick: "bob".into(), target: "bob".into(), ..Default::default() };
+        assert!(echoed(engine.dispatch_event(&ctx(), "OPEN", q.clone()), "opened query bob"));
+        // A channel window: `#` matches, `?` does not.
+        let c = EventVars { chan: "#c".into(), target: "#c".into(), ..Default::default() };
+        let ca = engine.dispatch_event(&ctx(), "OPEN", c);
+        assert!(echoed(ca.clone(), "opened chan #c"));
+        assert!(!echoed(ca, "opened query #c"));
+        // on CLOSE:? fires when a query closes.
+        assert!(echoed(engine.dispatch_event(&ctx(), "CLOSE", q), "closed query bob"));
     }
 
     #[test]

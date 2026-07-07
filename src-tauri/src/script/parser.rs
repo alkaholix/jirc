@@ -391,6 +391,15 @@ fn parse_braceless_event(header: &str) -> Option<Event> {
     } else if PLAIN_EVENTS.contains(&kind.as_str()) {
         // on *:CONNECT|PING|…:<command> — no matchtext, no target.
         (String::new(), String::new(), rest.trim().to_string())
+    } else if kind == "OPEN" {
+        // on *:OPEN:<type>:<matchtext>:<command> — the window type is the target,
+        // the matchtext matches the opening message. Note the reversed field
+        // order vs TEXT (where matchtext comes first).
+        let mut p = rest.splitn(3, ':');
+        let target = p.next().unwrap_or("").trim().to_string();
+        let matchtext = p.next().unwrap_or("").trim().to_string();
+        let command = p.next().unwrap_or("").trim().to_string();
+        (matchtext, target, command)
     } else {
         // on *:JOIN|PART|…:<target>:<command> — channel target, no matchtext.
         let mut p = rest.splitn(2, ':');
