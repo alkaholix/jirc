@@ -2286,6 +2286,42 @@ mod tests {
     }
 
     #[test]
+    fn read_search_switches() {
+        let dir = std::env::temp_dir().join(format!("jirc-read-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: dir.clone(),
+            state: std::sync::Arc::new(Default::default()),
+        };
+        let engine = ScriptEngine::new();
+        engine.run_command(&rctx, "#c", "/write -c data.txt apple red", &[]);
+        engine.run_command(&rctx, "#c", "/write data.txt banana yellow", &[]);
+        engine.run_command(&rctx, "#c", "/write data.txt cherry red", &[]);
+        // w: first line matching a wildcard -> the whole line; $readn = line number.
+        engine.load("alias t { /msg #c $read(data.txt, w, *yellow*) @ $readn }");
+        assert_eq!(
+            engine.run_alias(&rctx, "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :banana yellow @ 2".into())]
+        );
+        // s: line beginning with the text -> the remainder after it.
+        engine.load("alias t2 { /msg #c $read(data.txt, s, cherry) @ $readn }");
+        assert_eq!(
+            engine.run_alias(&rctx, "#c", "t2", ""),
+            vec![Action::Send("PRIVMSG #c :red @ 3".into())]
+        );
+        // no match -> $readn is 0.
+        engine.load("alias t3 { var %x $read(data.txt, w, *grape*) | /msg #c found=$readn }");
+        assert_eq!(
+            engine.run_alias(&rctx, "#c", "t3", ""),
+            vec![Action::Send("PRIVMSG #c :found=0".into())]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn writeini_readini_roundtrips() {
         let dir = std::env::temp_dir().join(format!("jirc-ini-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

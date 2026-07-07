@@ -1319,21 +1319,9 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             }
         }
         "regerrstr" => rt.vars.get(REGERR_KEY).cloned().unwrap_or_default(),
-        "read" => {
-            // $read(file, [N]) -> the Nth line (1-based), or a random line.
-            let path = super::eval::sandbox_path(&rt.data_dir, &a(0));
-            let content = std::fs::read_to_string(&path).unwrap_or_default();
-            let lines: Vec<&str> = content.lines().collect();
-            if lines.is_empty() {
-                String::new()
-            } else if args.len() >= 2 {
-                let n: usize = a(1).parse().unwrap_or(0);
-                lines.get(n.saturating_sub(1)).copied().unwrap_or("").to_string()
-            } else {
-                let idx = rand_range(0, lines.len() as i64 - 1) as usize;
-                lines.get(idx).copied().unwrap_or("").to_string()
-            }
-        }
+        "read" => eval_read(rt, args),
+        // $readn -> the line number matched by the last $read (0 if none).
+        "readn" => rt.vars.get(READN_KEY).cloned().unwrap_or_else(|| "0".into()),
         "lines" => {
             // $lines(file) -> number of lines in the file.
             let path = super::eval::sandbox_path(&rt.data_dir, &a(0));
@@ -2089,6 +2077,86 @@ fn num2(a: &str, b: &str, f: fn(f64, f64) -> f64) -> String {
     match (a.parse::<f64>(), b.parse::<f64>()) {
         (Ok(x), Ok(y)) => fmt_num(f(x, y)),
         _ => String::new(),
+    }
+}
+
+/// Key under which `$read` records the matched line number for `$readn`.
+const READN_KEY: &str = "\u{0}readn";
+
+/// `$read(file [, ntswrp] [, matchtext] [, N])`. Without switches it returns the
+/// Nth line (1-based) or a random line. The `w`/`s`/`r` switches search from line
+/// N (default 1): `w` = wildcard match (returns the whole line), `s` = line
+/// starting with matchtext (returns the remainder), `r` = regex. `$readn` is set
+/// to the matched line number (0 if no match). n/t/p are accepted (jIRC never
+/// evaluates the returned line, so `n` is implied and safe).
+fn eval_read(rt: &mut Runtime, args: &[String]) -> String {
+    let a = |i: usize| args.get(i).cloned().unwrap_or_default();
+    let path = super::eval::sandbox_path(&rt.data_dir, &a(0));
+    let content = std::fs::read_to_string(&path).unwrap_or_default();
+    let lines: Vec<&str> = content.lines().collect();
+    let arg1 = a(1);
+    let arg1 = arg1.trim();
+    // arg1 is a switch string when it's present and not a plain number.
+    let has_switches = !arg1.is_empty() && arg1.parse::<i64>().is_err();
+
+    if has_switches {
+        let sw = arg1.to_lowercase();
+        let matchtext = a(2);
+        let from = a(3).trim().parse::<usize>().unwrap_or(1).max(1) - 1;
+        if sw.contains('w') {
+            for (i, line) in lines.iter().enumerate().skip(from) {
+                if wildcard_match(&matchtext, line) {
+                    rt.vars.insert(READN_KEY.into(), (i + 1).to_string());
+                    return line.to_string();
+                }
+            }
+            rt.vars.insert(READN_KEY.into(), "0".into());
+            return String::new();
+        }
+        if sw.contains('s') {
+            let ml = matchtext.to_lowercase();
+            for (i, line) in lines.iter().enumerate().skip(from) {
+                if line.to_lowercase().starts_with(&ml) {
+                    rt.vars.insert(READN_KEY.into(), (i + 1).to_string());
+                    return line[matchtext.len()..].trim_start_matches(' ').to_string();
+                }
+            }
+            rt.vars.insert(READN_KEY.into(), "0".into());
+            return String::new();
+        }
+        if sw.contains('r') {
+            if let Ok(re) = regex::Regex::new(&matchtext) {
+                for (i, line) in lines.iter().enumerate().skip(from) {
+                    if re.is_match(line) {
+                        rt.vars.insert(READN_KEY.into(), (i + 1).to_string());
+                        return line.to_string();
+                    }
+                }
+            }
+            rt.vars.insert(READN_KEY.into(), "0".into());
+            return String::new();
+        }
+        // Control switches only (n/t/p): a line number, if any, is in arg 2.
+        let n = a(2).trim().parse::<usize>().unwrap_or(0);
+        if n >= 1 {
+            rt.vars.insert(READN_KEY.into(), n.to_string());
+            return lines.get(n - 1).copied().unwrap_or("").to_string();
+        }
+        // fall through to a random read
+    }
+
+    if lines.is_empty() {
+        rt.vars.insert(READN_KEY.into(), "0".into());
+        return String::new();
+    }
+    if !has_switches && !arg1.is_empty() {
+        let n: usize = arg1.parse().unwrap_or(0);
+        rt.vars.insert(READN_KEY.into(), n.to_string());
+        lines.get(n.saturating_sub(1)).copied().unwrap_or("").to_string()
+    } else {
+        let idx = rand_range(0, lines.len() as i64 - 1) as usize;
+        rt.vars.insert(READN_KEY.into(), (idx + 1).to_string());
+        lines.get(idx).copied().unwrap_or("").to_string()
     }
 }
 

@@ -788,6 +788,10 @@ write anywhere else on your disk.</p>
   <tr><td><code>/write -c file [text]</code></td><td>clear the file first, then optionally write</td></tr>
   <tr><td><code>$read(file)</code></td><td>a random line</td></tr>
   <tr><td><code>$read(file, n)</code></td><td>line number n</td></tr>
+  <tr><td><code>$read(file, w, *pattern*)</code></td><td>first line matching a wildcard (whole line)</td></tr>
+  <tr><td><code>$read(file, s, text)</code></td><td>first line <em>starting with</em> text (returns the rest of the line)</td></tr>
+  <tr><td><code>$read(file, r, regex)</code></td><td>first line matching a regex</td></tr>
+  <tr><td><code>$readn</code></td><td>the line number the last <code>$read</code> matched (0 if none)</td></tr>
   <tr><td><code>$lines(file)</code></td><td>number of lines</td></tr>
   <tr><td><code>$isfile(file)</code> · <code>$isdir(d)</code> · <code>$exists(f)</code></td><td><code>$true</code>/<code>$false</code></td></tr>
   <tr><td><code>$file(name).size</code> · <code>.mtime</code> · <code>.ctime</code> · <code>.name</code> · <code>.ext</code></td><td>file info: size in bytes, modified / created unix time, leaf name, extension</td></tr>
