@@ -35,3 +35,10 @@ window-mockups.html
 
 # Local copy of the mIRC help file (fidelity reference; not part of the repo).
 *.chm
+
+# AI working guides — kept LOCAL only (loaded by Claude Code), not on the public repo.
+CLAUDE.md
+CLAUDE-OPUS-4.8.md
+
+# Internal project docs — kept LOCAL only, not on the public repo. README.md stays public.
+docs/*.md
