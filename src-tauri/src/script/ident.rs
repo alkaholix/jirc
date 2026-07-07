@@ -2,7 +2,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::eval::{eval_bool_public, wildcard_match, Runtime, SOCK_BR_KEY};
+use super::eval::{eval_bool_public, wildcard_match, wildcard_match_cs, Runtime, SOCK_BR_KEY};
 use sha2::Digest; // brings the Digest trait into scope for Md5/Sha1/Sha2 too
 
 /// Evaluates `$name(args...)` with an optional `.property` suffix (empty when
@@ -820,7 +820,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             rt.windows.line(&a(0), n)
         }
         // $replacex (single-pass, non-recursive replace of from/to pairs).
-        "replacex" => {
+        "replacex" | "replacexcs" => {
             let s = a(0);
             let pairs: Vec<(String, String)> = if args.len() > 1 {
                 args[1..]
@@ -831,7 +831,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             } else {
                 Vec::new()
             };
-            replacex(&s, &pairs)
+            replacex(&s, &pairs, name.eq_ignore_ascii_case("replacexcs"))
         }
         // $powmod(B,E,M) — modular exponentiation (modular inverse for negative E).
         "powmod" => powmod(
@@ -1115,6 +1115,75 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             }
             result.to_string()
         }
+        "addtokcs" => {
+            let sep = sep_code(&a(2));
+            let (list, tok) = (a(0), a(1));
+            if tok.is_empty() || list.split(sep).any(|t| t == tok.as_str()) {
+                list
+            } else if list.is_empty() {
+                tok
+            } else {
+                format!("{list}{sep}{tok}")
+            }
+        }
+        "remtokcs" => {
+            let sep = sep_code(&a(3));
+            let n = a(2).parse::<usize>().unwrap_or(1).max(1);
+            let (list, token) = (a(0), a(1));
+            let mut seen = 0;
+            list.split(sep)
+                .filter(|t| {
+                    if *t == token.as_str() {
+                        seen += 1;
+                        seen != n
+                    } else {
+                        true
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(&sep.to_string())
+        }
+        "reptokcs" => {
+            let sep = sep_code(&a(4));
+            let (token, new) = (a(1), a(2));
+            let n: usize = a(3).parse().unwrap_or(1);
+            let mut count = 0usize;
+            a(0)
+                .split(sep)
+                .map(|t| {
+                    if t == token.as_str() {
+                        count += 1;
+                        if n == 0 || count == n {
+                            return new.clone();
+                        }
+                    }
+                    t.to_string()
+                })
+                .collect::<Vec<_>>()
+                .join(&sep.to_string())
+        }
+        "matchtokcs" => {
+            let sep = sep_code(&a(3));
+            let n = a(2).parse::<usize>().unwrap_or(1);
+            let (list, needle) = (a(0), a(1));
+            let m: Vec<&str> = list.split(sep).filter(|t| t.contains(needle.as_str())).collect();
+            if n == 0 {
+                m.len().to_string()
+            } else {
+                m.get(n - 1).copied().unwrap_or("").to_string()
+            }
+        }
+        "wildtokcs" => {
+            let sep = sep_code(&a(3));
+            let n = a(2).parse::<usize>().unwrap_or(1);
+            let (list, wild) = (a(0), a(1));
+            let m: Vec<&str> = list.split(sep).filter(|t| wildcard_match_cs(&wild, t)).collect();
+            if n == 0 {
+                m.len().to_string()
+            } else {
+                m.get(n - 1).copied().unwrap_or("").to_string()
+            }
+        }
         "reverse" => a(0).chars().rev().collect(),
         "abs" => a(0).parse::<f64>().map(|n| fmt_num(n.abs())).unwrap_or_default(),
         "int" => a(0).parse::<f64>().map(|n| (n.trunc() as i64).to_string()).unwrap_or_default(),
@@ -1207,11 +1276,13 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             }
             toks.join(&sep.to_string())
         }
-        "sorttok" => {
+        "sorttok" | "sorttokcs" => {
             // $sorttok(list, sepcode, [options]) -> sorted.
             // opts: a=alpha (default), n=numeric, c=channel-prefix, r=reverse.
+            // The `cs` form sorts alphabetically case-sensitively.
             let sep = sep_code(&a(1));
             let opts = a(2).to_lowercase();
+            let cs = name.eq_ignore_ascii_case("sorttokcs");
             let mut toks: Vec<String> = a(0).split(sep).map(String::from).collect();
             if opts.contains('c') {
                 // Channel prefix order ~ & @ % + then none; stable within a rank.
@@ -1229,6 +1300,8 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                     let (x, y) = (x.parse::<f64>().unwrap_or(0.0), y.parse::<f64>().unwrap_or(0.0));
                     x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal)
                 });
+            } else if cs {
+                toks.sort();
             } else {
                 toks.sort_by(|x, y| x.to_lowercase().cmp(&y.to_lowercase()));
             }
@@ -1962,7 +2035,7 @@ fn replace_ci(text: &str, from: &str, to: &str) -> String {
     out
 }
 
-fn replacex(s: &str, pairs: &[(String, String)]) -> String {
+fn replacex(s: &str, pairs: &[(String, String)], cs: bool) -> String {
     if pairs.is_empty() {
         return s.to_string();
     }
@@ -1971,11 +2044,15 @@ fn replacex(s: &str, pairs: &[(String, String)]) -> String {
     'outer: while !rest.is_empty() {
         for (from, to) in pairs {
             let fl = from.len();
-            if fl > 0
-                && rest.len() >= fl
-                && rest.is_char_boundary(fl)
-                && rest.as_bytes()[..fl].eq_ignore_ascii_case(from.as_bytes())
-            {
+            if fl == 0 || rest.len() < fl || !rest.is_char_boundary(fl) {
+                continue;
+            }
+            let hit = if cs {
+                &rest[..fl] == from.as_str()
+            } else {
+                rest.as_bytes()[..fl].eq_ignore_ascii_case(from.as_bytes())
+            };
+            if hit {
                 out.push_str(to);
                 rest = &rest[fl..];
                 continue 'outer;
@@ -2911,6 +2988,13 @@ mod tests {
         assert_eq!(e("poscs", &["aAa", "A", "1"]), "2");
         assert_eq!(e("countcs", &["aAa", "a"]), "2");
         assert_eq!(e("findtokcs", &["a A a", "A", "1", "32"]), "2");
+        assert_eq!(e("matchtokcs", &["Apple apple", "A", "1", "32"]), "Apple");
+        assert_eq!(e("wildtokcs", &["Apple apple", "A*", "1", "32"]), "Apple");
+        assert_eq!(e("addtokcs", &["a B", "b", "32"]), "a B b");
+        assert_eq!(e("remtokcs", &["a A a", "A", "1", "32"]), "a a");
+        assert_eq!(e("reptokcs", &["a A a", "A", "X", "1", "32"]), "a X a");
+        assert_eq!(e("sorttokcs", &["b A a B", "32"]), "A B a b");
+        assert_eq!(e("replacexcs", &["aAa", "a", "X"]), "XAX");
         assert_eq!(e("wildtok", &["cat car dog", "ca*", "2", "32"]), "car");
         assert_eq!(e("wildtok", &["cat car dog", "ca*", "0", "32"]), "2");
         assert_eq!(e("matchtok", &["cat car dog", "ar", "1", "32"]), "car");

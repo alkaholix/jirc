@@ -12,6 +12,12 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🔡 26.7.24 — Case-sensitive identifiers, completed
+
+- Added the rest of the exact-match family: **`$matchtokcs`**, **`$wildtokcs`**, **`$remtokcs`**, **`$reptokcs`**, **`$addtokcs`**, **`$sorttokcs`**, **`$replacexcs`**. Every text identifier with a case-sensitive form in mIRC now has one.
+
+---
+
 ## 🔠 26.7.23 — Case-sensitive identifiers
 
 - Added exact-match versions of common text identifiers: **`$istokcs`**, **`$findtokcs`**, **`$replacecs`**, **`$removecs`**, **`$poscs`**, **`$countcs`** — for when upper/lower case matters.
