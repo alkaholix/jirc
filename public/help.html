@@ -402,6 +402,11 @@ out of <code>if</code>/<code>while</code> blocks). A safety cap stops runaway lo
 Text-style events also take a <strong>matchtext</strong> pattern before the target:</p>
 <pre><code><span class="k">on</span> *:TEXT:&lt;matchtext&gt;:&lt;target&gt;:{ commands }
 </code></pre>
+<p>The matchtext is a wildcard pattern: <code>*</code> matches anything (including
+nothing), <code>?</code> matches one character, and <code>&amp;</code> on its own
+matches exactly one word. So <code>on *:TEXT:!weather &amp;:#:</code> triggers on
+<code>!weather london</code> (with <code>$2</code> = <code>london</code>) but not on
+<code>!weather</code> alone.</p>
 <h3>The target field</h3>
 <table>
   <tr><th>Target</th><th>Matches</th></tr>

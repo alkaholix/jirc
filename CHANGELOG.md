@@ -12,6 +12,12 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🎯 26.7.20 — The `&` word wildcard
+
+- Matchtext now understands **`&`** — a standalone `&` matches exactly one word. The classic `on *:TEXT:!weather &:#:` (trigger on `!weather london`, not on `!weather` by itself) finally works as it does in mIRC.
+
+---
+
 ## 🔤 26.7.19 — `$sorttok` by rank + `returnex`
 
 - **`$sorttok(..., c)`** sorts a list by channel prefix (owner, admin, op, half-op, voice, then the rest) — handy for tidy nick lists.

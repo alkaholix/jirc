@@ -2625,16 +2625,37 @@ pub fn wildcard_match_cs(pattern: &str, text: &str) -> bool {
 }
 
 fn wm(p: &[char], t: &[char]) -> bool {
+    // The pattern starts at a word boundary (prev_space = true).
+    wm_at(p, t, true)
+}
+
+/// `prev_space` = the previous pattern char was a space (or we're at the start).
+/// mIRC's `&` is a whole-word wildcard only when it stands alone — space-bounded
+/// on both sides; otherwise it's a literal `&`.
+fn wm_at(p: &[char], t: &[char], prev_space: bool) -> bool {
     if p.is_empty() {
         return t.is_empty();
     }
     match p[0] {
         '*' => {
             // Match zero or more characters.
-            wm(&p[1..], t) || (!t.is_empty() && wm(p, &t[1..]))
+            wm_at(&p[1..], t, false) || (!t.is_empty() && wm_at(p, &t[1..], false))
         }
-        '?' => !t.is_empty() && wm(&p[1..], &t[1..]),
-        c => !t.is_empty() && t[0] == c && wm(&p[1..], &t[1..]),
+        '?' => !t.is_empty() && wm_at(&p[1..], &t[1..], false),
+        // `&` alone matches one whole word (one or more non-space chars). Since a
+        // word is space-bounded and `&` must be followed by space/end, the word is
+        // the maximal non-space run — match it and continue.
+        '&' if prev_space && (p.len() == 1 || p[1] == ' ') => {
+            if t.is_empty() || t[0] == ' ' {
+                return false; // needs at least one non-space character
+            }
+            let mut i = 1;
+            while i < t.len() && t[i] != ' ' {
+                i += 1;
+            }
+            wm_at(&p[1..], &t[i..], false)
+        }
+        c => !t.is_empty() && t[0] == c && wm_at(&p[1..], &t[1..], c == ' '),
     }
 }
 
@@ -2648,6 +2669,19 @@ mod tests {
         assert!(wildcard_match("*", "anything"));
         assert!(!wildcard_match("!ping*", "hello"));
         assert!(wildcard_match("h?llo", "hello"));
+    }
+
+    #[test]
+    fn wildcard_ampersand_whole_word() {
+        // `&` alone matches exactly one word.
+        assert!(wildcard_match("!cmd &", "!cmd hello"));
+        assert!(!wildcard_match("!cmd &", "!cmd hello world")); // extra word
+        assert!(!wildcard_match("!cmd &", "!cmd ")); // needs a word
+        assert!(wildcard_match("!reminder & *", "!reminder 5 buy milk"));
+        // Not standalone -> literal `&`.
+        assert!(wildcard_match("a&b", "a&b"));
+        assert!(wildcard_match("test &his", "test &his"));
+        assert!(!wildcard_match("test &his", "test this"));
     }
 
     #[test]
