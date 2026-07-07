@@ -432,6 +432,7 @@ Text-style events also take a <strong>matchtext</strong> pattern before the targ
   <tr><td><code>UNLOAD</code></td><td>scripts are about to reload (cleanup)</td><td>—</td></tr>
   <tr><td><code>EXIT</code></td><td>jIRC is closing (save state)</td><td>—</td></tr>
   <tr><td><code>OPEN</code> · <code>CLOSE</code></td><td>a window opens / closes (<code>?</code> query, <code>#</code> channel, <code>@name</code> custom)</td><td><code>$target</code>, <code>$nick</code> (query)</td></tr>
+  <tr><td><code>NOTIFY</code> · <code>UNOTIFY</code></td><td>a notify-list friend comes online / goes offline</td><td><code>$nick</code></td></tr>
   <tr><td><code>CONNECTFAIL</code></td><td>a connection attempt fails</td><td><code>$1-</code> (reason)</td></tr>
   <tr><td><code>RAW</code></td><td>any raw server line arrives</td><td><code>$numeric</code>, <code>$1-</code> (the line)</td></tr>
   <tr><td><code>CTCP</code></td><td>someone sends a CTCP request</td><td><code>$nick $chan $1-</code></td></tr>

@@ -153,6 +153,9 @@ export const api = {
     text: string
   ) => invoke<boolean>("script_run_input", { serverId, target, myNick, network, text }),
   scriptSockets: () => invoke<string[]>("script_sockets"),
+  /** A notify-list nick came online / went offline — fires on NOTIFY / on UNOTIFY. */
+  scriptNotify: (serverId: string, network: string, nick: string, online: boolean) =>
+    invoke("script_notify", { serverId, network, nick, online }),
   /** Tell the engine which window/connection is focused ($active/$activecid). */
   scriptSetActive: (name: string, serverId: string) =>
     invoke("script_set_active", { name, serverId }),

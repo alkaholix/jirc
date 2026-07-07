@@ -23,12 +23,20 @@ export function routeNotifyEvent(ev: IrcEvent) {
   const prev = useNotify.getState().online[ev.serverId] ?? [];
   const prevLc = prev.map((n) => n.toLowerCase());
   const notifications = useSettings.getState().notifications;
+  const network = useStore.getState().servers[ev.serverId]?.name ?? "";
 
   for (const n of reported) {
-    if (!prevLc.includes(n.toLowerCase()) && notifications) notify("Online", `${n} is online`);
+    if (!prevLc.includes(n.toLowerCase())) {
+      // Fire `on NOTIFY` (regardless of the desktop-notification setting).
+      api.scriptNotify(ev.serverId, network, n, true).catch(() => {});
+      if (notifications) notify("Online", `${n} is online`);
+    }
   }
   for (const n of prev) {
-    if (!reportedLc.includes(n.toLowerCase()) && notifications) notify("Offline", `${n} went offline`);
+    if (!reportedLc.includes(n.toLowerCase())) {
+      api.scriptNotify(ev.serverId, network, n, false).catch(() => {});
+      if (notifications) notify("Offline", `${n} went offline`);
+    }
   }
   useNotify.setState((s) => ({ online: { ...s.online, [ev.serverId]: reported } }));
 }

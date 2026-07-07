@@ -118,6 +118,7 @@ pub fn run() {
             script::script_run_command,
             script::script_run_dialog,
             script::script_sockets,
+            script::script_notify,
             script::script_set_active,
             script::script_window_open,
             script::script_window_close,

@@ -15,7 +15,8 @@ const MATCHTEXT_EVENTS: &[&str] = &[
 const NO_TARGET_MATCHTEXT: &[&str] = &["RAW", "WALLOPS", "SNOTICE", "ERROR"];
 
 /// Events with neither a matchtext nor a target — `on EVENT:<cmd>`.
-const PLAIN_EVENTS: &[&str] = &["CONNECT", "DISCONNECT", "CONNECTFAIL", "PING", "PONG"];
+const PLAIN_EVENTS: &[&str] =
+    &["CONNECT", "DISCONNECT", "CONNECTFAIL", "PING", "PONG", "NOTIFY", "UNOTIFY"];
 
 struct Cursor {
     chars: Vec<char>,

@@ -1360,6 +1360,28 @@ pub fn script_run_dialog(
     apply_actions(&app, &server_id, &my_nick, &network, "", actions);
 }
 
+/// A notify-list nick came online (`on NOTIFY`) or went offline (`on UNOTIFY`).
+/// The frontend calls this from its ISON diff; `$nick` is the affected nick.
+#[tauri::command]
+pub fn script_notify(app: AppHandle, server_id: String, network: String, nick: String, online: bool) {
+    let kind = if online { "NOTIFY" } else { "UNOTIFY" };
+    let state = app
+        .try_state::<crate::irc::state::StateStore>()
+        .map(|s| s.get(&server_id))
+        .unwrap_or_default();
+    let my_nick = state.nick.clone();
+    let ctx = RunCtx {
+        my_nick: &my_nick,
+        network: &network,
+        server: "",
+        data_dir: script_data_dir(&app),
+        state,
+    };
+    let vars = EventVars { nick: nick.clone(), target: nick, ..Default::default() };
+    let actions = app.state::<ScriptEngine>().dispatch_event(&ctx, kind, vars);
+    apply_actions(&app, &server_id, &my_nick, &network, "", actions);
+}
+
 /// Returns the names of all open script sockets (for `/socklist`).
 #[tauri::command]
 pub fn script_sockets(socks: State<'_, socket::SocketManager>) -> Vec<String> {
@@ -2676,6 +2698,25 @@ mod tests {
         assert!(!echoed(ca, "opened query #c"));
         // on CLOSE:? fires when a query closes.
         assert!(echoed(engine.dispatch_event(&ctx(), "CLOSE", q), "closed query bob"));
+    }
+
+    #[test]
+    fn notify_events() {
+        let engine = ScriptEngine::new();
+        // Plain events (no target/matchtext); $nick is the friend who changed state.
+        engine.load(
+            "on *:NOTIFY:/msg #f $nick is online\n\
+             on *:UNOTIFY:/msg #f $nick left",
+        );
+        let vars = EventVars { nick: "alice".into(), target: "alice".into(), ..Default::default() };
+        assert_eq!(
+            engine.dispatch_event(&ctx(), "NOTIFY", vars.clone()),
+            vec![Action::Send("PRIVMSG #f :alice is online".into())]
+        );
+        assert_eq!(
+            engine.dispatch_event(&ctx(), "UNOTIFY", vars),
+            vec![Action::Send("PRIVMSG #f :alice left".into())]
+        );
     }
 
     #[test]

@@ -12,6 +12,12 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🔔 26.7.16 — Notify-list events
+
+- **`on NOTIFY`** and **`on UNOTIFY`** let a script react when a friend on your notify/watch list comes online or goes offline — `$nick` is who changed. e.g. `on *:NOTIFY:/msg $nick welcome back!`
+
+---
+
 ## 🪟 26.7.15 — Window events
 
 Scripts can now react when windows open and close:
