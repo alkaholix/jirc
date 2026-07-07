@@ -1,6 +1,6 @@
 [package]
 name = "jirc"
-version = "26.7.13"
+version = "26.7.14"
 description = "jIRC — a modern, open-source mIRC-style IRC client (standard IRC + IRCX)"
 authors = ["jIRC contributors"]
 edition = "2021"

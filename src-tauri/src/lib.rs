@@ -61,6 +61,8 @@ pub fn run() {
                     .load(dir.join("ircx-keys.json"));
             }
             script::load_persisted(app.handle(), &engine);
+            // Fire `on START` now that scripts are loaded (mIRC's startup init event).
+            script::fire_lifecycle(app.handle(), &engine, "START");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -126,6 +128,14 @@ pub fn run() {
             irc::ircx_keys::ircx_owner_protect,
             irc::ircx_keys::ircx_keys_get,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running jIRC");
+        .build(tauri::generate_context!())
+        .expect("error while running jIRC")
+        .run(|app_handle, event| {
+            // Fire `on EXIT` as the app shuts down, so scripts can save state.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                if let Some(engine) = app_handle.try_state::<script::ScriptEngine>() {
+                    script::fire_lifecycle(app_handle, &engine, "EXIT");
+                }
+            }
+        });
 }

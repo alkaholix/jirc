@@ -787,8 +787,34 @@ fn write_examples(dir: &std::path::Path) -> usize {
     added
 }
 
+/// Guards `on UNLOAD` firing against an `on UNLOAD` handler that calls `/reload`
+/// (which would recompile → fire UNLOAD → … forever).
+static FIRING_UNLOAD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Fires a global script-lifecycle event (`on START`/`UNLOAD`/`EXIT`) with no
+/// connection context and applies the resulting actions. Lifecycle events have
+/// no server/window — their commands (timers, hash tables, file I/O) don't need one.
+pub fn fire_lifecycle(app: &AppHandle, engine: &ScriptEngine, kind: &str) {
+    let ctx = RunCtx {
+        my_nick: "",
+        network: "",
+        server: "",
+        data_dir: script_data_dir(app),
+        state: std::sync::Arc::new(Default::default()),
+    };
+    let actions = engine.dispatch_event(&ctx, kind, EventVars::default());
+    apply_actions(app, "", "", "", "", actions);
+}
+
 /// Reads and compiles every `.mrc` file into the engine.
 fn recompile(app: &AppHandle, engine: &ScriptEngine) {
+    use std::sync::atomic::Ordering;
+    // Fire `on UNLOAD` on the outgoing scripts before replacing them (a no-op on
+    // the first, empty load). The guard breaks a /reload-inside-on-UNLOAD loop.
+    if !FIRING_UNLOAD.swap(true, Ordering::SeqCst) {
+        fire_lifecycle(app, engine, "UNLOAD");
+        FIRING_UNLOAD.store(false, Ordering::SeqCst);
+    }
     let Ok(dir) = scripts_dir(app) else { return };
     let mut combined = String::new();
     if let Ok(entries) = std::fs::read_dir(&dir) {
@@ -2574,6 +2600,26 @@ mod tests {
         );
         // An out-of-range selector produces nothing.
         assert_eq!(engine.run_command(&ctx(), "#c", "/scon 9 /msg #c x", &[]), vec![]);
+    }
+
+    #[test]
+    fn lifecycle_events_dispatch() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "on *:START:{ /echo -s started }\n\
+             on *:UNLOAD:{ /echo -s unloading }\n\
+             on *:EXIT:{ /echo -s exiting }",
+        );
+        let echoed = |acts: Vec<Action>, want: &str| {
+            acts.iter().any(|a| matches!(a, Action::Echo { text, .. } if text == want))
+        };
+        assert!(echoed(engine.dispatch_event(&ctx(), "START", EventVars::default()), "started"));
+        assert!(echoed(engine.dispatch_event(&ctx(), "UNLOAD", EventVars::default()), "unloading"));
+        assert!(echoed(engine.dispatch_event(&ctx(), "EXIT", EventVars::default()), "exiting"));
+        // A script with no lifecycle handlers dispatches to nothing.
+        let bare = ScriptEngine::new();
+        bare.load("alias x { /echo hi }");
+        assert!(bare.dispatch_event(&ctx(), "START", EventVars::default()).is_empty());
     }
 
     #[test]
