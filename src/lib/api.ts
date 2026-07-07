@@ -156,6 +156,11 @@ export const api = {
   /** Tell the engine which window/connection is focused ($active/$activecid). */
   scriptSetActive: (name: string, serverId: string) =>
     invoke("script_set_active", { name, serverId }),
+  /** Register/unregister a window with the engine so it gets a `$wid`. */
+  scriptWindowOpen: (serverId: string, name: string) =>
+    invoke("script_window_open", { serverId, name }),
+  scriptWindowClose: (serverId: string, name: string) =>
+    invoke("script_window_close", { serverId, name }),
   openHelp: () => invoke<void>("open_help"),
   openUrl: (url: string) => invoke<void>("open_url", { url }),
   exitApp: () => invoke<void>("exit_app"),

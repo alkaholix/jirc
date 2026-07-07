@@ -8,6 +8,8 @@ vi.mock("../lib/api", () => ({
     join: vi.fn().mockResolvedValue(undefined),
     ircxOwnerProtect: vi.fn().mockResolvedValue(undefined),
     scriptSetActive: vi.fn().mockResolvedValue(undefined),
+    scriptWindowOpen: vi.fn().mockResolvedValue(undefined),
+    scriptWindowClose: vi.fn().mockResolvedValue(undefined),
   },
 }));
 vi.mock("../lib/notify", () => ({ notify: vi.fn() }));

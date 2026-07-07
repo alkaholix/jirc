@@ -47,7 +47,7 @@ out of scope.
 - [x] `$acos`
 - [x] `$active` *(focused window name, reported by the UI on buffer switch; status = "Status Window")*
 - [x] `$activecid` *(cid of the connection owning the focused window)*
-- [ ] `$activewid` *(no numeric window-id model in jIRC)*
+- [x] `$activewid` *(the active window's id; window registry fed by the UI on open/close)*
 - [x] `$address`
 - [x] `$addtok`
 - [ ] `$agent`
@@ -370,7 +370,7 @@ out of scope.
 - [x] `$right`
 - [x] `$round`
 - [ ] `$samepath`
-- [ ] `$scid` *(identifier form; the `/scid` command works — see Commands)*
+- [x] `$scid` *(`$scid(0)` count, `$scid(-1)` active cid, `$scid(cid)` echo if it exists)*
 - [x] `$scon` *(`$scon(0)` = connection count, `$scon(N)` = the Nth connection's cid)*
 - [ ] `$script`
 - [x] `$scriptdir`
@@ -456,7 +456,7 @@ out of scope.
 - [x] `$version` *(jIRC's own CalVer, not an mIRC version number)*
 - [x] `$vnick`
 - [ ] `$vol`
-- [ ] `$wid`
+- [x] `$wid` *(the current run's window id — its channel/query, else the active window)*
 - [ ] `$width`
 - [x] `$wildsite`
 - [x] `$wildtok`

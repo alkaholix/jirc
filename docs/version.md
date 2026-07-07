@@ -13,6 +13,22 @@ three places that carry it:
 
 Newest first.
 
+## 26.7.12
+
+Finishes the numeric-id family — the window side, plus the `$scid` identifier.
+
+### Added (mSL identifiers)
+- **`$wid`** — the id of the window the current run relates to (its channel/query
+  window, else the active window).
+- **`$activewid`** — the focused window's id.
+- **`$scid(N)`** — the connection-id identifier: `$scid(0)` = connection count,
+  `$scid(-1)` = active cid, `$scid(cid)` = that cid if it exists (else `$null`).
+
+Windows now get stable numbers from a `WinReg` on the engine, fed by the
+frontend as buffers open and close (`script_window_open`/`_close`), with the
+active window reported alongside `$active`. Status windows read as
+`Status Window`, matching `$active`.
+
 ## 26.7.11
 
 **`/scon` and `/scid`** — the second half of the numeric-connection work: run a

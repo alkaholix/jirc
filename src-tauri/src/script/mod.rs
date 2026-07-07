@@ -47,6 +47,8 @@ struct Inner {
     active: String,
     /// Numeric connection-id registry for `$cid`/`$scon`/`$activecid`.
     conns: ConnReg,
+    /// Numeric window-id registry for `$wid`/`$activewid`.
+    wins: WinReg,
 }
 
 impl Inner {
@@ -62,6 +64,7 @@ impl Inner {
             input: std::sync::Arc::new(NoInput),
             active: String::new(),
             conns: ConnReg::default(),
+            wins: WinReg::default(),
         }
     }
 }
@@ -100,6 +103,50 @@ impl ConnReg {
             .map(|(c, _)| *c)
             .unwrap_or(0);
         crate::script::eval::ConnsView { entries: self.entries.clone(), active_cid }
+    }
+}
+
+/// Assigns each open window a small, stable number (`$wid`) as the frontend
+/// opens it, and tracks which one is active (`$activewid`). Keyed by
+/// `(server_id, window name)` — the same name the UI reports for `$active`.
+#[derive(Default)]
+struct WinReg {
+    next: u32,
+    /// `(wid, server_id, name)` for every open window.
+    entries: Vec<(u32, String, String)>,
+    active_wid: u32,
+}
+
+impl WinReg {
+    fn open(&mut self, server_id: &str, name: &str) -> u32 {
+        if let Some((w, _, _)) = self
+            .entries
+            .iter()
+            .find(|(_, s, n)| s == server_id && n.eq_ignore_ascii_case(name))
+        {
+            return *w;
+        }
+        self.next += 1;
+        self.entries.push((self.next, server_id.to_string(), name.to_string()));
+        self.next
+    }
+
+    fn close(&mut self, server_id: &str, name: &str) {
+        self.entries
+            .retain(|(_, s, n)| !(s == server_id && n.eq_ignore_ascii_case(name)));
+    }
+
+    fn set_active(&mut self, server_id: &str, name: &str) {
+        self.active_wid = self
+            .entries
+            .iter()
+            .find(|(_, s, n)| s == server_id && n.eq_ignore_ascii_case(name))
+            .map(|(w, _, _)| *w)
+            .unwrap_or(0);
+    }
+
+    fn view(&self) -> crate::script::eval::WinView {
+        crate::script::eval::WinView { entries: self.entries.clone(), active_wid: self.active_wid }
     }
 }
 
@@ -150,6 +197,21 @@ impl ScriptEngine {
     /// Records which connection owns the active window (for `$activecid`).
     pub fn set_active_conn(&self, server_id: &str) {
         self.inner.lock().unwrap().conns.active = server_id.to_string();
+    }
+
+    /// Assigns (idempotently) the `$wid` for a window as the UI opens it.
+    pub fn window_open(&self, server_id: &str, name: &str) -> u32 {
+        self.inner.lock().unwrap().wins.open(server_id, name)
+    }
+
+    /// Drops a window's `$wid` when the UI closes it.
+    pub fn window_close(&self, server_id: &str, name: &str) {
+        self.inner.lock().unwrap().wins.close(server_id, name);
+    }
+
+    /// Records which window is active (for `$activewid`).
+    pub fn set_active_win(&self, server_id: &str, name: &str) {
+        self.inner.lock().unwrap().wins.set_active(server_id, name);
     }
 
     /// Compiles the combined source of all loaded script files.
@@ -209,6 +271,7 @@ impl ScriptEngine {
             state: ctx.state.clone(),
             active: g.active.clone(),
             conns: g.conns.view(),
+            wins: g.wins.view(),
             sockets: g.sockets.clone(),
             input: g.input.clone(),
             caller: "menu",
@@ -258,6 +321,7 @@ impl ScriptEngine {
             state: ctx.state.clone(),
             active: g.active.clone(),
             conns: g.conns.view(),
+            wins: g.wins.view(),
             sockets: g.sockets.clone(),
             input: g.input.clone(),
             caller: "command",
@@ -327,6 +391,7 @@ impl ScriptEngine {
             state: ctx.state.clone(),
             active: g.active.clone(),
             conns: g.conns.view(),
+            wins: g.wins.view(),
             sockets: g.sockets.clone(),
             input: g.input.clone(),
             caller: "command",
@@ -390,6 +455,7 @@ impl ScriptEngine {
                 state: ctx.state.clone(),
             active: g.active.clone(),
             conns: g.conns.view(),
+            wins: g.wins.view(),
                 sockets: g.sockets.clone(),
             input: g.input.clone(),
                 caller: "event",
@@ -1280,6 +1346,19 @@ pub fn script_sockets(socks: State<'_, socket::SocketManager>) -> Vec<String> {
 pub fn script_set_active(engine: State<'_, ScriptEngine>, name: String, server_id: String) {
     engine.set_active(&name);
     engine.set_active_conn(&server_id);
+    engine.set_active_win(&server_id, &name);
+}
+
+/// The UI opened a window/buffer — assign its `$wid`.
+#[tauri::command]
+pub fn script_window_open(engine: State<'_, ScriptEngine>, server_id: String, name: String) {
+    engine.window_open(&server_id, &name);
+}
+
+/// The UI closed a window/buffer — release its `$wid`.
+#[tauri::command]
+pub fn script_window_close(engine: State<'_, ScriptEngine>, server_id: String, name: String) {
+    engine.window_close(&server_id, &name);
 }
 
 /// Runs a typed command line through the engine (built-in script commands like
@@ -2426,6 +2505,56 @@ mod tests {
             engine.run_command(&ctx(), "#c", "/msg #c n=$scon(0)", &[]),
             vec![Action::Send("PRIVMSG #c :n=1".into())]
         );
+    }
+
+    #[test]
+    fn scid_identifier() {
+        let engine = ScriptEngine::new();
+        engine.assign_cid("s1");
+        engine.assign_cid("s2");
+        engine.set_active_conn("s2");
+        // $scid(0) = count, $scid(-1) = active cid, $scid(cid) = echo if it exists.
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", "/msg #c c=$scid(0) a=$scid(-1) v=$scid(2) x=$scid(9)", &[]),
+            vec![Action::Send("PRIVMSG #c :c=2 a=2 v=2 x=".into())]
+        );
+    }
+
+    #[test]
+    fn window_ids() {
+        let engine = ScriptEngine::new();
+        // The UI opens windows; each gets a stable wid. Same (server,name) is idempotent.
+        assert_eq!(engine.window_open("s1", "#a"), 1);
+        assert_eq!(engine.window_open("s1", "#b"), 2);
+        assert_eq!(engine.window_open("s1", "#a"), 1);
+        engine.set_active_win("s1", "#b");
+
+        // $activewid = the active window; $wid (in an event for #a) = that window.
+        engine.load("on *:TEXT:*:#:{ /msg $chan wid=$wid active=$activewid }");
+        let snap = crate::irc::state::StateSnapshot { server_id: "s1".into(), ..Default::default() };
+        let ctx2 = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(snap),
+        };
+        let ev = UiEvent::Message {
+            server_id: "s1".into(),
+            kind: crate::irc::event::MessageKind::Privmsg,
+            from: Some("bob".into()),
+            target: "#a".into(),
+            text: "hi".into(),
+            time: None,
+        };
+        assert_eq!(
+            drive_event(&engine, &ctx2, &ev),
+            vec![Action::Send("PRIVMSG #a :wid=1 active=2".into())]
+        );
+
+        // Closing #a drops its wid.
+        engine.window_close("s1", "#a");
+        assert_eq!(engine.window_open("s1", "#c"), 3); // new window, not reusing 1
     }
 
     #[test]

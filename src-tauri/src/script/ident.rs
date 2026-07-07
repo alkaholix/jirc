@@ -82,6 +82,37 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 rt.conns.entries.get(n - 1).map(|(c, _)| c.to_string()).unwrap_or_default()
             }
         }
+        // $scid(N): index by cid value. 0 = connection count; -1 = active cid;
+        // otherwise echo the cid if a connection with it exists ($null if not).
+        "scid" => {
+            let n: i64 = a(0).trim().parse().unwrap_or(0);
+            if n == 0 {
+                rt.conns.entries.len().to_string()
+            } else if n == -1 {
+                match rt.conns.active_cid {
+                    0 => String::new(),
+                    c => c.to_string(),
+                }
+            } else if n > 0 && rt.conns.entries.iter().any(|(c, _)| *c == n as u32) {
+                n.to_string()
+            } else {
+                String::new()
+            }
+        }
+        // $wid = the window the current run relates to (its channel/query, else the
+        // active window); $activewid = the active window. Both $null when unknown.
+        "wid" => {
+            let name = if !rt.event.chan.is_empty() { &rt.event.chan } else { &rt.event.target };
+            let w = if name.is_empty() { 0 } else { rt.wins.wid_of(&rt.state.server_id, name) };
+            match if w == 0 { rt.wins.active_wid } else { w } {
+                0 => String::new(),
+                w => w.to_string(),
+            }
+        }
+        "activewid" => match rt.wins.active_wid {
+            0 => String::new(),
+            w => w.to_string(),
+        },
         "onchan" => {
             // $onchan(#chan) -> are you in that channel?
             if rt.state.channels.iter().any(|c| c.name.eq_ignore_ascii_case(&a(0))) {
@@ -2346,6 +2377,7 @@ mod tests {
             state: std::sync::Arc::new(Default::default()),
             active: String::new(),
             conns: Default::default(),
+            wins: Default::default(),
             sockets: std::sync::Arc::new(crate::script::eval::NoSockets),
             input: std::sync::Arc::new(crate::script::eval::NoInput),
             caller: "command",
@@ -2565,6 +2597,7 @@ mod tests {
             state: std::sync::Arc::new(Default::default()),
             active: String::new(),
             conns: Default::default(),
+            wins: Default::default(),
             sockets: std::sync::Arc::new(crate::script::eval::NoSockets),
             input: std::sync::Arc::new(crate::script::eval::NoInput),
             caller: "command",
@@ -2651,6 +2684,7 @@ mod tests {
             state: std::sync::Arc::new(Default::default()),
             active: String::new(),
             conns: Default::default(),
+            wins: Default::default(),
             sockets: std::sync::Arc::new(crate::script::eval::NoSockets),
             input: std::sync::Arc::new(crate::script::eval::NoInput),
             caller: "command",

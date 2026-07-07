@@ -117,6 +117,8 @@ pub fn run() {
             script::script_run_dialog,
             script::script_sockets,
             script::script_set_active,
+            script::script_window_open,
+            script::script_window_close,
             script::script_popups,
             script::script_run_popup,
             script::input::script_prompt_reply,

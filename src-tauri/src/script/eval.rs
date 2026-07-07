@@ -205,6 +205,26 @@ impl ConnsView {
     }
 }
 
+/// A per-run view of the window registry, for `$wid`/`$activewid`.
+#[derive(Clone, Default)]
+pub struct WinView {
+    /// `(wid, server_id, name)` for every open window.
+    pub entries: Vec<(u32, String, String)>,
+    /// The active window's wid (0 = none reported).
+    pub active_wid: u32,
+}
+
+impl WinView {
+    /// The wid of a window (0 if unknown) — backs `$wid`.
+    pub fn wid_of(&self, server_id: &str, name: &str) -> u32 {
+        self.entries
+            .iter()
+            .find(|(_, sid, n)| sid == server_id && n.eq_ignore_ascii_case(name))
+            .map(|(w, _, _)| *w)
+            .unwrap_or(0)
+    }
+}
+
 /// The execution context for a single alias/event run.
 pub struct Runtime<'a> {
     pub script: &'a Script,
@@ -232,6 +252,8 @@ pub struct Runtime<'a> {
     pub state: std::sync::Arc<crate::irc::state::StateSnapshot>,
     /// Connection registry view for `$cid`/`$scon`/`$activecid`.
     pub conns: ConnsView,
+    /// Window registry view for `$wid`/`$activewid`.
+    pub wins: WinView,
     /// Synchronous socket backend for `/socklisten`/`/sockaccept`/`$sock(...)`.
     pub sockets: std::sync::Arc<dyn ScriptSockets>,
     /// Backend for `$input` prompts.
