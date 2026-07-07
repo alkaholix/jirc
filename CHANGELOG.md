@@ -12,6 +12,12 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🔠 26.7.23 — Case-sensitive identifiers
+
+- Added exact-match versions of common text identifiers: **`$istokcs`**, **`$findtokcs`**, **`$replacecs`**, **`$removecs`**, **`$poscs`**, **`$countcs`** — for when upper/lower case matters.
+
+---
+
 ## 🧭 26.7.22 — Token tweaks
 
 - **`$puttok`** and **`$instok`** accept negative positions now (`-1` = from the end), matching `$gettok`.

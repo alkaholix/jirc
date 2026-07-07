@@ -1056,6 +1056,65 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 .sum();
             total.to_string()
         }
+        // Case-sensitive variants (mIRC appends `cs`). The base identifiers are
+        // case-insensitive; these use exact matching.
+        "poscs" => {
+            let (hay, needle) = (a(0), a(1));
+            let n = a(2).parse::<usize>().unwrap_or(1).max(1);
+            match hay.match_indices(needle.as_str()).nth(n - 1) {
+                Some((b, _)) => (hay[..b].chars().count() + 1).to_string(),
+                None => "0".to_string(),
+            }
+        }
+        "countcs" => {
+            let hay = a(0);
+            args.iter()
+                .skip(1)
+                .filter(|s| !s.is_empty())
+                .map(|s| hay.matches(s.as_str()).count())
+                .sum::<usize>()
+                .to_string()
+        }
+        "replacecs" => {
+            let mut text = a(0);
+            let mut i = 1;
+            while i + 1 < args.len() {
+                if !args[i].is_empty() {
+                    text = text.replace(args[i].as_str(), args[i + 1].as_str());
+                }
+                i += 2;
+            }
+            text
+        }
+        "removecs" => {
+            let mut text = a(0);
+            for s in args.iter().skip(1).filter(|s| !s.is_empty()) {
+                text = text.replace(s.as_str(), "");
+            }
+            text
+        }
+        "istokcs" => {
+            let sep = sep_code(&a(2));
+            let needle = a(1);
+            bool_str(!needle.is_empty() && a(0).split(sep).any(|t| t == needle.as_str()))
+        }
+        "findtokcs" => {
+            let sep = sep_code(&a(3));
+            let needle = a(1);
+            let n = a(2).parse::<usize>().unwrap_or(1).max(1);
+            let mut seen = 0;
+            let mut result = 0;
+            for (i, t) in a(0).split(sep).enumerate() {
+                if t == needle.as_str() {
+                    seen += 1;
+                    if seen == n {
+                        result = i + 1;
+                        break;
+                    }
+                }
+            }
+            result.to_string()
+        }
         "reverse" => a(0).chars().rev().collect(),
         "abs" => a(0).parse::<f64>().map(|n| fmt_num(n.abs())).unwrap_or_default(),
         "int" => a(0).parse::<f64>().map(|n| (n.trunc() as i64).to_string()).unwrap_or_default(),
@@ -2844,6 +2903,14 @@ mod tests {
         assert_eq!(e("sorttok", &["a b c", "32", "r"]), "c b a");
         // channel-prefix order ~ & @ % + then none (stable within a rank).
         assert_eq!(e("sorttok", &["+aa @bb +cc dd @ee", "32", "c"]), "@bb @ee +aa +cc dd");
+        // case-sensitive variants
+        assert_eq!(e("istokcs", &["a B c", "B", "32"]), "$true");
+        assert_eq!(e("istokcs", &["a B c", "b", "32"]), "$false");
+        assert_eq!(e("replacecs", &["Hello", "l", "L"]), "HeLLo");
+        assert_eq!(e("replacecs", &["Hello", "L", "x"]), "Hello");
+        assert_eq!(e("poscs", &["aAa", "A", "1"]), "2");
+        assert_eq!(e("countcs", &["aAa", "a"]), "2");
+        assert_eq!(e("findtokcs", &["a A a", "A", "1", "32"]), "2");
         assert_eq!(e("wildtok", &["cat car dog", "ca*", "2", "32"]), "car");
         assert_eq!(e("wildtok", &["cat car dog", "ca*", "0", "32"]), "2");
         assert_eq!(e("matchtok", &["cat car dog", "ar", "1", "32"]), "car");
