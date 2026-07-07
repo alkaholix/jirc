@@ -253,6 +253,9 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         // $unsafe(text): mIRC delays one evaluation level to survive double-eval
         // contexts (timers etc.); jIRC evaluates once, so it's a passthrough.
         "unsafe" => a(0),
+        // $stripped -> control codes stripped from the incoming message by the
+        // strip-incoming setting. jIRC doesn't strip incoming messages, so 0.
+        "stripped" => "0".to_string(),
         "comchan" => {
             // $comchan(nick, N) -> Nth channel you share with nick (N=0 → count).
             let who = a(0).to_lowercase();
@@ -2333,6 +2336,38 @@ fn eval_read(rt: &mut Runtime, args: &[String]) -> String {
         let idx = rand_range(0, lines.len() as i64 - 1) as usize;
         rt.vars.insert(READN_KEY.into(), (idx + 1).to_string());
         lines.get(idx).copied().unwrap_or("").to_string()
+    }
+}
+
+/// `$var(name, N)` -> the Nth matching variable name (with `%`; N=0 -> count),
+/// or its `.value`. The name is taken *literally* (not dereferenced, like `/set`)
+/// and may be a wildcard; internal NUL-prefixed keys are excluded. Sorted for a
+/// stable order.
+pub(crate) fn eval_var(rt: &mut Runtime, args: &[String], prop: &str) -> String {
+    let raw0 = args.first().map(String::as_str).unwrap_or("");
+    let pat = raw0.trim().trim_start_matches('%');
+    let n: usize = rt
+        .expand(args.get(1).map(String::as_str).unwrap_or(""))
+        .trim()
+        .parse()
+        .unwrap_or(0);
+    let mut names: Vec<String> = rt
+        .vars
+        .keys()
+        .filter(|k| !k.contains('\u{0}') && wildcard_match(pat, k.as_str()))
+        .cloned()
+        .collect();
+    names.sort();
+    if n == 0 {
+        names.len().to_string()
+    } else if let Some(name) = names.get(n - 1) {
+        match prop {
+            "value" => rt.vars.get(name).cloned().unwrap_or_default(),
+            "local" => bool_str(false),
+            _ => format!("%{name}"),
+        }
+    } else {
+        String::new()
     }
 }
 

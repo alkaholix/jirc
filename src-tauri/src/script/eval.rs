@@ -2043,6 +2043,24 @@ impl<'a> Runtime<'a> {
             let inner = read_balanced(chars, i);
             return self.eval_iif(&split_args(&inner));
         }
+        // $var's name argument is a literal pattern (like /set), not a value to
+        // dereference — hand it the raw args, plus any `.property`, unexpanded.
+        if name.eq_ignore_ascii_case("var") && chars.get(*i) == Some(&'(') {
+            let inner = read_balanced(chars, i);
+            let prop = if chars.get(*i) == Some(&'.') {
+                let mut j = *i + 1;
+                let p = read_name(chars, &mut j);
+                if p.is_empty() {
+                    String::new()
+                } else {
+                    *i = j;
+                    p
+                }
+            } else {
+                String::new()
+            };
+            return ident::eval_var(self, &split_args(&inner), &prop);
+        }
         // Optional (args).
         let (args, had_parens) = if chars.get(*i) == Some(&'(') {
             let inner = read_balanced(chars, i);

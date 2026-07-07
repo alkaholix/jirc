@@ -12,6 +12,12 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🔎 26.7.29 — `$var` variable lookup
+
+- **`$var(%prefix*, N)`** lets a script list its own variables — count them (`N=0`), get the Nth name, or read `.value`. Handy for "unset everything matching" or debugging.
+
+---
+
 ## 🏷️ 26.7.28 — `$prop` for custom identifiers
 
 - **`$prop`** lets your own identifiers read the `.property` they were called with — e.g. `$temp(20).celsius` vs `$temp(20).fahrenheit` can now do different things.

@@ -2893,6 +2893,24 @@ mod tests {
     }
 
     #[test]
+    fn var_introspection() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias t {\n\
+               set %fruit.apple red\n\
+               set %fruit.grape purple\n\
+               set %other 1\n\
+               /msg #c $var(%fruit*,0) $var(%fruit*,1) $var(%fruit*,1).value\n\
+             }",
+        );
+        // 2 match; sorted, %fruit.apple is 1st; its value is red.
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :2 %fruit.apple red".into())]
+        );
+    }
+
+    #[test]
     fn dynamic_variable_brackets() {
         let engine = ScriptEngine::new();
         engine.load(
