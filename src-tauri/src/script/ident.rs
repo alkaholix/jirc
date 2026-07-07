@@ -1143,11 +1143,23 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             toks.join(&sep.to_string())
         }
         "sorttok" => {
-            // $sorttok(list, sepcode, [options]) -> sorted; opts: n=numeric, r=reverse
+            // $sorttok(list, sepcode, [options]) -> sorted.
+            // opts: a=alpha (default), n=numeric, c=channel-prefix, r=reverse.
             let sep = sep_code(&a(1));
             let opts = a(2).to_lowercase();
             let mut toks: Vec<String> = a(0).split(sep).map(String::from).collect();
-            if opts.contains('n') {
+            if opts.contains('c') {
+                // Channel prefix order ~ & @ % + then none; stable within a rank.
+                let rank = |t: &str| match t.chars().next() {
+                    Some('~') => 0,
+                    Some('&') => 1,
+                    Some('@') => 2,
+                    Some('%') => 3,
+                    Some('+') => 4,
+                    _ => 5,
+                };
+                toks.sort_by_key(|t| rank(t));
+            } else if opts.contains('n') {
                 toks.sort_by(|x, y| {
                     let (x, y) = (x.parse::<f64>().unwrap_or(0.0), y.parse::<f64>().unwrap_or(0.0));
                     x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal)
@@ -2748,6 +2760,8 @@ mod tests {
         assert_eq!(e("sorttok", &["c a b", "32"]), "a b c");
         assert_eq!(e("sorttok", &["3 1 2", "32", "n"]), "1 2 3");
         assert_eq!(e("sorttok", &["a b c", "32", "r"]), "c b a");
+        // channel-prefix order ~ & @ % + then none (stable within a rank).
+        assert_eq!(e("sorttok", &["+aa @bb +cc dd @ee", "32", "c"]), "@bb @ee +aa +cc dd");
         assert_eq!(e("wildtok", &["cat car dog", "ca*", "2", "32"]), "car");
         assert_eq!(e("wildtok", &["cat car dog", "ca*", "0", "32"]), "2");
         assert_eq!(e("matchtok", &["cat car dog", "ar", "1", "32"]), "car");

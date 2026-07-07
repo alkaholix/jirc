@@ -797,7 +797,10 @@ impl<'a> Runtime<'a> {
             "halt" | "haltdef" => {
                 self.halted = true;
             }
-            "return" => {
+            "return" | "returnex" => {
+                // jIRC's return preserves spaces (mIRC's return strips leading/
+                // trailing/repeated spaces — a common footgun); returnex, which in
+                // mIRC preserves them, is therefore a synonym here.
                 self.ret = Some(self.expand(raw_args));
                 self.halted = true;
             }

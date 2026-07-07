@@ -2771,6 +2771,19 @@ mod tests {
     }
 
     #[test]
+    fn returnex_is_return_synonym() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias val { returnex hello world }\n\
+             alias t { /msg #c $val }",
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :hello world".into())]
+        );
+    }
+
+    #[test]
     fn v1_v2_and_lazy_iif() {
         let engine = ScriptEngine::new();
         engine.load(

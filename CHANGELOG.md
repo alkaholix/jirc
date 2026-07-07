@@ -12,6 +12,13 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🔤 26.7.19 — `$sorttok` by rank + `returnex`
+
+- **`$sorttok(..., c)`** sorts a list by channel prefix (owner, admin, op, half-op, voice, then the rest) — handy for tidy nick lists.
+- **`returnex`** now works as an alias for `return` (jIRC's `return` already keeps your spaces intact).
+
+---
+
 ## ✂️ 26.7.18 — Sharper `$mid` and `$strip`
 
 - **`$strip(text, c)`** can now remove just the thing you ask for (colour, bold, underline, …) instead of everything.
