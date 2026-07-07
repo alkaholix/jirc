@@ -2720,6 +2720,57 @@ mod tests {
     }
 
     #[test]
+    fn iif_supports_state_operators() {
+        use crate::irc::state::{ChannelView, StateSnapshot};
+        let snap = StateSnapshot {
+            channels: vec![ChannelView {
+                name: "#c".into(),
+                nicks: vec!["alice".into(), "bob".into()],
+                members: vec![("bob".into(), "@".into()), ("alice".into(), "".into())],
+                bans: vec![],
+            }],
+            ..Default::default()
+        };
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "irc.x",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(snap),
+        };
+        let engine = ScriptEngine::new();
+        // $iif's condition is now evaluated like `if`, so isop/ison/… work.
+        engine.load("alias t { /msg #c $iif(bob isop #c,op,notop) $iif(alice isop #c,op,notop) }");
+        assert_eq!(
+            engine.run_alias(&rctx, "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :op notop".into())]
+        );
+    }
+
+    #[test]
+    fn var_set_math() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias t {\n\
+               var %a 1 + 2\n\
+               var %b 2 ^ 16\n\
+               var %c 7 % 3\n\
+               var %d 1 + 1 + 1\n\
+               var -n %e 9 - 4\n\
+               var %f a + b\n\
+               set %g 3 * 4\n\
+               /msg #c %a/%b/%c/%d/%e/%f/%g\n\
+             }",
+        );
+        // +, ^, % compute; `1 + 1 + 1` (not 3 tokens), `-n`, and non-numeric stay
+        // literal; /set does math too. Also exercises the no-`=` /var form.
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :3/65536/1/1 + 1 + 1/9 - 4/a + b/12".into())]
+        );
+    }
+
+    #[test]
     fn v1_v2_and_lazy_iif() {
         let engine = ScriptEngine::new();
         engine.load(

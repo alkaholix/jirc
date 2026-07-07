@@ -42,3 +42,6 @@ CLAUDE-OPUS-4.8.md
 
 # Internal project docs — kept LOCAL only, not on the public repo. README.md stays public.
 docs/*.md
+
+# Local mSL knowledge base (reference only) — kept LOCAL, never uploaded.
+mirckb-master/

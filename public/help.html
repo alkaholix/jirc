@@ -93,6 +93,7 @@
   <a href="#hash">Hash tables</a>
   <a href="#sockets">Sockets</a>
   <h2>Notes</h2>
+  <a href="#safety">Safety (text stays text)</a>
   <a href="#limits">What's not supported</a>
   <h2>About</h2>
   <a href="#thanks">Thanks &amp; credits</a>
@@ -857,6 +858,38 @@ and socket events run in the context of the connection that opened them — so
 </code></pre>
 <p>The simple form works too — the line is in <code>$1-</code>, so you can skip
 <code>/sockread</code> entirely: <code>on *:SOCKREAD:mybot:{ if (PING isin $1-) { … } }</code>.</p>
+
+<h2 id="safety">Safety: other people's text stays text</h2>
+<p>This is one place jIRC deliberately behaves differently from mIRC — and it's
+in your favour. In mIRC, a few things get <strong>evaluated twice</strong>, which
+means a stranger's message (or a line in a file) can quietly turn into
+<em>commands your client then runs</em>. That's the source of many "my bot got
+hijacked" stories. jIRC evaluates once and treats data as data, so those tricks
+simply don't work here.</p>
+<div class="note">
+<p>Say you run a reminder bot:</p>
+<pre><code><span class="k">on</span> *:TEXT:!remind *:#:{ <span class="k">/timer</span> 1 <span class="i">$2</span> notice <span class="i">$nick</span> <span class="i">$3-</span> }</code></pre>
+<p>Now someone types:</p>
+<pre><code>!remind 5 hi there | quit hacked!</code></pre>
+<p>In <strong>mIRC</strong>, when the timer fires 5 seconds later it re-reads its
+command, sees the <code>|</code> as a command separator, and actually runs
+<code>/quit hacked!</code> — the attacker just quit your client. In
+<strong>jIRC</strong>, the reminder text is treated as plain text, so your bot
+just says "<code>hi there | quit hacked!</code>" and nothing bad happens.</p>
+</div>
+<p>The same protection applies elsewhere:</p>
+<ul>
+  <li><strong>Reading files</strong> (<code>$read</code>, <code>$readini</code>):
+    mIRC treats each line of a file as code; jIRC returns the line as plain text.</li>
+  <li><strong>Maths</strong> (<code>$calc</code>): in mIRC <code>$calc(%password)</code>
+    can leak a variable's value; in jIRC <code>$calc</code> only does maths on what
+    you actually give it.</li>
+  <li><strong>Running commands on other connections / after a delay</strong>
+    (<code>/timer</code>, <code>/scon</code>, <code>/scid</code>): the command text is
+    kept as-is instead of being re-run through the interpreter.</li>
+</ul>
+<p>The upshot: you don't need mIRC's <code>$safe</code>/<code>$unsafe</code>
+work-arounds in jIRC — text from other people, or from files, stays text.</p>
 
 <h2 id="limits">What's not supported</h2>
 

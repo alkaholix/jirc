@@ -2051,7 +2051,7 @@ fn num2(a: &str, b: &str, f: fn(f64, f64) -> f64) -> String {
     }
 }
 
-fn fmt_num(n: f64) -> String {
+pub(crate) fn fmt_num(n: f64) -> String {
     if n.fract() == 0.0 {
         format!("{}", n as i64)
     } else {

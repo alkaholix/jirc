@@ -12,6 +12,14 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🧮 26.7.17 — `/var` maths + safer, smarter `$iif`
+
+- **`/var` and `/set` do maths**: `var %a 1 + 2` sets `%a` to `3` (one operation, e.g. `+ - * / % ^`). Things that aren't a clean number-operator-number, or use `-n`, stay as text — just like mIRC. The `=` is now optional too (`var %a 1 + 2`).
+- **`$iif` conditions** now understand channel operators like `isop`/`ison`, matching `if`.
+- **New help section** explaining, in plain English, why other people's text can't turn into commands in jIRC (no double-evaluation).
+
+---
+
 ## 🔔 26.7.16 — Notify-list events
 
 - **`on NOTIFY`** and **`on UNOTIFY`** let a script react when a friend on your notify/watch list comes online or goes offline — `$nick` is who changed. e.g. `on *:NOTIFY:/msg $nick welcome back!`

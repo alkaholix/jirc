@@ -999,25 +999,38 @@ impl<'a> Runtime<'a> {
     /// line as the value verbatim (no `=`, no comma splitting). Timing switches
     /// like `-u30`/`-z` are accepted but not timed; the value is still set.
     fn cmd_set(&mut self, raw: &str, is_var: bool) {
-        let (_flags, rest) = split_switches(raw);
+        let (flags, rest) = split_switches(raw);
+        // mIRC applies one math operation by default (`var %a 1 + 2` -> 3);
+        // -n and -p suppress it (keep the value literal).
+        let no_math = flags.contains('n') || flags.contains('p');
         if is_var {
             for decl in split_top_commas(rest) {
                 let decl = decl.trim();
                 if decl.is_empty() {
                     continue;
                 }
-                let (name, value) = match decl.split_once('=') {
-                    Some((n, v)) => (n.trim(), self.expand(v.trim())),
-                    None => (decl, String::new()),
-                };
-                let key = name.trim_start_matches('%').trim().to_string();
-                if !key.is_empty() {
-                    self.vars.insert(key, value);
+                // The name runs to the first space or '='; then an optional '='
+                // assignment (mIRC's `=` is optional and stripped, unlike /set).
+                let name_end =
+                    decl.find(|c: char| c.is_whitespace() || c == '=').unwrap_or(decl.len());
+                let key = decl[..name_end].trim_start_matches('%').trim().to_string();
+                if key.is_empty() {
+                    continue;
                 }
+                let vraw = decl[name_end..].trim_start();
+                let vraw = vraw.strip_prefix('=').map(str::trim_start).unwrap_or(vraw);
+                let mut value = self.expand(vraw);
+                if !no_math {
+                    value = try_var_math(&value).unwrap_or(value);
+                }
+                self.vars.insert(key, value);
             }
         } else if let Some((name, value)) = rest.split_once(char::is_whitespace) {
             let key = name.trim_start_matches('%').to_string();
-            let value = self.expand(value.trim());
+            let mut value = self.expand(value.trim());
+            if !no_math {
+                value = try_var_math(&value).unwrap_or(value);
+            }
             self.vars.insert(key, value);
         } else if !rest.is_empty() {
             self.vars.insert(rest.trim_start_matches('%').to_string(), String::new());
@@ -2045,9 +2058,11 @@ impl<'a> Runtime<'a> {
     /// then expand only the branch that's taken (so `$v1` inside it resolves, and
     /// the other branch isn't evaluated — mIRC's behaviour).
     fn eval_iif(&mut self, args: &[String]) -> String {
-        let cond = self.expand(args.first().map(String::as_str).unwrap_or(""));
-        self.record_v(&cond);
-        let taken = if eval_bool_public(&cond) { args.get(1) } else { args.get(2) };
+        // Evaluate the condition exactly like `if` — state-aware operators
+        // (isop/ison/ischan/…) work, and $v1/$v2 are published — then expand only
+        // the taken branch (the other isn't evaluated, matching mIRC).
+        let is_true = self.eval_cond(args.first().map(String::as_str).unwrap_or(""));
+        let taken = if is_true { args.get(1) } else { args.get(2) };
         taken.map(|a| self.expand(a)).unwrap_or_default()
     }
 
@@ -2557,6 +2572,30 @@ fn is_fully_parenthesised(s: &str) -> bool {
 /// `("m", "tbl item")`. Returns `("", trimmed)` when there are no switches.
 /// Only a leading `-token` is treated as switches; later `-` args (e.g. a
 /// negative value) are left in place.
+/// mIRC's single `/var`/`/set` math operation: exactly 3 space-separated tokens
+/// where the 1st and 3rd parse as numbers and the 2nd is one of `+ - * / % ^ &`.
+/// Returns the computed value (formatted like `$calc`), or `None` to keep the
+/// text literal — so `1 + 2` → `3`, but `2^16`, `1 + 1 + 1`, and `a + b` stay as-is.
+fn try_var_math(value: &str) -> Option<String> {
+    let toks: Vec<&str> = value.split_whitespace().collect();
+    if toks.len() != 3 {
+        return None;
+    }
+    let a: f64 = toks[0].parse().ok()?;
+    let b: f64 = toks[2].parse().ok()?;
+    let r = match toks[1] {
+        "+" => a + b,
+        "-" => a - b,
+        "*" => a * b,
+        "/" => a / b,
+        "%" => a % b,
+        "^" => a.powf(b),
+        "&" => ((a as i64) & (b as i64)) as f64,
+        _ => return None,
+    };
+    r.is_finite().then(|| crate::script::ident::fmt_num(r))
+}
+
 fn split_switches(raw: &str) -> (&str, &str) {
     let t = raw.trim_start();
     match t.strip_prefix('-') {
