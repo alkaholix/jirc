@@ -12,6 +12,13 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🎚️ 26.7.25 — `$show` and `$result`
+
+- **`$show`** lets an alias tell whether it was run normally or silently (with a `.` prefix) — so it can be chatty or quiet to match.
+- **`$result`** gives you the value the last alias `/return`ed, however it was called.
+
+---
+
 ## 🔡 26.7.24 — Case-sensitive identifiers, completed
 
 - Added the rest of the exact-match family: **`$matchtokcs`**, **`$wildtokcs`**, **`$remtokcs`**, **`$reptokcs`**, **`$addtokcs`**, **`$sorttokcs`**, **`$replacexcs`**. Every text identifier with a case-sensitive form in mIRC now has one.

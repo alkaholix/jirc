@@ -275,6 +275,7 @@ impl ScriptEngine {
             sockets: g.sockets.clone(),
             input: g.input.clone(),
             caller: "menu",
+            show: true,
         };
         eval_popup_labels(&mut rt, &raw)
     }
@@ -325,6 +326,7 @@ impl ScriptEngine {
             sockets: g.sockets.clone(),
             input: g.input.clone(),
             caller: "command",
+            show: true,
         };
         rt.run(&alias.body);
         rt.actions
@@ -395,6 +397,7 @@ impl ScriptEngine {
             sockets: g.sockets.clone(),
             input: g.input.clone(),
             caller: "command",
+            show: true,
         };
         rt.run(&body);
         rt.actions
@@ -459,6 +462,7 @@ impl ScriptEngine {
                 sockets: g.sockets.clone(),
             input: g.input.clone(),
                 caller: "event",
+                show: true,
             };
             rt.run(&ev.body);
             halted |= rt.halted;
@@ -2824,6 +2828,31 @@ mod tests {
         assert_eq!(
             engine.run_alias(&ctx(), "#c", "t", ""),
             vec![Action::Send("PRIVMSG #c :hello world".into())]
+        );
+    }
+
+    #[test]
+    fn show_and_result() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias inner { return payload }\n\
+             alias verbose { /msg #c show=$show }\n\
+             alias t {\n\
+               verbose\n\
+               .verbose\n\
+               inner\n\
+               /msg #c result=$result\n\
+             }",
+        );
+        // `verbose` (no dot) -> $show true; `.verbose` -> $show false; after the
+        // `inner` command, $result holds its /return value.
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![
+                Action::Send("PRIVMSG #c :show=$true".into()),
+                Action::Send("PRIVMSG #c :show=$false".into()),
+                Action::Send("PRIVMSG #c :result=payload".into()),
+            ]
         );
     }
 

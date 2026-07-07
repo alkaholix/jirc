@@ -85,6 +85,8 @@ pub const SOCK_BR_KEY: &str = "\u{0}sockbr";
 /// back by `$v1`/`$v2` (the NUL prefix keeps them out of the `%var` namespace).
 pub const V1_KEY: &str = "\u{0}v1";
 pub const V2_KEY: &str = "\u{0}v2";
+/// Value returned by the most recently called alias, for `$result`.
+pub const RESULT_KEY: &str = "\u{0}result";
 
 /// Sentinel that `$style(N)` returns; consumed while building a popup menu (a
 /// Private-Use char, so it can't collide with a real label). The digit that
@@ -267,6 +269,9 @@ pub struct Runtime<'a> {
     /// What invoked the current alias frame ("command"/"event"/"menu"/"identifier"),
     /// for `$caller`/`$isid`. Saved + restored around nested alias calls.
     pub caller: &'static str,
+    /// Verbose flag for `$show`: `false` inside an alias invoked as a silent
+    /// `.command`, else `true`. Saved + restored around nested alias calls.
+    pub show: bool,
 }
 
 impl<'a> Runtime<'a> {
@@ -369,7 +374,9 @@ impl<'a> Runtime<'a> {
         // mIRC's silent prefix: `.command` runs the command but suppresses its
         // output. We don't echo command output anyway, so just drop a leading
         // dot — otherwise `.timer`, `.msg`, `.notice`, … fail to match and get
-        // mis-sent to the server as a raw line.
+        // mis-sent to the server as a raw line. The dot also sets `$show` to
+        // `$false` inside a called alias.
+        let silent = lname.starts_with('.');
         let lname = lname.strip_prefix('.').unwrap_or(lname.as_str());
         match lname {
             "echo" => self.cmd_echo(raw_args),
@@ -835,11 +842,16 @@ impl<'a> Runtime<'a> {
                 if let Some(alias) = self.script.find_active_alias(&lname, self.vars) {
                     let body = alias.body.clone();
                     let params = split_params(&self.expand(raw_args));
-                    // Invoked via the command syntax (/alias) — flag for $caller.
+                    // Invoked via the command syntax (/alias) — flag for $caller,
+                    // pass $show (`.alias` -> $false), record the return for $result.
                     let saved = self.caller;
+                    let saved_show = self.show;
                     self.caller = "command";
-                    self.call_alias(&body, params);
+                    self.show = !silent;
+                    let ret = self.call_alias(&body, params);
+                    self.vars.insert(RESULT_KEY.to_string(), ret);
                     self.caller = saved;
+                    self.show = saved_show;
                 } else {
                     // Fall back to a raw IRC command.
                     let args = self.expand(raw_args);

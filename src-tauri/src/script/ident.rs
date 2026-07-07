@@ -244,6 +244,10 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "halted" => bool_str(rt.halted),
         "caller" => rt.caller.to_string(),
         "isid" => bool_str(rt.caller == "identifier"),
+        // $show -> $false inside an alias invoked as a silent `.command`, else $true.
+        "show" => bool_str(rt.show),
+        // $result -> the value returned by the most recently called alias.
+        "result" => rt.vars.get(super::eval::RESULT_KEY).cloned().unwrap_or_default(),
         "comchan" => {
             // $comchan(nick, N) -> Nth channel you share with nick (N=0 → count).
             let who = a(0).to_lowercase();
@@ -1565,11 +1569,16 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             if let Some(alias) = rt.script.find_active_alias(other, rt.vars) {
                 let body = alias.body.clone();
                 // This alias is being used as an identifier — flag it for
-                // $caller/$isid for the duration of the call.
+                // $caller/$isid, keep $show true (identifiers aren't silenced),
+                // and record its return for $result.
                 let saved = rt.caller;
+                let saved_show = rt.show;
                 rt.caller = "identifier";
+                rt.show = true;
                 let result = rt.call_alias(&body, args.to_vec());
+                rt.vars.insert(super::eval::RESULT_KEY.to_string(), result.clone());
                 rt.caller = saved;
+                rt.show = saved_show;
                 return result;
             }
             // Unknown identifier: render literally so it is visible.
@@ -2636,6 +2645,7 @@ mod tests {
             sockets: std::sync::Arc::new(crate::script::eval::NoSockets),
             input: std::sync::Arc::new(crate::script::eval::NoInput),
             caller: "command",
+            show: true,
         };
         assert_eq!(eval_ident(&mut rt, "replace", &["abcabc".into(), "b".into(), "X".into()], ""), "aXcaXc");
         // $replace is case-INSENSITIVE in mIRC (a lowercase pattern matches
@@ -2862,6 +2872,7 @@ mod tests {
             sockets: std::sync::Arc::new(crate::script::eval::NoSockets),
             input: std::sync::Arc::new(crate::script::eval::NoInput),
             caller: "command",
+            show: true,
         };
         let f = |rt: &mut Runtime, prop: &str| eval_ident(rt, "file", &["probe.dat".into()], prop);
 
@@ -2949,6 +2960,7 @@ mod tests {
             sockets: std::sync::Arc::new(crate::script::eval::NoSockets),
             input: std::sync::Arc::new(crate::script::eval::NoInput),
             caller: "command",
+            show: true,
         }
     }
 
