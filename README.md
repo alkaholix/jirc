@@ -5,8 +5,10 @@ Linux) and speaking both **standard IRC** (RFC 1459/2812 + some IRCv3) and
 **IRCX** (the Microsoft chat extension protocol).
 
 > **Status: usable.** Multi-server chat, TLS/SASL, IRCX, a tabbed/tree UI, a
-> channel browser, scriptable popups, and a working mIRC-scripting (mSL) engine.
-> The main thing still missing is DCC (file transfer). See [ROADMAP.md](./docs/ROADMAP.md).
+> channel browser, scriptable popups, and a **mature native mIRC-scripting (mSL)
+> engine** — 200+ identifiers, access-level-gated events, and user lists. The
+> main thing still missing is DCC (file transfer). See the
+> [changelog](./CHANGELOG.md) and the [help &amp; scripting guide](./public/help.html).
 
 ## Features
 
@@ -44,8 +46,10 @@ the **?** button opens it in your browser.
 - **Script groups** — `#name on/off … #name end` with `/enable`/`/disable`/`/groups`
   and `$group`; disabled groups' aliases and events don't fire
 - `on` event handlers: TEXT/ACTION/NOTICE/**INPUT**/JOIN/PART/QUIT/NICK/**KICK**/
-  **MODE**/**TOPIC**/**INVITE**/CONNECT/**DISCONNECT**/**CONNECTFAIL**/**RAW**/**CTCP**/**CTCPREPLY**/**WALLOPS**/**SNOTICE**/**ERROR**/**PING**/**PONG**/**SIGNAL**,
-  plus per-mode **OP/VOICE/BAN/…** events
+  **MODE**/**TOPIC**/**INVITE**/CONNECT/**DISCONNECT**/**CONNECTFAIL**/**RAW**/**CTCP**/**CTCPREPLY**/**WALLOPS**/**SNOTICE**/**ERROR**/**PING**/**PONG**/**SIGNAL**/**OPEN**/**CLOSE**/**NOTIFY**/**UNOTIFY**/**START**/**UNLOAD**/**EXIT**,
+  per-mode **OP/VOICE/BAN/…** events, and **access-level gating** (`on 10:TEXT:…` fires only for level-10+ users)
+- **User access lists** — `/auser`/`/guser`/`/ruser`/`/iuser` with numeric or named
+  levels, queried by `$ulist`/`$level`/`$ulevel`/`$clevel`
 - **Identity & connect control** — `/anick`/`/mnick`/`/fullname`, and `/autojoin`
   (`-n`/`-s`/`-dN`) to control the connect-time autojoin from `on CONNECT`
 - `if`/`elseif`/`else`, `while`, `%variables`, hash tables (with `/hsave`/`/hload`), **`/timer`**
@@ -54,12 +58,16 @@ the **?** button opens it in your browser.
 - **Popups**: `menu nicklist { … }` blocks (with submenus) drive the right-click menu
 - **Custom dialogs** (`dialog`/`/did`/`$did`/`on DIALOG`) and **custom `@windows`**
   (`/window`/`/aline`/`$line`) — rendered natively; `@windows` detach like any window
-- ~55 identifiers (`$me $nick $chan $rand $calc $left/$right/$mid $iif $gettok
-  $sorttok $regex $read …`) and commands (`/msg /me /notice /join /mode /set /inc
-  /hadd /timer /write …`)
+- **200+ identifiers** (`$me $nick $chan $rand $calc $left/$right/$mid $iif $gettok
+  $sorttok $regex $read $prop $ulevel …`, plus case-sensitive `…cs` variants) and
+  commands (`/msg /me /notice /join /mode /set /inc /hadd /timer /write /auser …`)
+- **Faithful mSL evaluation** — `$(...)` (`$eval` short form), **dynamic variables**
+  (`%v. [ $+ [ $nick ] ]`), inline `/var` maths, `$prop` for custom identifiers;
+  and jIRC evaluates *once*, so other people's text can't turn into commands
+  (no mSL-injection footguns — see the help guide's "Safety" section)
 
-Not 100% mIRC-compatible — DCC (file transfer) is the main remaining gap; see
-[ROADMAP.md](./docs/ROADMAP.md) and the [help guide](./public/help.html).
+Not 100% mIRC-compatible — DCC (file transfer) is the main remaining gap; see the
+[changelog](./CHANGELOG.md) and the [help guide](./public/help.html).
 
 ## Install / develop
 
@@ -113,8 +121,10 @@ dialog. On Linux, running needs a Secret Service provider installed
 
 ## Contributing
 
-Architecture, conventions, and build/test details are in [CLAUDE.md](./CLAUDE.md);
-the feature matrix and priorities are in [ROADMAP.md](./docs/ROADMAP.md).
+The [changelog](./CHANGELOG.md) tracks what's landed and the
+[help &amp; scripting guide](./public/help.html) is the full reference. Build and
+test with the commands above; the IRC/IRCX protocol logic lives in
+`src-tauri/src/irc/` and the mSL engine in `src-tauri/src/script/`.
 
 ## License
 

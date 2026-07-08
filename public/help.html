@@ -923,24 +923,28 @@ against jIRC being cross-platform and safe to share:
 
 <h3>Now supported</h3>
 <div class="note">
-Landed since early builds — these <strong>do</strong> work now: <strong>DCC</strong>
-(chat + file send/get), custom <code>@windows</code>, binary variables
+Landed since early builds — these <strong>do</strong> work now: custom
+<code>@windows</code>, binary variables
 (<code>&amp;binvar</code>/<code>$bvar</code>/<code>/bset</code>), <code>$regsubex</code>,
 crypto (<code>$md5</code>/<code>$sha1</code>/<code>$hmac</code>), <code>$input</code>,
 <code>.ini</code> files (<code>$readini</code>/<code>/writeini</code>), most
 <code>.property</code> suffixes (<code>$sock(x).status</code>, <code>$hget(t,N).item</code>),
-and IRCX owner/host keys. Some aren't in the reference tables above yet.
+IRCX owner/host keys, <strong>user access lists</strong>
+(<code>/auser</code>/<code>$ulevel</code> + level-gated events like <code>on 10:TEXT</code>),
+<strong>dynamic variables</strong> (<code>%v. [ $+ [ $nick ] ]</code>), and window /
+notify / lifecycle events (<code>on OPEN</code>/<code>CLOSE</code>/<code>NOTIFY</code>/<code>START</code>/<code>EXIT</code>).
+Some aren't in the reference tables above yet.
 </div>
 
 <h3>Not yet (may come later)</h3>
 <div class="note warn">
 Planned or possible future work — scripts using these won't work today:
 <ul style="margin:.5rem 0 0">
-  <li>Picture / drawing <code>@windows</code>, and some lifecycle events
-    (<code>on OPEN</code>, <code>on CLOSE</code>, <code>on NOTIFY</code>).</li>
+  <li><strong>DCC</strong> — chat and file transfer (the main remaining gap).</li>
+  <li>Auto-op / auto-voice / protect lists, and picture / drawing <code>@windows</code>.</li>
   <li>A few <strong>property suffixes</strong> such as <code>$chan(#).topic</code> — most
     now work, just not every one.</li>
-  <li>A long tail of rarely-used identifiers.</li>
+  <li>A long tail of rarely-used identifiers, and Windows-only bits (COM/DLL/DDE).</li>
 </ul>
 </div>
 
