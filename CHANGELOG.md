@@ -12,6 +12,13 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🚦 26.7.31 — Access-controlled events (user list part 2)
+
+- **Level-gated events**: `on 10:TEXT:!op &:#:{ mode # +o $2 }` now only triggers for users you've given level 10+. Also `on @:` (ops only), `on =5:` (exactly level 5), and named levels like `on admin:`.
+- **`$ulevel`** / **`$clevel`** tell you the user's level and the event's level, and **`/guser`** adds someone by looking up their address automatically.
+
+---
+
 ## 👥 26.7.30 — User access list (part 1)
 
 - The start of mIRC's **user list**: **`/auser`**, **`/ruser`**, **`/iuser`** to manage users with access levels, and **`$ulist`** / **`$level`** to query them. e.g. `/auser 10 *!*@friend.com` then `$level(nick!u@friend.com)` → `10`.

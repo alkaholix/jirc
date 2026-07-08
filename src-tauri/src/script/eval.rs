@@ -113,6 +113,10 @@ pub struct EventVars {
     pub event: String,
     /// The numeric of a raw server line (`on RAW`) — exposed as `$numeric`.
     pub numeric: String,
+    /// The event's matched access level (`$clevel`) and the triggering user's
+    /// matched level (`$ulevel`), set by the dispatcher's level gate.
+    pub clevel: String,
+    pub ulevel: String,
 }
 
 const STEP_LIMIT: u32 = 100_000;
@@ -796,6 +800,7 @@ impl<'a> Runtime<'a> {
             "amsg" => self.cmd_amsg(raw_args, false),
             "ame" => self.cmd_amsg(raw_args, true),
             "auser" => self.cmd_auser(raw_args),
+            "guser" => self.cmd_guser(raw_args),
             "ruser" => self.cmd_ruser(raw_args),
             "iuser" => self.cmd_iuser(raw_args),
             "ban" => self.cmd_ban(raw_args, true),
@@ -1070,6 +1075,36 @@ impl<'a> Runtime<'a> {
         if !levels.is_empty() && !address.is_empty() {
             self.users.add(&levels, &address, &info, add);
         }
+    }
+
+    /// `/guser [-a] <levels> <nick> [type] [info]` — like /auser, but looks the
+    /// nick's address up in the IAL and stores it masked by [type] (default 6).
+    fn cmd_guser(&mut self, raw: &str) {
+        let (flags, rest) = split_switches(raw);
+        let add = flags.contains('a');
+        let mut it = rest.splitn(3, char::is_whitespace);
+        let levels = self.expand(it.next().unwrap_or("").trim());
+        let nick = self.expand(it.next().unwrap_or("").trim());
+        let tail = it.next().unwrap_or("").trim();
+        // The optional [type] is a leading numeric token; the rest is [info].
+        let (typ, info) = match tail.split_once(char::is_whitespace) {
+            Some((t, r)) if t.parse::<u32>().is_ok() => (t, r.trim()),
+            _ if !tail.is_empty() && tail.parse::<u32>().is_ok() => (tail, ""),
+            _ => ("", tail),
+        };
+        let info = self.expand(info);
+        if levels.is_empty() || nick.is_empty() {
+            return;
+        }
+        let who = nick.to_lowercase();
+        let address = match self.state.ial.iter().find(|(n, _)| *n == who) {
+            Some((_, full)) => {
+                let t: u32 = if typ.is_empty() { 6 } else { typ.parse().unwrap_or(6) };
+                crate::script::ident::mask_address(full, t)
+            }
+            None => nick.clone(),
+        };
+        self.users.add(&levels, &address, &info, add);
     }
 
     /// `/ruser [levels] <nick|address>` — remove a user, or just the listed

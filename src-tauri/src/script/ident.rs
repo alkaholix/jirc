@@ -278,6 +278,10 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         }
         // $level(addr) -> the comma-joined levels of the first matching entry.
         "level" => rt.users.levels_for(&a(0)),
+        // $ulevel / $clevel -> the user's / the event's matched access level,
+        // set by the dispatcher's level gate.
+        "ulevel" => rt.event.ulevel.clone(),
+        "clevel" => rt.event.clevel.clone(),
         "comchan" => {
             // $comchan(nick, N) -> Nth channel you share with nick (N=0 → count).
             let who = a(0).to_lowercase();

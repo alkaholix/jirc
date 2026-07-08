@@ -143,4 +143,81 @@ impl UserList {
             .map(|e| e.levels.join(","))
             .unwrap_or_default()
     }
+
+    /// All access levels a user holds — the union of the levels on every entry
+    /// matching their `nick` or resolved `address` (deduped). Used to gate events.
+    pub fn levels_of(&self, nick: &str, address: &str) -> Vec<String> {
+        let mut entries: Vec<&UserEntry> = Vec::new();
+        if !nick.is_empty() {
+            entries.extend(self.matching(nick, None));
+        }
+        if !address.is_empty() {
+            entries.extend(self.matching(address, None));
+        }
+        let mut out: Vec<String> = Vec::new();
+        for e in entries {
+            for l in &e.levels {
+                if !out.iter().any(|x| x.eq_ignore_ascii_case(l)) {
+                    out.push(l.clone());
+                }
+            }
+        }
+        out
+    }
+}
+
+/// The highest numeric level in a user's level list (ignoring a leading `=`), as
+/// a string, or empty if none are numeric. Used for `$ulevel` on `*` events.
+fn highest_level(user_levels: &[String]) -> String {
+    user_levels
+        .iter()
+        .filter_map(|l| l.trim_start_matches('=').parse::<i64>().ok())
+        .max()
+        .map(|n| n.to_string())
+        .unwrap_or_default()
+}
+
+/// Decides whether an event with access-level prefix `event_level` fires for a
+/// user holding `user_levels`, whose channel-status prefixes are `status`
+/// (e.g. `"@+"`). Returns `Some((clevel, ulevel))` — the event level and the
+/// user's matched level — when it fires, else `None`.
+pub fn level_matches(event_level: &str, user_levels: &[String], status: &str) -> Option<(String, String)> {
+    let lvl = event_level.trim();
+    // `*` or empty: fires for anyone.
+    if lvl.is_empty() || lvl == "*" {
+        return Some(("*".into(), highest_level(user_levels)));
+    }
+    // Channel-status prefix (~ owner, & admin, @ op, % halfop, + voice).
+    if lvl.chars().count() == 1 {
+        if let Some(c) = lvl.chars().next().filter(|c| "~&@%+".contains(*c)) {
+            return status.contains(c).then(|| (lvl.into(), lvl.into()));
+        }
+    }
+    // `=N`: the user must hold exactly that level.
+    if let Some(n) = lvl.strip_prefix('=') {
+        return user_levels
+            .iter()
+            .any(|l| l.trim_start_matches('=') == n)
+            .then(|| (lvl.into(), n.into()));
+    }
+    // `N` or `+N`: the user needs a level >= N (an `=M` level only matches M == N).
+    let num = lvl.strip_prefix('+').unwrap_or(lvl);
+    if let Ok(want) = num.parse::<i64>() {
+        let mut best: Option<i64> = None;
+        for l in user_levels {
+            let matched = match l.strip_prefix('=') {
+                Some(exact) => exact.parse::<i64>().ok().filter(|&e| e == want),
+                None => l.parse::<i64>().ok().filter(|&m| m >= want),
+            };
+            if let Some(m) = matched {
+                best = Some(best.map_or(m, |b| b.max(m)));
+            }
+        }
+        return best.map(|b| (lvl.into(), b.to_string()));
+    }
+    // Named level: the user must hold that name.
+    user_levels
+        .iter()
+        .any(|l| l.trim_start_matches('=').eq_ignore_ascii_case(lvl))
+        .then(|| (lvl.into(), lvl.into()))
 }

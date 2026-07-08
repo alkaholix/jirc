@@ -340,6 +340,7 @@ fn parse_event_header(header: &str, body: Vec<Stmt>) -> Option<Event> {
     if fields.len() < 2 {
         return None;
     }
+    let level = fields[0].to_string();
     let kind = fields[1].to_ascii_uppercase();
     let (pattern, target) = if MATCHTEXT_EVENTS.contains(&kind.as_str()) {
         (
@@ -353,6 +354,7 @@ fn parse_event_header(header: &str, body: Vec<Stmt>) -> Option<Event> {
         )
     };
     Some(Event {
+        level,
         kind,
         pattern,
         target,
@@ -368,7 +370,7 @@ fn parse_event_header(header: &str, body: Vec<Stmt>) -> Option<Event> {
 /// preserved.
 fn parse_braceless_event(header: &str) -> Option<Event> {
     let mut top = header.trim().splitn(2, ':');
-    let _level = top.next()?;
+    let level = top.next()?.trim().to_string();
     let after_level = top.next()?;
     let mut ev = after_level.splitn(2, ':');
     let kind = ev.next()?.trim().to_ascii_uppercase();
@@ -412,6 +414,7 @@ fn parse_braceless_event(header: &str) -> Option<Event> {
         return None;
     }
     Some(Event {
+        level,
         kind,
         pattern,
         target,

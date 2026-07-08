@@ -34,6 +34,9 @@ pub struct Alias {
 /// An event handler, e.g. `on *:TEXT:*:#:{ .. }`.
 #[derive(Debug, Clone)]
 pub struct Event {
+    /// The access-level prefix before the kind: `*` (any), a number / `+N` (>= N),
+    /// `=N` (exactly N), a channel-status char (`@`/`%`/`+`/…), or a named level.
+    pub level: String,
     /// Event kind, uppercased: TEXT, JOIN, PART, etc.
     pub kind: String,
     /// Matchtext pattern (wildcards), e.g. `*` or `!hello*`. Empty if absent.

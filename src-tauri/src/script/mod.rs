@@ -444,6 +444,34 @@ impl ScriptEngine {
             if !script.group_enabled(vars, &ev.group) {
                 continue;
             }
+            // Access-level gate: the triggering user must satisfy the event's
+            // level prefix (`*` = anyone). $clevel/$ulevel are set from the match.
+            let mut ev_event = event.clone();
+            {
+                let addr = ctx
+                    .state
+                    .ial
+                    .iter()
+                    .find(|(n, _)| n.eq_ignore_ascii_case(&event.nick))
+                    .map(|(_, a)| a.as_str())
+                    .unwrap_or("");
+                let status = ctx
+                    .state
+                    .channels
+                    .iter()
+                    .find(|c| c.name.eq_ignore_ascii_case(&event.chan))
+                    .and_then(|c| c.members.iter().find(|(n, _)| n.eq_ignore_ascii_case(&event.nick)))
+                    .map(|(_, p)| p.as_str())
+                    .unwrap_or("");
+                let ulevels = users.levels_of(&event.nick, addr);
+                match users::level_matches(&ev.level, &ulevels, status) {
+                    Some((clevel, ulevel)) => {
+                        ev_event.clevel = clevel;
+                        ev_event.ulevel = ulevel;
+                    }
+                    None => continue,
+                }
+            }
             let mut rt = Runtime {
                 script: &script,
                 my_nick: ctx.my_nick,
@@ -455,7 +483,7 @@ impl ScriptEngine {
                 bins: &mut *bins,
                 windows: &mut *windows,
                 users: &mut *users,
-                event: event.clone(),
+                event: ev_event,
                 actions: Vec::new(),
                 halted: false,
                 steps: 0,
@@ -2934,6 +2962,43 @@ mod tests {
         assert_eq!(
             engine.run_alias(&ctx(), "#c", "t", ""),
             vec![Action::Send("PRIVMSG #c :10 / 1".into())]
+        );
+    }
+
+    #[test]
+    fn event_level_gating() {
+        use crate::irc::state::StateSnapshot;
+        let engine = ScriptEngine::new();
+        engine.load(
+            "on *:TEXT:!setup:#:{ auser 10 *!*@trusted.com }\n\
+             on 5:TEXT:!go:#:{ /msg #c ok5 }\n\
+             on 50:TEXT:!go:#:{ /msg #c ok50 }",
+        );
+        let snap = StateSnapshot {
+            ial: vec![("bob".into(), "bob!u@trusted.com".into())],
+            ..Default::default()
+        };
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(snap),
+        };
+        let ev = |t: &str| EventVars {
+            nick: "bob".into(),
+            chan: "#c".into(),
+            target: "#c".into(),
+            text: t.into(),
+            params: vec![t.into()],
+            ..Default::default()
+        };
+        // `*` event adds bob's mask at level 10.
+        engine.dispatch_event(&rctx, "TEXT", ev("!setup"));
+        // bob (level 10) triggers the `on 5:` handler but not `on 50:`.
+        assert_eq!(
+            engine.dispatch_event(&rctx, "TEXT", ev("!go")),
+            vec![Action::Send("PRIVMSG #c :ok5".into())]
         );
     }
 
