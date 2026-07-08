@@ -266,6 +266,8 @@ pub struct Runtime<'a> {
     pub bins: &'a mut crate::script::binvar::BinStore,
     /// Custom `@windows` for `/window`/`/aline`/`/rline`/`$window`/`$line`.
     pub windows: &'a mut crate::script::window::WindowStore,
+    /// User access list for `/auser`/`/ruser`/`$ulist`/`$level` + gated events.
+    pub users: &'a mut crate::script::users::UserList,
     /// What invoked the current alias frame ("command"/"event"/"menu"/"identifier"),
     /// for `$caller`/`$isid`. Saved + restored around nested alias calls.
     pub caller: &'static str,
@@ -793,6 +795,9 @@ impl<'a> Runtime<'a> {
             }
             "amsg" => self.cmd_amsg(raw_args, false),
             "ame" => self.cmd_amsg(raw_args, true),
+            "auser" => self.cmd_auser(raw_args),
+            "ruser" => self.cmd_ruser(raw_args),
+            "iuser" => self.cmd_iuser(raw_args),
             "ban" => self.cmd_ban(raw_args, true),
             "unban" => self.cmd_ban(raw_args, false),
             "query" => self.cmd_query(raw_args),
@@ -1054,6 +1059,46 @@ impl<'a> Runtime<'a> {
 
     /// `/unset [-sgl] <%var> [%var2 ...]` — remove one or more variables;
     /// names may be wildcards (`/unset %prefix.*`).
+    /// `/auser [-a] <levels> <nick|address> [info]` — add/edit a user-list entry.
+    fn cmd_auser(&mut self, raw: &str) {
+        let (flags, rest) = split_switches(raw);
+        let add = flags.contains('a');
+        let mut it = rest.splitn(3, char::is_whitespace);
+        let levels = self.expand(it.next().unwrap_or("").trim());
+        let address = self.expand(it.next().unwrap_or("").trim());
+        let info = self.expand(it.next().unwrap_or("").trim());
+        if !levels.is_empty() && !address.is_empty() {
+            self.users.add(&levels, &address, &info, add);
+        }
+    }
+
+    /// `/ruser [levels] <nick|address>` — remove a user, or just the listed
+    /// (numeric) levels. The first token is treated as a levels list only when it
+    /// looks numeric; otherwise it's the address and the whole entry is removed.
+    fn cmd_ruser(&mut self, raw: &str) {
+        let (_flags, rest) = split_switches(raw);
+        let rest = self.expand(rest);
+        let mut toks = rest.split_whitespace();
+        let first = toks.next().unwrap_or("");
+        let (levels, address) = match toks.next() {
+            Some(second) if is_level_list(first) => (first, second),
+            _ => ("", first),
+        };
+        if !address.is_empty() {
+            self.users.remove(levels, address);
+        }
+    }
+
+    /// `/iuser <nick|address> [info]` — set an existing entry's info string.
+    fn cmd_iuser(&mut self, raw: &str) {
+        let rest = self.expand(raw.trim());
+        if let Some((address, info)) = rest.split_once(char::is_whitespace) {
+            self.users.set_info(address.trim(), info.trim());
+        } else if !rest.is_empty() {
+            self.users.set_info(rest.trim(), "");
+        }
+    }
+
     fn cmd_unset(&mut self, raw: &str) {
         let (_flags, rest) = split_switches(raw);
         for tok in rest.split_whitespace() {
@@ -2689,6 +2734,16 @@ fn try_var_math(value: &str) -> Option<String> {
         _ => return None,
     };
     r.is_finite().then(|| crate::script::ident::fmt_num(r))
+}
+
+/// Whether a token looks like a `/ruser` levels list: comma-separated numbers,
+/// each optionally prefixed with `=`.
+fn is_level_list(s: &str) -> bool {
+    !s.is_empty()
+        && s.split(',').all(|p| {
+            let p = p.trim().trim_start_matches('=');
+            !p.is_empty() && p.chars().all(|c| c.is_ascii_digit())
+        })
 }
 
 fn split_switches(raw: &str) -> (&str, &str) {

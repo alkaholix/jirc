@@ -15,6 +15,7 @@ pub mod input;
 pub mod parser;
 pub mod socket;
 pub mod timer;
+pub mod users;
 pub mod window;
 
 use std::collections::HashMap;
@@ -41,6 +42,7 @@ struct Inner {
     files: files::FileStore,
     bins: binvar::BinStore,
     windows: window::WindowStore,
+    users: users::UserList,
     sockets: std::sync::Arc<dyn ScriptSockets>,
     input: std::sync::Arc<dyn ScriptInput>,
     /// The frontend's currently-focused window/buffer name, for `$active`.
@@ -60,6 +62,7 @@ impl Inner {
             files: files::FileStore::default(),
             bins: binvar::BinStore::default(),
             windows: window::WindowStore::default(),
+            users: users::UserList::default(),
             sockets: std::sync::Arc::new(NoSockets),
             input: std::sync::Arc::new(NoInput),
             active: String::new(),
@@ -260,6 +263,7 @@ impl ScriptEngine {
             files: &mut g.files,
             bins: &mut g.bins,
             windows: &mut g.windows,
+            users: &mut g.users,
             event,
             actions: Vec::new(),
             halted: false,
@@ -311,6 +315,7 @@ impl ScriptEngine {
             files: &mut g.files,
             bins: &mut g.bins,
             windows: &mut g.windows,
+            users: &mut g.users,
             event,
             actions: Vec::new(),
             halted: false,
@@ -382,6 +387,7 @@ impl ScriptEngine {
             files: &mut g.files,
             bins: &mut g.bins,
             windows: &mut g.windows,
+            users: &mut g.users,
             event,
             actions: Vec::new(),
             halted: false,
@@ -427,6 +433,7 @@ impl ScriptEngine {
         let files = &mut g.files;
         let bins = &mut g.bins;
         let windows = &mut g.windows;
+        let users = &mut g.users;
         let mut actions = Vec::new();
         let mut halted = false;
         for ev in script.events_of(kind) {
@@ -447,6 +454,7 @@ impl ScriptEngine {
                 files: &mut *files,
                 bins: &mut *bins,
                 windows: &mut *windows,
+                users: &mut *users,
                 event: event.clone(),
                 actions: Vec::new(),
                 halted: false,
@@ -2889,6 +2897,43 @@ mod tests {
         assert_eq!(
             engine.run_alias(&ctx(), "#c", "t", ""),
             vec![Action::Send("PRIVMSG #c :10 15 5 hi".into())]
+        );
+    }
+
+    #[test]
+    fn user_list_commands_and_idents() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias t {\n\
+               auser 5 *!*@example.com Cool people\n\
+               auser 10 SomeNick\n\
+               auser -a 20 *!*@example.com\n\
+               /msg #c $ulist(*,,0) [ $+ $level(*!*@example.com) $+ ] $ulist(nick!u@example.com,,1).info\n\
+             }",
+        );
+        // 2 entries; example.com has levels 5,20 (merged via -a); info preserved.
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :2 [5,20] Cool people".into())]
+        );
+    }
+
+    #[test]
+    fn user_list_ruser_removes() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias t {\n\
+               auser 5,10 bob\n\
+               ruser 5 bob\n\
+               auser 3 alice\n\
+               ruser alice\n\
+               /msg #c $level(bob) / $ulist(*,,0)\n\
+             }",
+        );
+        // bob keeps level 10 (5 removed); alice removed entirely -> 1 entry left.
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :10 / 1".into())]
         );
     }
 

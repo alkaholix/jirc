@@ -12,6 +12,13 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 👥 26.7.30 — User access list (part 1)
+
+- The start of mIRC's **user list**: **`/auser`**, **`/ruser`**, **`/iuser`** to manage users with access levels, and **`$ulist`** / **`$level`** to query them. e.g. `/auser 10 *!*@friend.com` then `$level(nick!u@friend.com)` → `10`.
+- Next up in this subsystem: level-gated events (`on 10:TEXT:...`), auto-op/voice/protect lists, and saving the list to disk.
+
+---
+
 ## 🔎 26.7.29 — `$var` variable lookup
 
 - **`$var(%prefix*, N)`** lets a script list its own variables — count them (`N=0`), get the Nth name, or read `.value`. Handy for "unset everything matching" or debugging.

@@ -256,6 +256,28 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         // $stripped -> control codes stripped from the incoming message by the
         // strip-incoming setting. jIRC doesn't strip incoming messages, so 0.
         "stripped" => "0".to_string(),
+        // $ulist(addr[, L], N)[.info] -> Nth user-list entry matching addr (and, if
+        // given, level L); N=0 -> count. Returns the entry address (or its .info).
+        "ulist" => {
+            let addr = a(0);
+            let level_s = a(1);
+            let level = if level_s.trim().is_empty() { None } else { Some(level_s.trim()) };
+            let n: usize = a(2).trim().parse().unwrap_or(1);
+            let m = rt.users.matching(&addr, level);
+            if n == 0 {
+                m.len().to_string()
+            } else if let Some(e) = m.get(n - 1) {
+                if prop.eq_ignore_ascii_case("info") {
+                    e.info.clone()
+                } else {
+                    e.address.clone()
+                }
+            } else {
+                String::new()
+            }
+        }
+        // $level(addr) -> the comma-joined levels of the first matching entry.
+        "level" => rt.users.levels_for(&a(0)),
         "comchan" => {
             // $comchan(nick, N) -> Nth channel you share with nick (N=0 → count).
             let who = a(0).to_lowercase();
@@ -2676,6 +2698,7 @@ mod tests {
         let mut files = crate::script::files::FileStore::default();
         let mut bins = crate::script::binvar::BinStore::default();
         let mut windows = crate::script::window::WindowStore::default();
+        let mut users = crate::script::users::UserList::default();
         let mut rt = Runtime {
             script: &script,
             my_nick: "me",
@@ -2686,6 +2709,7 @@ mod tests {
             files: &mut files,
             bins: &mut bins,
             windows: &mut windows,
+            users: &mut users,
             event: EventVars::default(),
             actions: vec![],
             halted: false,
@@ -2906,6 +2930,7 @@ mod tests {
         let mut files = crate::script::files::FileStore::default();
         let mut bins = crate::script::binvar::BinStore::default();
         let mut windows = crate::script::window::WindowStore::default();
+        let mut users = crate::script::users::UserList::default();
         let mut rt = Runtime {
             script: &script,
             my_nick: "me",
@@ -2916,6 +2941,7 @@ mod tests {
             files: &mut files,
             bins: &mut bins,
             windows: &mut windows,
+            users: &mut users,
             event: EventVars::default(),
             actions: vec![],
             halted: false,
@@ -2963,7 +2989,9 @@ mod tests {
         let mut files = crate::script::files::FileStore::default();
         let mut bins = crate::script::binvar::BinStore::default();
         let mut windows = crate::script::window::WindowStore::default();
-        let mut rt = rt_for(&script, &mut vars, &mut hashes, &mut files, &mut bins, &mut windows);
+        let mut users = crate::script::users::UserList::default();
+        let mut rt =
+            rt_for(&script, &mut vars, &mut hashes, &mut files, &mut bins, &mut windows, &mut users);
         rt.event.snicks = vec!["alice".into(), "bob".into(), "carol".into()];
         assert_eq!(eval_ident(&mut rt, "snicks", &[], ""), "alice,bob,carol");
         assert_eq!(eval_ident(&mut rt, "snick", &["#c".into(), "0".into()], ""), "3");
@@ -2992,6 +3020,7 @@ mod tests {
         files: &'a mut crate::script::files::FileStore,
         bins: &'a mut crate::script::binvar::BinStore,
         windows: &'a mut crate::script::window::WindowStore,
+        users: &'a mut crate::script::users::UserList,
     ) -> Runtime<'a> {
         use crate::script::eval::EventVars;
         Runtime {
@@ -3004,6 +3033,7 @@ mod tests {
             files,
             bins,
             windows,
+            users,
             event: EventVars::default(),
             actions: vec![],
             halted: false,
@@ -3033,7 +3063,9 @@ mod tests {
         let mut files = crate::script::files::FileStore::default();
         let mut bins = crate::script::binvar::BinStore::default();
         let mut windows = crate::script::window::WindowStore::default();
-        let mut rt = rt_for(&script, &mut vars, &mut hashes, &mut files, &mut bins, &mut windows);
+        let mut users = crate::script::users::UserList::default();
+        let mut rt =
+            rt_for(&script, &mut vars, &mut hashes, &mut files, &mut bins, &mut windows, &mut users);
         let mut e = |n: &str, args: &[&str]| {
             eval_ident(&mut rt, n, &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "")
         };
@@ -3114,7 +3146,9 @@ mod tests {
         let mut files = crate::script::files::FileStore::default();
         let mut bins = crate::script::binvar::BinStore::default();
         let mut windows = crate::script::window::WindowStore::default();
-        let mut rt = rt_for(&script, &mut vars, &mut hashes, &mut files, &mut bins, &mut windows);
+        let mut users = crate::script::users::UserList::default();
+        let mut rt =
+            rt_for(&script, &mut vars, &mut hashes, &mut files, &mut bins, &mut windows, &mut users);
         let mut e = |n: &str, args: &[&str]| {
             eval_ident(&mut rt, n, &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "")
         };
