@@ -12,6 +12,13 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 💾 26.7.33 — User lists saved to disk (subsystem complete)
+
+- Your **user list and auto-op/voice/protect lists now survive restarts** — they're saved to `users.json` whenever they change and loaded on startup. `/auser`, `/aop`, and friends are finally permanent.
+- That wraps up the whole user-access subsystem: manage users with levels, gate events by level (`on 10:TEXT:…`), auto-op/voice on join, and keep it all across sessions.
+
+---
+
 ## 🎩 26.7.32 — Auto-op / auto-voice / protect (user list part 3)
 
 - **`/aop`**, **`/avoice`**, **`/protect`** lists with **`$aop`**/**`$avoice`**/**`$protect`** to query them. `/aop on` then `/aop *!*@friend.com #chan` and jIRC auto-ops matching people when they join a channel you run (auto-voice too).

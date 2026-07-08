@@ -223,6 +223,11 @@ impl ScriptEngine {
         g.script = parser::parse(source);
     }
 
+    /// Loads the persisted user list (and auto-lists) from `dir/users.json`.
+    pub fn load_users(&self, dir: &std::path::Path) {
+        self.inner.lock().unwrap().users = users::UserList::load_from(dir);
+    }
+
     pub fn has_alias(&self, name: &str) -> bool {
         // Local (`-l`) aliases aren't user-callable as `/commands`, and a disabled
         // `#group` makes its aliases uncallable too.
@@ -334,7 +339,12 @@ impl ScriptEngine {
             show: true,
         };
         rt.run(&alias.body);
-        rt.actions
+        let actions = std::mem::take(&mut rt.actions);
+        drop(rt);
+        if g.users.take_dirty() {
+            g.users.save_to(&ctx.data_dir);
+        }
+        actions
     }
 
     /// Runs a single command line (used by timers and popups when they fire).
@@ -406,7 +416,12 @@ impl ScriptEngine {
             show: true,
         };
         rt.run(&body);
-        rt.actions
+        let actions = std::mem::take(&mut rt.actions);
+        drop(rt);
+        if g.users.take_dirty() {
+            g.users.save_to(&ctx.data_dir);
+        }
+        actions
     }
 
     /// Dispatches an event to all matching handlers. Returns the actions.
@@ -530,6 +545,9 @@ impl ScriptEngine {
                     actions.push(Action::Send(format!("MODE {} +v {}", event.chan, event.nick)));
                 }
             }
+        }
+        if users.take_dirty() {
+            users.save_to(&ctx.data_dir);
         }
         (actions, halted)
     }
@@ -899,6 +917,7 @@ fn recompile(app: &AppHandle, engine: &ScriptEngine) {
         }
     }
     engine.load(&combined);
+    engine.load_users(&script_data_dir(app));
 }
 
 /// Whether a script line defines an alias named `name` (case-insensitive).
@@ -3027,6 +3046,28 @@ mod tests {
             engine.dispatch_event(&rctx, "TEXT", ev("!go")),
             vec![Action::Send("PRIVMSG #c :ok5".into())]
         );
+    }
+
+    #[test]
+    fn user_list_persists() {
+        use crate::script::users::{AutoKind, UserList};
+        let dir = std::env::temp_dir().join(format!("jirc-users-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: dir.clone(),
+            state: std::sync::Arc::new(Default::default()),
+        };
+        let engine = ScriptEngine::new();
+        engine.load("alias t { auser 10 *!*@save.com | aop on }");
+        engine.run_alias(&rctx, "#c", "t", "");
+        // A fresh load from disk sees the entry and the aop toggle.
+        let loaded = UserList::load_from(&dir);
+        assert_eq!(loaded.levels_for("nick!u@save.com"), "10");
+        assert!(loaded.auto_enabled(AutoKind::Aop));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

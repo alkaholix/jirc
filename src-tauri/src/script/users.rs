@@ -6,9 +6,11 @@
 //! tables and variables).
 
 use super::eval::wildcard_match;
+use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 /// One user-list entry.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UserEntry {
     /// Access levels in order — numeric (`5`, `=5`) or named (`friend`).
     pub levels: Vec<String>,
@@ -19,12 +21,15 @@ pub struct UserEntry {
 }
 
 /// The whole user list, plus the auto-op / auto-voice / protect lists.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UserList {
     entries: Vec<UserEntry>,
     aop: AutoList,
     avoice: AutoList,
     protect: AutoList,
+    /// Set on any change; the engine saves + clears it after a run.
+    #[serde(skip)]
+    dirty: bool,
 }
 
 /// Which auto-list a command/identifier operates on.
@@ -37,14 +42,14 @@ pub enum AutoKind {
 
 /// One of the auto-lists (`/aop`, `/avoice`, `/protect`): an on/off flag plus
 /// entries.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct AutoList {
     enabled: bool,
     entries: Vec<AutoEntry>,
 }
 
 /// A single auto-list entry.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct AutoEntry {
     address: String,
     /// Channels it applies to (empty = all channels).
@@ -96,6 +101,27 @@ fn split_levels(levels: &str) -> Vec<String> {
 }
 
 impl UserList {
+    /// Load the user list (and auto-lists) from `dir/users.json`; empty if the
+    /// file is absent or unreadable.
+    pub fn load_from(dir: &Path) -> UserList {
+        std::fs::read_to_string(dir.join("users.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    /// Save the user list (and auto-lists) to `dir/users.json`.
+    pub fn save_to(&self, dir: &Path) {
+        if let Ok(json) = serde_json::to_string_pretty(self) {
+            let _ = std::fs::write(dir.join("users.json"), json);
+        }
+    }
+
+    /// Whether the list changed since the last check (clears the flag).
+    pub fn take_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.dirty)
+    }
+
     fn position(&self, address: &str) -> Option<usize> {
         self.entries
             .iter()
@@ -105,6 +131,7 @@ impl UserList {
     /// `/auser [-a]` / `/guser`: create or replace the entry for `address`, or —
     /// with `add` — merge the new levels into an existing entry (deduped).
     pub fn add(&mut self, levels: &str, address: &str, info: &str, add: bool) {
+        self.dirty = true;
         let new_levels = split_levels(levels);
         if let Some(i) = self.position(address) {
             if add {
@@ -132,6 +159,7 @@ impl UserList {
     /// listed levels (removing the entry if none remain). A trailing `!` on the
     /// address removes every entry whose address begins with it.
     pub fn remove(&mut self, levels: &str, address: &str) {
+        self.dirty = true;
         if let Some(prefix) = address.strip_suffix('!') {
             let p = prefix.to_lowercase();
             self.entries.retain(|e| !e.address.to_lowercase().starts_with(&p));
@@ -152,6 +180,7 @@ impl UserList {
 
     /// `/iuser <nick|address> [info]`: set (or clear) an entry's info.
     pub fn set_info(&mut self, address: &str, info: &str) {
+        self.dirty = true;
         if let Some(i) = self.position(address) {
             self.entries[i].info = info.to_string();
         }
@@ -222,6 +251,7 @@ impl UserList {
     }
 
     pub fn auto_toggle(&mut self, kind: AutoKind, on: bool) {
+        self.dirty = true;
         self.auto_mut(kind).enabled = on;
     }
 
@@ -231,6 +261,7 @@ impl UserList {
 
     /// Add or merge an auto-list entry (merging channels on an existing address).
     pub fn auto_add(&mut self, kind: AutoKind, address: &str, channels: Vec<String>, network: String) {
+        self.dirty = true;
         let list = self.auto_mut(kind);
         if let Some(e) = list.entries.iter_mut().find(|e| e.address.eq_ignore_ascii_case(address)) {
             for c in channels {
@@ -247,6 +278,7 @@ impl UserList {
     }
 
     pub fn auto_remove(&mut self, kind: AutoKind, address: &str) {
+        self.dirty = true;
         self.auto_mut(kind).entries.retain(|e| !e.address.eq_ignore_ascii_case(address));
     }
 
