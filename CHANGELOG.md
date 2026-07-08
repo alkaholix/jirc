@@ -12,6 +12,13 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🎩 26.7.32 — Auto-op / auto-voice / protect (user list part 3)
+
+- **`/aop`**, **`/avoice`**, **`/protect`** lists with **`$aop`**/**`$avoice`**/**`$protect`** to query them. `/aop on` then `/aop *!*@friend.com #chan` and jIRC auto-ops matching people when they join a channel you run (auto-voice too).
+- Protect's list is queryable now; its re-op-when-deopped enforcement comes next, along with saving all these lists to disk.
+
+---
+
 ## 🚦 26.7.31 — Access-controlled events (user list part 2)
 
 - **Level-gated events**: `on 10:TEXT:!op &:#:{ mode # +o $2 }` now only triggers for users you've given level 10+. Also `on @:` (ops only), `on =5:` (exactly level 5), and named levels like `on admin:`.

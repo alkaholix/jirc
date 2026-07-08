@@ -18,10 +18,48 @@ pub struct UserEntry {
     pub info: String,
 }
 
-/// The whole user list.
+/// The whole user list, plus the auto-op / auto-voice / protect lists.
 #[derive(Debug, Clone, Default)]
 pub struct UserList {
     entries: Vec<UserEntry>,
+    aop: AutoList,
+    avoice: AutoList,
+    protect: AutoList,
+}
+
+/// Which auto-list a command/identifier operates on.
+#[derive(Debug, Clone, Copy)]
+pub enum AutoKind {
+    Aop,
+    Avoice,
+    Protect,
+}
+
+/// One of the auto-lists (`/aop`, `/avoice`, `/protect`): an on/off flag plus
+/// entries.
+#[derive(Debug, Clone, Default)]
+struct AutoList {
+    enabled: bool,
+    entries: Vec<AutoEntry>,
+}
+
+/// A single auto-list entry.
+#[derive(Debug, Clone, Default)]
+struct AutoEntry {
+    address: String,
+    /// Channels it applies to (empty = all channels).
+    channels: Vec<String>,
+    /// Network it applies to (empty = all networks, from `-w`).
+    network: String,
+}
+
+/// `.type` returns the channel list; `.network` the network; else the address.
+fn auto_prop(e: &AutoEntry, prop: &str) -> String {
+    match prop.to_ascii_lowercase().as_str() {
+        "type" => e.channels.join(","),
+        "network" => e.network.clone(),
+        _ => e.address.clone(),
+    }
 }
 
 /// Completes a partial address to a full `nick!user@host` mask by filling the
@@ -163,6 +201,99 @@ impl UserList {
             }
         }
         out
+    }
+
+    // ---- auto-op / auto-voice / protect lists ----
+
+    fn auto(&self, kind: AutoKind) -> &AutoList {
+        match kind {
+            AutoKind::Aop => &self.aop,
+            AutoKind::Avoice => &self.avoice,
+            AutoKind::Protect => &self.protect,
+        }
+    }
+
+    fn auto_mut(&mut self, kind: AutoKind) -> &mut AutoList {
+        match kind {
+            AutoKind::Aop => &mut self.aop,
+            AutoKind::Avoice => &mut self.avoice,
+            AutoKind::Protect => &mut self.protect,
+        }
+    }
+
+    pub fn auto_toggle(&mut self, kind: AutoKind, on: bool) {
+        self.auto_mut(kind).enabled = on;
+    }
+
+    pub fn auto_enabled(&self, kind: AutoKind) -> bool {
+        self.auto(kind).enabled
+    }
+
+    /// Add or merge an auto-list entry (merging channels on an existing address).
+    pub fn auto_add(&mut self, kind: AutoKind, address: &str, channels: Vec<String>, network: String) {
+        let list = self.auto_mut(kind);
+        if let Some(e) = list.entries.iter_mut().find(|e| e.address.eq_ignore_ascii_case(address)) {
+            for c in channels {
+                if !e.channels.iter().any(|x| x.eq_ignore_ascii_case(&c)) {
+                    e.channels.push(c);
+                }
+            }
+            if !network.is_empty() {
+                e.network = network;
+            }
+        } else {
+            list.entries.push(AutoEntry { address: address.to_string(), channels, network });
+        }
+    }
+
+    pub fn auto_remove(&mut self, kind: AutoKind, address: &str) {
+        self.auto_mut(kind).entries.retain(|e| !e.address.eq_ignore_ascii_case(address));
+    }
+
+    /// `$aop(addr/N)[.prop]`: Nth entry's field (N=0 -> count) or an address match.
+    pub fn auto_lookup(&self, kind: AutoKind, arg: &str, prop: &str) -> String {
+        let list = self.auto(kind);
+        if let Ok(n) = arg.trim().parse::<usize>() {
+            if n == 0 {
+                return list.entries.len().to_string();
+            }
+            return list.entries.get(n - 1).map(|e| auto_prop(e, prop)).unwrap_or_default();
+        }
+        let q = complete_mask(arg);
+        for e in &list.entries {
+            let m = complete_mask(&e.address);
+            if wildcard_match(&q, &m) || wildcard_match(&m, &q) {
+                return auto_prop(e, prop);
+            }
+        }
+        String::new()
+    }
+
+    /// Whether the auto behaviour applies to a joining user: the list is enabled
+    /// and an entry matches their address/nick, channel, and network.
+    pub fn auto_should_apply(
+        &self,
+        kind: AutoKind,
+        address: &str,
+        nick: &str,
+        channel: &str,
+        network: &str,
+    ) -> bool {
+        let list = self.auto(kind);
+        if !list.enabled {
+            return false;
+        }
+        list.entries.iter().any(|e| {
+            let m = complete_mask(&e.address);
+            let hit = |v: &str| {
+                let x = complete_mask(v);
+                wildcard_match(&m, &x) || wildcard_match(&x, &m)
+            };
+            let addr_ok = (!address.is_empty() && hit(address)) || hit(nick);
+            let chan_ok = e.channels.is_empty() || e.channels.iter().any(|c| c.eq_ignore_ascii_case(channel));
+            let net_ok = e.network.is_empty() || e.network.eq_ignore_ascii_case(network);
+            addr_ok && chan_ok && net_ok
+        })
     }
 }
 

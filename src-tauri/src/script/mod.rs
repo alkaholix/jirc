@@ -504,6 +504,33 @@ impl ScriptEngine {
             halted |= rt.halted;
             actions.extend(rt.actions);
         }
+        // Auto-op / auto-voice: when someone else joins a channel where I hold
+        // op (or higher) and they match an enabled list, queue the mode change.
+        if kind == "JOIN" && !event.nick.eq_ignore_ascii_case(ctx.my_nick) {
+            let addr = ctx
+                .state
+                .ial
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(&event.nick))
+                .map(|(_, a)| a.as_str())
+                .unwrap_or("");
+            let am_op = ctx
+                .state
+                .channels
+                .iter()
+                .find(|c| c.name.eq_ignore_ascii_case(&event.chan))
+                .and_then(|c| c.members.iter().find(|(n, _)| n.eq_ignore_ascii_case(ctx.my_nick)))
+                .map(|(_, p)| p.contains('@') || p.contains('&') || p.contains('~'))
+                .unwrap_or(false);
+            if am_op {
+                use users::AutoKind;
+                if users.auto_should_apply(AutoKind::Aop, addr, &event.nick, &event.chan, ctx.network) {
+                    actions.push(Action::Send(format!("MODE {} +o {}", event.chan, event.nick)));
+                } else if users.auto_should_apply(AutoKind::Avoice, addr, &event.nick, &event.chan, ctx.network) {
+                    actions.push(Action::Send(format!("MODE {} +v {}", event.chan, event.nick)));
+                }
+            }
+        }
         (actions, halted)
     }
 }
@@ -3000,6 +3027,73 @@ mod tests {
             engine.dispatch_event(&rctx, "TEXT", ev("!go")),
             vec![Action::Send("PRIVMSG #c :ok5".into())]
         );
+    }
+
+    #[test]
+    fn autolist_commands_and_idents() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias t {\n\
+               aop on\n\
+               aop *!*@friend.com #chan\n\
+               avoice regular\n\
+               /msg #c $aop $aop(0) $aop(*!*@friend.com).type $avoice(0)\n\
+             }",
+        );
+        // aop enabled; 1 aop entry (channels #chan); 1 avoice entry.
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :$true 1 #chan 1".into())]
+        );
+    }
+
+    #[test]
+    fn auto_op_on_join() {
+        use crate::irc::state::{ChannelView, StateSnapshot};
+        let engine = ScriptEngine::new();
+        engine.load("on *:TEXT:!setup:#:{ aop on | aop *!*@trusted.com }");
+        let snap = StateSnapshot {
+            ial: vec![
+                ("bob".into(), "bob!u@trusted.com".into()),
+                ("eve".into(), "eve!u@evil.com".into()),
+            ],
+            channels: vec![ChannelView {
+                name: "#c".into(),
+                nicks: vec!["me".into(), "bob".into()],
+                members: vec![("me".into(), "@".into())],
+                bans: vec![],
+            }],
+            ..Default::default()
+        };
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(snap),
+        };
+        let setup = EventVars {
+            nick: "x".into(),
+            chan: "#c".into(),
+            target: "#c".into(),
+            text: "!setup".into(),
+            params: vec!["!setup".into()],
+            ..Default::default()
+        };
+        engine.dispatch_event(&rctx, "TEXT", setup);
+        let join = |n: &str| EventVars {
+            nick: n.into(),
+            chan: "#c".into(),
+            target: "#c".into(),
+            ..Default::default()
+        };
+        // I'm @op and bob matches the aop list -> auto-op him.
+        assert_eq!(
+            engine.dispatch_event(&rctx, "JOIN", join("bob")),
+            vec![Action::Send("MODE #c +o bob".into())]
+        );
+        // eve doesn't match -> nothing queued.
+        assert_eq!(engine.dispatch_event(&rctx, "JOIN", join("eve")), vec![]);
     }
 
     #[test]

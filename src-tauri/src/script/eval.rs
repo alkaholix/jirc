@@ -803,6 +803,9 @@ impl<'a> Runtime<'a> {
             "guser" => self.cmd_guser(raw_args),
             "ruser" => self.cmd_ruser(raw_args),
             "iuser" => self.cmd_iuser(raw_args),
+            "aop" => self.cmd_autolist(crate::script::users::AutoKind::Aop, raw_args),
+            "avoice" => self.cmd_autolist(crate::script::users::AutoKind::Avoice, raw_args),
+            "protect" => self.cmd_autolist(crate::script::users::AutoKind::Protect, raw_args),
             "ban" => self.cmd_ban(raw_args, true),
             "unban" => self.cmd_ban(raw_args, false),
             "query" => self.cmd_query(raw_args),
@@ -1132,6 +1135,47 @@ impl<'a> Runtime<'a> {
         } else if !rest.is_empty() {
             self.users.set_info(rest.trim(), "");
         }
+    }
+
+    /// `/aop`/`/avoice`/`/protect` `[-rwal] <on|off|nick|address> [#channels] [network]`.
+    fn cmd_autolist(&mut self, kind: crate::script::users::AutoKind, raw: &str) {
+        let (flags, rest) = split_switches(raw);
+        let rest = self.expand(rest);
+        let mut toks = rest.split_whitespace();
+        let Some(first) = toks.next() else { return };
+        if first.eq_ignore_ascii_case("on") {
+            self.users.auto_toggle(kind, true);
+            return;
+        }
+        if first.eq_ignore_ascii_case("off") {
+            self.users.auto_toggle(kind, false);
+            return;
+        }
+        if flags.contains('r') {
+            self.users.auto_remove(kind, first);
+            return;
+        }
+        if flags.contains('l') {
+            return; // listing is a display-only no-op
+        }
+        // Optional [#channels] (comma-separated) and an explicit [network]; `-w`
+        // means all networks, otherwise it defaults to the current one.
+        let extra: Vec<&str> = toks.collect();
+        let channels: Vec<String> = extra
+            .iter()
+            .find(|t| t.starts_with('#'))
+            .map(|t| t.split(',').map(String::from).collect())
+            .unwrap_or_default();
+        let network = if flags.contains('w') {
+            String::new()
+        } else {
+            extra
+                .iter()
+                .find(|t| !t.starts_with('#') && t.parse::<u32>().is_err())
+                .map(|t| t.to_string())
+                .unwrap_or_else(|| self.network.to_string())
+        };
+        self.users.auto_add(kind, first, channels, network);
     }
 
     fn cmd_unset(&mut self, raw: &str) {

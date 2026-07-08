@@ -282,6 +282,23 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         // set by the dispatcher's level gate.
         "ulevel" => rt.event.ulevel.clone(),
         "clevel" => rt.event.clevel.clone(),
+        // $aop / $avoice / $protect -> $true/$false enabled (bare); with an arg,
+        // $aop(addr/N)[.type|.network] looks up an auto-list entry.
+        "aop" | "avoice" | "protect" => {
+            use crate::script::users::AutoKind;
+            let kind = if name.eq_ignore_ascii_case("aop") {
+                AutoKind::Aop
+            } else if name.eq_ignore_ascii_case("avoice") {
+                AutoKind::Avoice
+            } else {
+                AutoKind::Protect
+            };
+            if args.is_empty() {
+                bool_str(rt.users.auto_enabled(kind))
+            } else {
+                rt.users.auto_lookup(kind, &a(0), prop)
+            }
+        }
         "comchan" => {
             // $comchan(nick, N) -> Nth channel you share with nick (N=0 → count).
             let who = a(0).to_lowercase();
