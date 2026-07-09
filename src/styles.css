@@ -1027,6 +1027,113 @@ label.inline {
   gap: 0.3rem;
   align-items: center;
 }
+
+/* Users settings tab: access list + auto-op/voice/protect */
+.users-settings h3 {
+  margin: 0.9rem 0 0.3rem;
+  font-size: 0.92rem;
+  color: var(--fg);
+}
+.users-settings .hint {
+  margin: 0 0 0.5rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.users-settings code {
+  background: var(--panel2, var(--bg2));
+  border-radius: 4px;
+  padding: 0 0.25rem;
+}
+.users-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.users-table th {
+  text-align: left;
+  color: var(--muted);
+  font-weight: 600;
+  padding: 0.2rem 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+.users-table td {
+  padding: 0.25rem 0.4rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+}
+.users-addr {
+  font-family: var(--mono, monospace);
+}
+.users-info {
+  color: var(--muted);
+}
+.users-empty {
+  color: var(--muted);
+  font-style: italic;
+  font-size: 0.8rem;
+  padding: 0.3rem 0.4rem;
+}
+.users-x {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 0.3rem;
+  line-height: 1.2;
+}
+.users-x:hover {
+  color: var(--err);
+}
+.users-add {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+  flex-wrap: wrap;
+}
+.users-add input {
+  flex: 1;
+  min-width: 6rem;
+  background: var(--panel2, var(--bg2));
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  font: inherit;
+  font-size: 0.85rem;
+}
+.autolist {
+  margin-top: 0.8rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.4rem;
+}
+.autolist-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.autolist-head h3 {
+  margin: 0.2rem 0;
+}
+.autolist-net-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin: 0.25rem 0 0.1rem;
+}
+.autolist-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.82rem;
+  padding: 0.12rem 0.4rem;
+  color: var(--fg);
+}
+.autolist-chans {
+  color: var(--muted);
+  flex: 1;
+}
 .transfers {
   position: fixed;
   bottom: 12px;

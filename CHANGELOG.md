@@ -12,6 +12,13 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🖥️ 26.7.34 — Manage users in Settings
+
+- A new **Settings → Users** tab to see and edit your access list and auto-op / auto-voice / protect lists — no need to remember `/auser` and `/aop` syntax. Auto-op entries are **grouped by network**, so multi-server setups stay clear.
+- Anything you change in the UI is the same list your scripts see, and it's saved to disk.
+
+---
+
 ## 💾 26.7.33 — User lists saved to disk (subsystem complete)
 
 - Your **user list and auto-op/voice/protect lists now survive restarts** — they're saved to `users.json` whenever they change and loaded on startup. `/auser`, `/aop`, and friends are finally permanent.

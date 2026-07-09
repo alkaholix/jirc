@@ -43,6 +43,37 @@ export interface DataLocation {
   forced: boolean;
 }
 
+/** Which auto-list an entry belongs to. */
+export type AutoKind = "aop" | "avoice" | "protect";
+
+/** A user-list entry: access levels for a nick/address. */
+export interface UserEntry {
+  levels: string[];
+  address: string;
+  info: string;
+}
+
+/** An auto-op/voice/protect entry (channels empty = all; network empty = all). */
+export interface AutoEntry {
+  address: string;
+  channels: string[];
+  network: string;
+}
+
+/** One auto-list: an on/off flag plus its entries. */
+export interface AutoList {
+  enabled: boolean;
+  entries: AutoEntry[];
+}
+
+/** The full user-access snapshot from `usersSnapshot()`. */
+export interface UserListSnapshot {
+  entries: UserEntry[];
+  aop: AutoList;
+  avoice: AutoList;
+  protect: AutoList;
+}
+
 /** A channel's generated IRCX owner/host keys. */
 export interface IrcxChannelKeys {
   ownerkey: string;
@@ -156,6 +187,18 @@ export const api = {
   /** A notify-list nick came online / went offline — fires on NOTIFY / on UNOTIFY. */
   scriptNotify: (serverId: string, network: string, nick: string, online: boolean) =>
     invoke("script_notify", { serverId, network, nick, online }),
+  /** JSON snapshot of the user list + auto-op/voice/protect lists (settings UI). */
+  usersSnapshot: () => invoke<string>("users_snapshot"),
+  /** Add/replace a user-list entry (levels + address + info). */
+  usersSet: (levels: string, address: string, info: string) =>
+    invoke("users_set", { levels, address, info }),
+  usersRemove: (address: string) => invoke("users_remove", { address }),
+  usersAutoToggle: (kind: AutoKind, on: boolean) =>
+    invoke("users_auto_toggle", { kind, on }),
+  usersAutoAdd: (kind: AutoKind, address: string, channels: string[], network: string) =>
+    invoke("users_auto_add", { kind, address, channels, network }),
+  usersAutoRemove: (kind: AutoKind, address: string) =>
+    invoke("users_auto_remove", { kind, address }),
   /** Tell the engine which window/connection is focused ($active/$activecid). */
   scriptSetActive: (name: string, serverId: string) =>
     invoke("script_set_active", { name, serverId }),

@@ -228,6 +228,18 @@ impl ScriptEngine {
         self.inner.lock().unwrap().users = users::UserList::load_from(dir);
     }
 
+    /// A JSON snapshot of the user list + auto-lists (for the settings UI).
+    pub fn users_json(&self) -> String {
+        serde_json::to_string(&self.inner.lock().unwrap().users).unwrap_or_else(|_| "{}".into())
+    }
+
+    /// Mutates the user list under lock and persists it to `dir`.
+    pub fn edit_users(&self, dir: &std::path::Path, f: impl FnOnce(&mut users::UserList)) {
+        let mut g = self.inner.lock().unwrap();
+        f(&mut g.users);
+        g.users.save_to(dir);
+    }
+
     pub fn has_alias(&self, name: &str) -> bool {
         // Local (`-l`) aliases aren't user-callable as `/commands`, and a disabled
         // `#group` makes its aliases uncallable too.
@@ -1466,6 +1478,63 @@ pub fn script_notify(app: AppHandle, server_id: String, network: String, nick: S
     let vars = EventVars { nick: nick.clone(), target: nick, ..Default::default() };
     let actions = app.state::<ScriptEngine>().dispatch_event(&ctx, kind, vars);
     apply_actions(&app, &server_id, &my_nick, &network, "", actions);
+}
+
+/// Maps a settings string to the auto-list it targets.
+fn auto_kind(s: &str) -> Option<users::AutoKind> {
+    match s.to_ascii_lowercase().as_str() {
+        "aop" => Some(users::AutoKind::Aop),
+        "avoice" => Some(users::AutoKind::Avoice),
+        "protect" => Some(users::AutoKind::Protect),
+        _ => None,
+    }
+}
+
+/// A JSON snapshot of the user + auto-op/voice/protect lists (settings UI).
+#[tauri::command]
+pub fn users_snapshot(app: AppHandle) -> String {
+    app.state::<ScriptEngine>().users_json()
+}
+
+/// Add/replace a user-list entry (`/auser`).
+#[tauri::command]
+pub fn users_set(app: AppHandle, levels: String, address: String, info: String) {
+    let dir = script_data_dir(&app);
+    app.state::<ScriptEngine>().edit_users(&dir, |u| u.add(&levels, &address, &info, false));
+}
+
+/// Remove a user-list entry (`/ruser`).
+#[tauri::command]
+pub fn users_remove(app: AppHandle, address: String) {
+    let dir = script_data_dir(&app);
+    app.state::<ScriptEngine>().edit_users(&dir, |u| u.remove("", &address));
+}
+
+/// Toggle an auto-list on/off.
+#[tauri::command]
+pub fn users_auto_toggle(app: AppHandle, kind: String, on: bool) {
+    if let Some(k) = auto_kind(&kind) {
+        let dir = script_data_dir(&app);
+        app.state::<ScriptEngine>().edit_users(&dir, |u| u.auto_toggle(k, on));
+    }
+}
+
+/// Add an auto-list entry.
+#[tauri::command]
+pub fn users_auto_add(app: AppHandle, kind: String, address: String, channels: Vec<String>, network: String) {
+    if let Some(k) = auto_kind(&kind) {
+        let dir = script_data_dir(&app);
+        app.state::<ScriptEngine>().edit_users(&dir, |u| u.auto_add(k, &address, channels, network));
+    }
+}
+
+/// Remove an auto-list entry.
+#[tauri::command]
+pub fn users_auto_remove(app: AppHandle, kind: String, address: String) {
+    if let Some(k) = auto_kind(&kind) {
+        let dir = script_data_dir(&app);
+        app.state::<ScriptEngine>().edit_users(&dir, |u| u.auto_remove(k, &address));
+    }
 }
 
 /// Returns the names of all open script sockets (for `/socklist`).

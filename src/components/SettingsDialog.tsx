@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { applyTheme, Layout, Theme, useSettings } from "../state/settings";
 import { api, DataLocation } from "../lib/api";
 import { dccDetect } from "../state/dcc";
+import { UsersSettings } from "./UsersSettings";
 
 const splitList = (value: string) =>
   value
@@ -9,11 +10,12 @@ const splitList = (value: string) =>
     .map((w) => w.trim())
     .filter(Boolean);
 
-type Tab = "appearance" | "alerts" | "behaviour" | "server";
+type Tab = "appearance" | "alerts" | "behaviour" | "server" | "users";
 const TABS: { id: Tab; label: string }[] = [
   { id: "appearance", label: "Appearance" },
   { id: "alerts", label: "Alerts" },
   { id: "behaviour", label: "Behaviour" },
+  { id: "users", label: "Users" },
   { id: "server", label: "Server" },
 ];
 
@@ -378,6 +380,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               </p>
             </>
           )}
+
+          {tab === "users" && <UsersSettings />}
 
           {tab === "server" && (
             <>
