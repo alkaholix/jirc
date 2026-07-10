@@ -69,25 +69,6 @@ describe("channel routing", () => {
     expect(lines).toContain("hello");
   });
 
-  it("routes a %# channel even when the server's CHANTYPES omits %", () => {
-    const s = useStore.getState();
-    // Some IRCX servers advertise CHANTYPES without '%'; the compound '%#'/'%&'
-    // prefix must still be recognized as a channel (not a query).
-    s.handleEvent({ type: "isupport", serverId: SID, chanTypes: "#&", prefixes: ".@+" });
-    s.handleEvent({
-      type: "message",
-      serverId: SID,
-      kind: "privmsg",
-      from: ">Bob",
-      target: "%#protcol",
-      text: "hi",
-      time: null,
-    });
-    const buf = useStore.getState().buffers[bufferKey(SID, "%#protcol")];
-    expect(buf?.kind).toBe("channel");
-    expect(buf?.lines.map((l) => l.text)).toContain("hi");
-  });
-
   it("strips the trailing \\x01 from a CTCP ACTION (no leftover box char)", () => {
     const s = useStore.getState();
     s.handleEvent({

@@ -74,11 +74,10 @@ impl Isupport {
 
     #[allow(dead_code)]
     pub fn is_channel(&self, name: &str) -> bool {
-        // IRCX's compound '%#' / '%&' prefixes are always channels, even when the
-        // server's CHANTYPES omits them; otherwise honor CHANTYPES (first char).
-        name.starts_with("%#")
-            || name.starts_with("%&")
-            || name.chars().next().is_some_and(|c| self.chan_types.contains(c))
+        // Driven entirely by the server's advertised CHANTYPES. IRCX servers list
+        // their '%#'/'%&' prefixes here (e.g. CHANTYPES=%#), so no client-side
+        // special-casing is needed.
+        name.chars().next().is_some_and(|c| self.chan_types.contains(c))
     }
 
     /// Splits a NAMES entry like "@+nick" into (prefixes, nick).
@@ -395,19 +394,6 @@ mod tests {
         assert!(s.is_channel("#room"));
         assert!(!s.is_channel("nick"));
         assert_eq!(s.split_prefixes(".@dave"), (".@".to_string(), "dave".to_string()));
-    }
-
-    #[test]
-    fn default_recognizes_ircx_compound_channels() {
-        // IRCX '%#' / '%&' channels are recognized even when the server never
-        // advertised '%' in CHANTYPES (the default is "#&!+").
-        let s = Isupport::default();
-        assert!(s.is_channel("%#protcol"));
-        assert!(s.is_channel("%&local"));
-        assert!(s.is_channel("#room"));
-        assert!(!s.is_channel("nick"));
-        // A bare '%foo' is a variable-looking name, not a channel, under the default.
-        assert!(!s.is_channel("%foo"));
     }
 
     #[test]

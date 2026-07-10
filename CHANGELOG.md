@@ -12,6 +12,12 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🛰️ 26.7.42 — Channel detection is purely ISUPPORT-driven
+
+- Reverted the hardcoded `%#`/`%&` channel-prefix special-casing from 26.7.40. Whether a name is a channel is now decided **entirely by the server's advertised `CHANTYPES`** (from ISUPPORT/005) — no client-side assumptions. IRCX servers list their `%#`/`%&` prefixes there (e.g. `CHANTYPES=%#`), so `%#` channels still work exactly as before. `$chan` still returns the full name **with** the `%#` prefix on IRCX (it always did — it's the raw channel name, unlike mIRC which drops it).
+
+---
+
 ## 🧊 26.7.41 — Every dialog path unfrozen + a thank-you
 
 - **Audited and fixed every remaining dialog freeze.** 26.7.40 fixed aliases/commands; this covers the rest — custom `/dialog` handlers (`on DIALOG`), `on INPUT`, `on OPEN`/`on CLOSE`, `on NOTIFY`, and right-click menu building. Any script path that can pop an `$input`/`$?` prompt now runs off the UI thread, so the prompt can never freeze the app. (Confirmed these are the *only* places an engine run can block the UI.)
