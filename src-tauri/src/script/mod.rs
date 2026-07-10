@@ -1442,9 +1442,8 @@ pub fn script_run_alias(
 /// context and empty-label items dropped (mIRC behaviour).
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub fn script_popups(
+pub async fn script_popups(
     app: AppHandle,
-    engine: State<'_, ScriptEngine>,
     server_id: String,
     target: String,
     my_nick: String,
@@ -1452,18 +1451,26 @@ pub fn script_popups(
     context: String,
     nick: String,
 ) -> Vec<PopupItem> {
-    let ctx = RunCtx {
-        my_nick: &my_nick,
-        network: &network,
-        server: "",
-        data_dir: script_data_dir(&app),
-        state: app
-            .try_state::<crate::irc::state::StateStore>()
-            .map(|s| s.get(&server_id))
-            .unwrap_or_default(),
-    };
-    let chan = if is_channel(&target) { target.as_str() } else { "" };
-    engine.popups_evaluated(&ctx, &context, &nick, chan)
+    // A popup label is evaluated ($iif/$sock/…) to build the menu; in the unlikely
+    // event a label reaches `$input`, do it off the main thread (async command +
+    // blocking thread) so building the menu can't freeze WebView2.
+    tauri::async_runtime::spawn_blocking(move || {
+        let engine = app.state::<ScriptEngine>();
+        let ctx = RunCtx {
+            my_nick: &my_nick,
+            network: &network,
+            server: "",
+            data_dir: script_data_dir(&app),
+            state: app
+                .try_state::<crate::irc::state::StateStore>()
+                .map(|s| s.get(&server_id))
+                .unwrap_or_default(),
+        };
+        let chan = if is_channel(&target) { target.as_str() } else { "" };
+        engine.popups_evaluated(&ctx, &context, &nick, chan)
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// Fires an `on DIALOG` handler when the user interacts with a script dialog.
@@ -1473,7 +1480,6 @@ pub fn script_popups(
 #[allow(clippy::too_many_arguments)]
 pub fn script_run_dialog(
     app: AppHandle,
-    engine: State<'_, ScriptEngine>,
     server_id: String,
     my_nick: String,
     network: String,
@@ -1481,49 +1487,59 @@ pub fn script_run_dialog(
     control: String,
     values: HashMap<String, String>,
 ) {
-    let ctx = RunCtx {
-        my_nick: &my_nick,
-        network: &network,
-        server: "",
-        data_dir: script_data_dir(&app),
-        state: app
-            .try_state::<crate::irc::state::StateStore>()
-            .map(|s| s.get(&server_id))
-            .unwrap_or_default(),
-    };
-    let vars = EventVars {
-        nick: control.clone(),
-        chan: dialog.clone(),
-        target: dialog,
-        text: control.clone(),
-        params: vec![control],
-        did: values,
-        ..Default::default()
-    };
-    let actions = engine.dispatch_event(&ctx, "DIALOG", vars);
-    apply_actions(&app, &server_id, &my_nick, &network, "", actions);
+    // An `on DIALOG` handler may call `$input`/`$?`, which blocks the run waiting
+    // for the prompt reply. Run it on a blocking thread so the main thread (and
+    // WebView2) stay responsive — a sync command blocking the main thread freezes
+    // the whole UI, including the dialog itself.
+    tauri::async_runtime::spawn_blocking(move || {
+        let ctx = RunCtx {
+            my_nick: &my_nick,
+            network: &network,
+            server: "",
+            data_dir: script_data_dir(&app),
+            state: app
+                .try_state::<crate::irc::state::StateStore>()
+                .map(|s| s.get(&server_id))
+                .unwrap_or_default(),
+        };
+        let vars = EventVars {
+            nick: control.clone(),
+            chan: dialog.clone(),
+            target: dialog,
+            text: control.clone(),
+            params: vec![control],
+            did: values,
+            ..Default::default()
+        };
+        let actions = app.state::<ScriptEngine>().dispatch_event(&ctx, "DIALOG", vars);
+        apply_actions(&app, &server_id, &my_nick, &network, "", actions);
+    });
 }
 
 /// A notify-list nick came online (`on NOTIFY`) or went offline (`on UNOTIFY`).
 /// The frontend calls this from its ISON diff; `$nick` is the affected nick.
 #[tauri::command]
 pub fn script_notify(app: AppHandle, server_id: String, network: String, nick: String, online: bool) {
-    let kind = if online { "NOTIFY" } else { "UNOTIFY" };
-    let state = app
-        .try_state::<crate::irc::state::StateStore>()
-        .map(|s| s.get(&server_id))
-        .unwrap_or_default();
-    let my_nick = state.nick.clone();
-    let ctx = RunCtx {
-        my_nick: &my_nick,
-        network: &network,
-        server: "",
-        data_dir: script_data_dir(&app),
-        state,
-    };
-    let vars = EventVars { nick: nick.clone(), target: nick, ..Default::default() };
-    let actions = app.state::<ScriptEngine>().dispatch_event(&ctx, kind, vars);
-    apply_actions(&app, &server_id, &my_nick, &network, "", actions);
+    // `on NOTIFY`/`on UNOTIFY` may call `$input`; run off the main thread so a
+    // blocking prompt can't freeze WebView2.
+    tauri::async_runtime::spawn_blocking(move || {
+        let kind = if online { "NOTIFY" } else { "UNOTIFY" };
+        let state = app
+            .try_state::<crate::irc::state::StateStore>()
+            .map(|s| s.get(&server_id))
+            .unwrap_or_default();
+        let my_nick = state.nick.clone();
+        let ctx = RunCtx {
+            my_nick: &my_nick,
+            network: &network,
+            server: "",
+            data_dir: script_data_dir(&app),
+            state,
+        };
+        let vars = EventVars { nick: nick.clone(), target: nick, ..Default::default() };
+        let actions = app.state::<ScriptEngine>().dispatch_event(&ctx, kind, vars);
+        apply_actions(&app, &server_id, &my_nick, &network, "", actions);
+    });
 }
 
 /// Maps a settings string to the auto-list it targets.
@@ -1602,45 +1618,49 @@ pub fn script_set_active(engine: State<'_, ScriptEngine>, name: String, server_i
 #[tauri::command]
 pub fn script_window_open(app: AppHandle, server_id: String, name: String) {
     app.state::<ScriptEngine>().window_open(&server_id, &name);
-    fire_window_event(&app, &server_id, &name, "OPEN");
+    fire_window_event(app, server_id, name, "OPEN");
 }
 
 /// The UI closed a window/buffer — release its `$wid` and fire `on CLOSE`.
 #[tauri::command]
 pub fn script_window_close(app: AppHandle, server_id: String, name: String) {
     app.state::<ScriptEngine>().window_close(&server_id, &name);
-    fire_window_event(&app, &server_id, &name, "CLOSE");
+    fire_window_event(app, server_id, name, "CLOSE");
 }
 
 /// Dispatches `on OPEN`/`on CLOSE` for a window. A plain nick is a query window
 /// (empty `$chan` so the `?` target matches, `$nick` = the other party); a
 /// channel / `@window` keeps its name as `$chan` for `#` / `@name` targets. The
 /// status window is always present, so mIRC fires neither for it.
-fn fire_window_event(app: &AppHandle, server_id: &str, name: &str, kind: &str) {
+fn fire_window_event(app: AppHandle, server_id: String, name: String, kind: &'static str) {
     if name.eq_ignore_ascii_case("Status Window") {
         return;
     }
-    let state = app
-        .try_state::<crate::irc::state::StateStore>()
-        .map(|s| s.get(server_id))
-        .unwrap_or_default();
-    let my_nick = state.nick.clone();
-    let is_query = !is_channel(name) && !name.starts_with('@') && !name.starts_with('=');
-    let vars = EventVars {
-        nick: if is_query { name.to_string() } else { String::new() },
-        chan: if is_query { String::new() } else { name.to_string() },
-        target: name.to_string(),
-        ..Default::default()
-    };
-    let ctx = RunCtx {
-        my_nick: &my_nick,
-        network: "",
-        server: "",
-        data_dir: script_data_dir(app),
-        state,
-    };
-    let actions = app.state::<ScriptEngine>().dispatch_event(&ctx, kind, vars);
-    apply_actions(app, server_id, &my_nick, "", "", actions);
+    // An `on OPEN`/`on CLOSE` handler may call `$input`; run off the main thread so
+    // a blocking prompt can't freeze WebView2.
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app
+            .try_state::<crate::irc::state::StateStore>()
+            .map(|s| s.get(&server_id))
+            .unwrap_or_default();
+        let my_nick = state.nick.clone();
+        let is_query = !is_channel(&name) && !name.starts_with('@') && !name.starts_with('=');
+        let vars = EventVars {
+            nick: if is_query { name.clone() } else { String::new() },
+            chan: if is_query { String::new() } else { name.clone() },
+            target: name.clone(),
+            ..Default::default()
+        };
+        let ctx = RunCtx {
+            my_nick: &my_nick,
+            network: "",
+            server: "",
+            data_dir: script_data_dir(&app),
+            state,
+        };
+        let actions = app.state::<ScriptEngine>().dispatch_event(&ctx, kind, vars);
+        apply_actions(&app, &server_id, &my_nick, "", "", actions);
+    });
 }
 
 /// Runs a typed command line through the engine (built-in script commands like
@@ -1687,38 +1707,46 @@ pub fn script_run_command(
 /// normally by the caller; this just lets scripts react to it).
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub fn script_run_input(
+pub async fn script_run_input(
     app: AppHandle,
-    engine: State<'_, ScriptEngine>,
     server_id: String,
     target: String,
     my_nick: String,
     network: String,
     text: String,
 ) -> bool {
-    let ctx = RunCtx {
-        my_nick: &my_nick,
-        network: &network,
-        server: "",
-        data_dir: script_data_dir(&app),
-        state: app
-            .try_state::<crate::irc::state::StateStore>()
-            .map(|s| s.get(&server_id))
-            .unwrap_or_default(),
-    };
-    let chan = if is_channel(&target) { target.clone() } else { String::new() };
-    let vars = EventVars {
-        nick: my_nick.clone(),
-        chan,
-        target: target.clone(),
-        text: text.clone(),
-        params: text.split_whitespace().map(String::from).collect(),
-        ..Default::default()
-    };
-    let (actions, halted) = engine.dispatch_event_halt(&ctx, "INPUT", vars);
-    apply_actions(&app, &server_id, &my_nick, &network, "", actions);
-    // `/halt` in an on INPUT handler suppresses the default send.
-    halted
+    // An `on INPUT` handler may call `$input`/`$?`, which blocks the run. This
+    // command is async (so it runs off the main thread) and does the work on a
+    // blocking thread, so a prompt can't freeze WebView2 — while still returning
+    // `halted` to the caller, which awaits it before sending the line.
+    tauri::async_runtime::spawn_blocking(move || {
+        let engine = app.state::<ScriptEngine>();
+        let ctx = RunCtx {
+            my_nick: &my_nick,
+            network: &network,
+            server: "",
+            data_dir: script_data_dir(&app),
+            state: app
+                .try_state::<crate::irc::state::StateStore>()
+                .map(|s| s.get(&server_id))
+                .unwrap_or_default(),
+        };
+        let chan = if is_channel(&target) { target.clone() } else { String::new() };
+        let vars = EventVars {
+            nick: my_nick.clone(),
+            chan,
+            target: target.clone(),
+            text: text.clone(),
+            params: text.split_whitespace().map(String::from).collect(),
+            ..Default::default()
+        };
+        let (actions, halted) = engine.dispatch_event_halt(&ctx, "INPUT", vars);
+        apply_actions(&app, &server_id, &my_nick, &network, "", actions);
+        // `/halt` in an on INPUT handler suppresses the default send.
+        halted
+    })
+    .await
+    .unwrap_or(false)
 }
 
 /// Runs a popup item's command, with `params` populating `$1..` (e.g. the

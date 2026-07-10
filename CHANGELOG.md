@@ -12,6 +12,13 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🧊 26.7.41 — Every dialog path unfrozen + a thank-you
+
+- **Audited and fixed every remaining dialog freeze.** 26.7.40 fixed aliases/commands; this covers the rest — custom `/dialog` handlers (`on DIALOG`), `on INPUT`, `on OPEN`/`on CLOSE`, `on NOTIFY`, and right-click menu building. Any script path that can pop an `$input`/`$?` prompt now runs off the UI thread, so the prompt can never freeze the app. (Confirmed these are the *only* places an engine run can block the UI.)
+- **Thanks:** added **xpu|se** to the credits for the hands-on testing and bug reports behind the recent fixes.
+
+---
+
 ## 🧊 26.7.40 — Dialog freeze fix + IRCX `%#` channels
 
 - **Fixed the frozen `$input` / `$?` dialog.** Running an alias that shows an input prompt from the input bar (e.g. `passx` with `mode $me +h $?="Enter Password"`) locked up the whole app — the dialog appeared but you couldn't type, cancel, or click anything. The alias now runs on a worker thread, so the prompt blocks the *script* and not the UI (the same way right-click popup commands already worked).
