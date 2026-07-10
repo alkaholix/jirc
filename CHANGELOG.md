@@ -12,6 +12,12 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🔵 26.7.45 — Icon recoloured to the accent blue
+
+- Recoloured the app icon to sit in jIRC's **blue** accent (`#7aa2f7`) instead of leaning purple — the white `#` on a blue gradient now matches the rest of the UI.
+
+---
+
 ## 🎨 26.7.44 — Proper app icon + tidy-ups
 
 - **New app icon** — a blue→purple gradient with a bold white `#` (the IRC channel symbol), matching jIRC's accent colours. Replaces the default blue-box placeholder, across Windows/macOS/Linux (and the mobile/store icon sets).

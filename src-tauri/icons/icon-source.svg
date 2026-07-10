@@ -1,11 +1,11 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
-  <!-- jIRC app icon: Tokyo-Night blue→purple gradient (matches the UI accent),
-       with a bold white "#" — the IRC channel symbol. Source for `tauri icon`. -->
+  <!-- jIRC app icon: a gradient built around the UI accent blue (#7aa2f7), with
+       a bold white "#" — the IRC channel symbol. Source for `tauri icon`. -->
   <defs>
     <linearGradient id="bg" gradientUnits="userSpaceOnUse" x1="150" y1="110" x2="900" y2="930">
-      <stop offset="0" stop-color="#7aa2f7"/>
-      <stop offset="0.55" stop-color="#9a8cf7"/>
-      <stop offset="1" stop-color="#bb9af7"/>
+      <stop offset="0" stop-color="#93b7ff"/>
+      <stop offset="0.5" stop-color="#7aa2f7"/>
+      <stop offset="1" stop-color="#5677d8"/>
     </linearGradient>
     <linearGradient id="sheen" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="1024">
       <stop offset="0" stop-color="#ffffff" stop-opacity="0.16"/>
