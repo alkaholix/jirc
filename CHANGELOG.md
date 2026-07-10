@@ -12,6 +12,12 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🧬 26.7.50 — Binary socket reads (`/sockread &binvar`)
+
+- Scripts can now read **binary** socket data byte-for-byte: **`/sockread &binvar`** (inside `on SOCKREAD`) puts the line's exact bytes into a binary variable, with no text/UTF-8 mangling. Parse it with `$bvar` / `$bfind`, build replies with `bset`, and send them with `/sockwrite name &binvar`. This is what binary protocols and crypto handshakes need — the text `/sockread %var` form is unchanged. New **Help → Sockets** section explains it with a before/after example.
+
+---
+
 ## 🌉 26.7.49 — `/server` works from scripts (bridges can connect the client)
 
 - Implemented **`/server [-m] <host> <port> [password]`** as a script command. Previously a script's `/server` fell through to a raw `SERVER` line (which went nowhere), so a script that stands up a **local bridge/proxy** and then does `/server 127.0.0.1 <port> <key>` could never get the client to connect. Now it opens a server window and connects the native client — so the bridge's listener accepts, and its `on SOCKLISTEN` / `on SOCKREAD` handlers finally run.

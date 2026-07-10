@@ -3741,6 +3741,28 @@ mod tests {
     }
 
     #[test]
+    fn sockread_binvar_preserves_exact_bytes() {
+        // `sockread &binvar` delivers the line's exact bytes — including a null and
+        // high bytes (0xC3, 0xFF) that a UTF-8 round-trip would corrupt. This is
+        // what a binary crypto handshake needs; a text `sockread %var` can't.
+        let engine = ScriptEngine::new();
+        engine.load(
+            "on *:SOCKREAD:bot:{ sockread &c | /msg #c len $bvar(&c,0) a $bvar(&c,1) b $bvar(&c,2) d $bvar(&c,3) br $sockbr }",
+        );
+        let vars = EventVars {
+            chan: "bot".into(),
+            target: "bot".into(),
+            sock_bytes: vec![0u8, 195u8, 255u8],
+            ..Default::default()
+        };
+        let actions = engine.dispatch_event(&ctx(), "SOCKREAD", vars);
+        assert_eq!(
+            actions,
+            vec![Action::Send("PRIVMSG #c :len 3 a 0 b 195 d 255 br 3".into())]
+        );
+    }
+
+    #[test]
     fn sockread_only_fires_for_matching_name() {
         let engine = ScriptEngine::new();
         engine.load("on *:SOCKREAD:bot:{ /msg #c hit }");

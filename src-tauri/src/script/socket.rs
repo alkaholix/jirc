@@ -459,11 +459,17 @@ async fn run_connected(
             res = reader.read_until(b'\n', &mut buf) => match res {
                 Ok(0) => break, // EOF
                 Ok(n) => {
-                    let line = decode_line(&buf);
-                    buf.clear();
                     bump(&app, &name, 0, n as u64);
-                    let line = line.trim_end_matches(['\r', '\n']);
-                    fire(&app, &server_id, &network, &nick, "SOCKREAD", &name, line);
+                    // Raw line bytes minus the trailing CR/LF (mIRC strips the
+                    // terminator): a decoded text view for `%var` reads, and the
+                    // exact bytes for `&binvar` reads (binary protocols).
+                    let mut end = buf.len();
+                    while end > 0 && matches!(buf[end - 1], b'\n' | b'\r') {
+                        end -= 1;
+                    }
+                    let text = decode_line(&buf[..end]);
+                    fire_read(&app, &server_id, &network, &nick, &name, &text, &buf[..end]);
+                    buf.clear();
                 }
                 Err(_) => break,
             },
@@ -518,6 +524,43 @@ fn fire(
         ..Default::default()
     };
     let actions = engine.dispatch_event(&ctx, kind, vars);
+    apply_actions(app, server_id, nick, network, "", actions);
+}
+
+/// Fires `on SOCKREAD` carrying both a decoded text view (`$1-` / `sockread %var`)
+/// and the exact line bytes (`sockread &binvar`), so binary protocols read
+/// byte-for-byte with no UTF-8 round-trip.
+fn fire_read(
+    app: &AppHandle,
+    server_id: &str,
+    network: &str,
+    nick: &str,
+    name: &str,
+    text: &str,
+    bytes: &[u8],
+) {
+    let Some(engine) = app.try_state::<ScriptEngine>() else {
+        return;
+    };
+    let ctx = RunCtx {
+        my_nick: nick,
+        network,
+        server: "",
+        data_dir: script_data_dir(app),
+        state: app
+            .try_state::<crate::irc::state::StateStore>()
+            .map(|s| s.get(server_id))
+            .unwrap_or_default(),
+    };
+    let vars = EventVars {
+        chan: name.to_string(),
+        target: name.to_string(),
+        params: text.split_whitespace().map(String::from).collect(),
+        text: text.to_string(),
+        sock_bytes: bytes.to_vec(),
+        ..Default::default()
+    };
+    let actions = engine.dispatch_event(&ctx, "SOCKREAD", vars);
     apply_actions(app, server_id, nick, network, "", actions);
 }
 

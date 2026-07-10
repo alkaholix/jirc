@@ -877,6 +877,43 @@ and socket events run in the context of the connection that opened them — so
 <p>The simple form works too — the line is in <code>$1-</code>, so you can skip
 <code>/sockread</code> entirely: <code>on *:SOCKREAD:mybot:{ if (PING isin $1-) { … } }</code>.</p>
 
+<h3 id="sockets-binary">Binary protocols — <code>/sockread &amp;binvar</code></h3>
+<p>Everything above reads <strong>text lines</strong> into a <code>%var</code>. Some
+protocols send <strong>binary</strong> — crypto challenges, length-prefixed frames,
+data with embedded null (<code>0x00</code>) or other non-text bytes. Reading those
+into a text <code>%var</code> mangles them (a text read treats the data as text and
+re-encodes the bytes). Read them into a <strong>binary variable</strong> instead,
+which preserves every byte exactly:</p>
+<table>
+  <tr><th>Command / Identifier</th><th>Effect</th></tr>
+  <tr><td><code>/sockread &amp;binvar</code></td><td>(in <code>on SOCKREAD</code>) read the line's raw bytes into a binary variable</td></tr>
+  <tr><td><code>$bvar(&amp;v,0)</code></td><td>number of bytes; <code>$bvar(&amp;v,N)</code> = the Nth byte's value</td></tr>
+  <tr><td><code>$bfind(&amp;v,1,text)</code></td><td>find a byte marker inside the data</td></tr>
+  <tr><td><code>bset &amp;v N b1 b2 …</code></td><td>build a binary packet (numbers = bytes; <code>-t</code> for text)</td></tr>
+  <tr><td><code>/sockwrite name &amp;v</code></td><td>send a binary variable's bytes verbatim (no CRLF unless <code>-n</code>)</td></tr>
+</table>
+<p><strong>Migrating a handler</strong> — swap the <code>%var</code> read + <code>$regex</code>
+parse for a <code>&amp;binvar</code> read + binary parse:</p>
+<pre><code><span class="c">; BEFORE — text read; corrupts binary bytes</span>
+<span class="k">on</span> *:SOCKREAD:auth:{
+  <span class="k">var</span> <span class="v">%reply</span>
+  <span class="k">/sockread</span> <span class="v">%reply</span>
+  <span class="c">; parse %reply with $regex … &lt;- binary is already mangled here</span>
+}
+
+<span class="c">; AFTER — binary read; byte-exact</span>
+<span class="k">on</span> *:SOCKREAD:auth:{
+  <span class="k">/sockread</span> <span class="v">&amp;reply</span>
+  <span class="k">if</span> (!<span class="i">$sockbr</span>) <span class="k">return</span>
+  <span class="c">; $bvar(&amp;reply,0)=length, $bvar(&amp;reply,1,N)=bytes, $bfind for markers</span>
+  <span class="k">bset</span> <span class="v">&amp;out</span> 1 …          <span class="c">; assemble the answer bytes</span>
+  <span class="k">/sockwrite</span> auth <span class="v">&amp;out</span>   <span class="c">; sent verbatim</span>
+}
+</code></pre>
+<p><code>$sockbr</code> is how many bytes the last <code>/sockread</code> returned;
+loop <code>while ($sockbr)</code> to drain the buffer. (The text <code>%var</code> form
+still works exactly as before — this is only for binary data.)</p>
+
 <h2 id="safety">Safety: other people's text stays text</h2>
 <p>This is one place jIRC deliberately behaves differently from mIRC — and it's
 in your favour. In mIRC, a few things get <strong>evaluated twice</strong>, which

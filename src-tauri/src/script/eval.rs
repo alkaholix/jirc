@@ -123,6 +123,10 @@ pub struct EventVars {
     /// matched level (`$ulevel`), set by the dispatcher's level gate.
     pub clevel: String,
     pub ulevel: String,
+    /// The exact bytes of a `SOCKREAD` line (before UTF-8 decoding), so
+    /// `sockread &binvar` can read binary protocols byte-for-byte. Empty for
+    /// every other event.
+    pub sock_bytes: Vec<u8>,
 }
 
 const STEP_LIMIT: u32 = 100_000;
@@ -962,10 +966,6 @@ impl<'a> Runtime<'a> {
         }
     }
 
-    fn first_token<'b>(&self, raw: &'b str) -> &'b str {
-        raw.trim().split_whitespace().next().unwrap_or("")
-    }
-
     fn cmd_echo(&mut self, raw: &str) {
         let raw = raw.trim();
         let mut rest = raw;
@@ -1768,14 +1768,37 @@ impl<'a> Runtime<'a> {
     /// `%var` and sets `$sockbr`. A second call in the same event reads empty
     /// (so `while ($sockbr)` loops terminate).
     fn cmd_sockread(&mut self, raw: &str) {
-        let var = self.first_token(raw).trim_start_matches('%').to_string();
-        if var.is_empty() {
+        // sockread [-fn] [numbytes] <%var|&binvar>. The target is the last
+        // non-switch, non-numeric token. A leading `&` reads the line's bytes
+        // verbatim into a binary variable (binary protocols — no UTF-8 round-trip);
+        // a `%var` reads the decoded text line as before. Switches / numbytes are
+        // accepted; the whole line is delivered (line-oriented read model).
+        let mut target = "";
+        for tok in raw.split_whitespace() {
+            if tok.starts_with('-') || tok.parse::<u32>().is_ok() {
+                continue;
+            }
+            target = tok;
+        }
+        if target.is_empty() {
             return;
         }
-        let line = std::mem::take(&mut self.event.text);
-        let br = line.len();
-        self.vars.insert(var, line);
-        self.vars.insert(SOCK_BR_KEY.to_string(), br.to_string());
+        if target.starts_with('&') {
+            let bytes = std::mem::take(&mut self.event.sock_bytes);
+            let br = bytes.len();
+            self.bins.unset(target);
+            self.bins.set(target, 1, &bytes, false);
+            self.vars.insert(SOCK_BR_KEY.to_string(), br.to_string());
+        } else {
+            let var = target.trim_start_matches('%').to_string();
+            if var.is_empty() {
+                return;
+            }
+            let line = std::mem::take(&mut self.event.text);
+            let br = line.len();
+            self.vars.insert(var, line);
+            self.vars.insert(SOCK_BR_KEY.to_string(), br.to_string());
+        }
     }
 
     /// `/dialog [-c] <name>` — open (or, with `-c`, close) a custom dialog.
