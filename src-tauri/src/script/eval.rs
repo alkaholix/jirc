@@ -2121,9 +2121,16 @@ impl<'a> Runtime<'a> {
         // parameter is empty. Only when a digit follows (a literal `$$`
         // elsewhere is left untouched).
         let require = chars.get(*i) == Some(&'$')
-            && matches!(chars.get(*i + 1), Some(c) if c.is_ascii_digit());
+            && matches!(chars.get(*i + 1), Some(c) if c.is_ascii_digit() || *c == '?');
         if require {
             *i += 1;
+        }
+        // `$?` — the classic input identifier (`$?`, `$?="msg"`, `$?"msg"`, `$?*=`
+        // password, `$?!=` yes/no, `$?N`, `$?#`). Deprecated in mIRC in favour of
+        // `$input`, but still used. `$$?` requires a non-empty answer.
+        if chars.get(*i) == Some(&'?') {
+            *i += 1;
+            return self.eval_question(chars, i, require);
         }
         // Numeric param: $1 (single), $2- (to end), $2-4 (range), $0 (count).
         if matches!(chars.get(*i), Some(c) if c.is_ascii_digit()) {
@@ -2262,6 +2269,70 @@ impl<'a> Runtime<'a> {
     /// Records `$v1`/`$v2` from an (already-expanded) condition: the two operands
     /// of a binary comparison (`a == b`, `a isin b`, …), else `$v1` = the whole
     /// value and `$v2` = empty (the truthiness form, `$iif(value, $v1, …)`).
+    /// The classic `$?` input identifier. Optional modifier right after `?`
+    /// (`*` password, `!` yes/no, a digit for `$N`, `#` for `$chan`), optional
+    /// `=`, optional `"quoted message"`. `require` (from `$$?`) halts the run on
+    /// an empty answer. Maps onto the same prompt backend as `$input`.
+    fn eval_question(&mut self, chars: &[char], i: &mut usize, require: bool) -> String {
+        let mut yes_no = false;
+        let existing = match chars.get(*i).copied() {
+            Some('*') => {
+                *i += 1; // password field — jIRC prompts without masking
+                None
+            }
+            Some('!') => {
+                *i += 1;
+                yes_no = true;
+                None
+            }
+            Some('#') => {
+                *i += 1;
+                Some(self.event.chan.clone())
+            }
+            Some(c) if c.is_ascii_digit() => {
+                let n = read_number(chars, i);
+                Some(self.params_range(n, Some(n)))
+            }
+            _ => None,
+        };
+        let message = self.read_question_message(chars, i);
+        // `$?N` / `$?#` return the existing value when it is already set.
+        if let Some(v) = existing {
+            if !v.is_empty() {
+                return v;
+            }
+        }
+        let msg = if message.is_empty() { "Enter reply:".to_string() } else { message };
+        let answer = self.input.prompt(&msg, "", "").unwrap_or_default();
+        if yes_no {
+            return if answer.is_empty() { "$false" } else { "$true" }.to_string();
+        }
+        if require && answer.is_empty() {
+            self.halted = true;
+        }
+        answer
+    }
+
+    /// Reads `$?`'s optional `=` then `"quoted"` message, returning it expanded.
+    fn read_question_message(&mut self, chars: &[char], i: &mut usize) -> String {
+        if chars.get(*i) == Some(&'=') {
+            *i += 1;
+        }
+        if chars.get(*i) == Some(&'"') {
+            *i += 1;
+            let mut m = String::new();
+            while let Some(&c) = chars.get(*i) {
+                *i += 1;
+                if c == '"' {
+                    break;
+                }
+                m.push(c);
+            }
+            return self.expand(&m);
+        }
+        String::new()
+    }
+
     fn record_v(&mut self, cond: &str) {
         let (v1, v2) = split_v(cond);
         self.vars.insert(V1_KEY.to_string(), v1);

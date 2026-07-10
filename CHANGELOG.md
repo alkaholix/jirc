@@ -12,6 +12,12 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## ❓ 26.7.35 — The classic `$?` input prompt
+
+- Added **`$?`** — the old-style input identifier (`$?="Pick one"`, `$?*=` for passwords, `$?!=` for yes/no, `$$?` to require an answer). Scripts written with `$?` instead of the newer `$input` now work.
+
+---
+
 ## 🖥️ 26.7.34 — Manage users in Settings
 
 - A new **Settings → Users** tab to see and edit your access list and auto-op / auto-voice / protect lists — no need to remember `/auser` and `/aop` syntax. Auto-op entries are **grouped by network**, so multi-server setups stay clear.

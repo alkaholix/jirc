@@ -3118,6 +3118,33 @@ mod tests {
     }
 
     #[test]
+    fn question_input_identifier() {
+        use crate::script::eval::ScriptInput;
+        struct Fake(String);
+        impl ScriptInput for Fake {
+            fn prompt(&self, _: &str, _: &str, _: &str) -> Option<String> {
+                Some(self.0.clone())
+            }
+        }
+        // $?="msg" returns the typed answer; $?! maps a non-empty answer to $true.
+        let e = ScriptEngine::new();
+        e.set_input(std::sync::Arc::new(Fake("banana".into())));
+        e.load("alias t { /msg #c $?=\"fruit\" / $?!\"ok\" }");
+        assert_eq!(
+            e.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :banana / $true".into())]
+        );
+        // $$? halts the run when the answer is empty.
+        let e2 = ScriptEngine::new();
+        e2.set_input(std::sync::Arc::new(Fake(String::new())));
+        e2.load("alias t { /msg #c one | var %x $$?\"q\" | /msg #c two }");
+        assert_eq!(
+            e2.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :one".into())]
+        );
+    }
+
+    #[test]
     fn user_list_persists() {
         use crate::script::users::{AutoKind, UserList};
         let dir = std::env::temp_dir().join(format!("jirc-users-{}", std::process::id()));
