@@ -38,9 +38,6 @@ pub fn run() {
         .manage(script::input::PromptRegistry::default())
         .manage(irc::ircx_keys::IrcxKeyStore::new())
         .setup(|app| {
-            // Rename the legacy `com.jirc.app` data folder to `jIRC` (once) before
-            // anything reads profiles/scripts/logs.
-            storage::migrate_legacy_app_dir(app.handle());
             // Materialise the data subfolders under the jIRC folder (scripts/ is
             // created when scripts load; dcc/ for received transfers).
             let _ = storage::dcc_dir(app.handle());

@@ -12,6 +12,14 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🎨 26.7.44 — Proper app icon + tidy-ups
+
+- **New app icon** — a blue→purple gradient with a bold white `#` (the IRC channel symbol), matching jIRC's accent colours. Replaces the default blue-box placeholder, across Windows/macOS/Linux (and the mobile/store icon sets).
+- **Fixed the bundle-identifier warning** — the identifier no longer ends in `.app` (which clashes with the macOS `.app` bundle extension). Your saved servers and passwords are unaffected (they live in the `jIRC` folder and the OS keyring, not under the identifier).
+- **Removed** the old one-time `com.jirc.app → jIRC` data-folder migration — no longer needed.
+
+---
+
 ## 🚪 26.7.43 — "New connection" chooser is back
 
 - Clicking **＋ Add a connection** now opens the two-option chooser again — **Connect to a server** or **Open a local console** — the same choice you get on the startup screen, instead of jumping straight into the connect form. (Esc or a click outside closes it.)

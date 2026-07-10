@@ -76,9 +76,8 @@ fn sanitize(name: &str) -> String {
     }
 }
 
-/// The app's data-folder name on disk. We use a friendly `jIRC` rather than the
-/// Tauri bundle identifier (`com.jirc.app`, which still drives bundling/OS
-/// registration). [`migrate_legacy_app_dir`] moves the old folder once.
+/// The app's data-folder name on disk. A friendly `jIRC` rather than the Tauri
+/// bundle identifier (which only drives bundling / OS registration).
 pub const APP_DIR_NAME: &str = "jIRC";
 
 /// A user-chosen data location that overrides the default per-profile folder.
@@ -224,31 +223,6 @@ fn logs_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app_data_dir(app)?.join("logs"))
 }
 
-/// One-time rename of the old identifier-named folder (`com.jirc.app`) to `jIRC`,
-/// in both the OS config and data base dirs. Runs at startup; a no-op once
-/// migrated or on a fresh install.
-pub fn migrate_legacy_app_dir(app: &AppHandle) {
-    // A custom/portable data dir has no per-profile legacy folder to migrate.
-    if custom_base(app).is_some() {
-        return;
-    }
-    for base in [app.path().config_dir(), app.path().data_dir()] {
-        if let Ok(base) = base {
-            migrate_dir(&base);
-        }
-    }
-}
-
-/// Renames `<base>/com.jirc.app` to `<base>/jIRC` when the old exists and the new
-/// doesn't (never clobbering). A same-volume rename, so it's atomic and instant.
-fn migrate_dir(base: &std::path::Path) {
-    let old = base.join("com.jirc.app");
-    let new = base.join(APP_DIR_NAME);
-    if old.exists() && !new.exists() {
-        let _ = std::fs::rename(&old, &new);
-    }
-}
-
 /// Loads saved server profiles, rehydrating secrets from the OS keyring.
 #[tauri::command]
 pub fn profiles_load(app: AppHandle) -> Result<Vec<ServerProfile>, String> {
@@ -363,8 +337,8 @@ pub fn log_read(app: AppHandle, network: String, buffer: String) -> Result<Strin
 #[cfg(test)]
 mod tests {
     use super::{
-        keyring_available, load_secret, migrate_dir, read_location_redirect, resolve_custom_base,
-        sanitize, store_secret, APP_DIR_NAME,
+        keyring_available, load_secret, read_location_redirect, resolve_custom_base, sanitize,
+        store_secret,
     };
 
     #[test]
@@ -414,28 +388,6 @@ mod tests {
         assert_eq!(sanitize("a/b:c*"), "a_b_c_");
         assert_eq!(sanitize("  "), "_");
         assert_eq!(sanitize("Libera.Chat"), "Libera.Chat");
-    }
-
-    #[test]
-    fn migrates_legacy_app_dir() {
-        let tmp = std::env::temp_dir().join(format!("jirc-mig-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        let old = tmp.join("com.jirc.app");
-        std::fs::create_dir_all(old.join("scripts")).unwrap();
-        std::fs::write(old.join("profiles.json"), "[]").unwrap();
-
-        migrate_dir(&tmp);
-
-        let new = tmp.join(APP_DIR_NAME);
-        assert!(new.join("profiles.json").exists(), "profiles migrated");
-        assert!(new.join("scripts").exists(), "scripts migrated");
-        assert!(!old.exists(), "old folder gone");
-
-        // Idempotent and never clobbers: a second run is a no-op.
-        migrate_dir(&tmp);
-        assert!(new.exists());
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// Round-trips a secret through the real OS keyring. Ignored by default

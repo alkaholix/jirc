@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "jIRC",
-  "version": "26.7.43",
-  "identifier": "com.jirc.app",
+  "version": "26.7.44",
+  "identifier": "com.jirc.client",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",

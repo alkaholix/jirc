@@ -1,6 +1,6 @@
 {
   "name": "jirc",
-  "version": "26.7.43",
+  "version": "26.7.44",
   "description": "jIRC — a modern, open-source mIRC-style IRC client (standard IRC + IRCX)",
   "license": "MIT",
   "type": "module",
