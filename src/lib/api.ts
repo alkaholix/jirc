@@ -300,6 +300,7 @@ export type IrcEvent =
   | { type: "numeric"; serverId: string; code: number; args: string[] }
   | { type: "error"; serverId: string; message: string }
   | { type: "echo"; serverId: string; target: string; text: string }
+  | { type: "scriptServer"; host: string; port: number; pass: string }
   | { type: "isupport"; serverId: string; chanTypes: string; prefixes: string }
   | { type: "whois"; serverId: string; nick: string; lines: string[] }
   | { type: "listEntry"; serverId: string; channel: string; users: number; topic: string }

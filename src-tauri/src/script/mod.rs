@@ -1370,6 +1370,14 @@ fn apply_actions_depth(
                     );
                 }
             }
+            Action::Server { host, port, pass } => {
+                // The frontend opens a server window and starts the native
+                // connection (a script `/server`, as used by local bridges).
+                let _ = app.emit(
+                    IRC_EVENT,
+                    UiEvent::ScriptServer { host, port, pass },
+                );
+            }
             Action::DialogOpen { name, title, controls } => {
                 let _ = app.emit(
                     IRC_EVENT,
@@ -3672,6 +3680,19 @@ mod tests {
         engine.load("alias go { /socklisten -d 127.0.0.1 lsn }");
         let actions = engine.run_alias(&ctx(), "#c", "go", "");
         assert_eq!(actions, vec![Action::SockListen { name: "lsn".into() }]);
+    }
+
+    #[test]
+    fn server_command_emits_connect_action() {
+        // `/server [-m] <host> <port> [pass]` — a script connecting the native
+        // client (e.g. a local bridge). Switches are ignored; host/port/pass carry.
+        let engine = ScriptEngine::new();
+        engine.load("alias go { /server -m 127.0.0.1 50641 mykey }");
+        let actions = engine.run_alias(&ctx(), "#c", "go", "");
+        assert_eq!(
+            actions,
+            vec![Action::Server { host: "127.0.0.1".into(), port: 50641, pass: "mykey".into() }]
+        );
     }
 
     #[test]

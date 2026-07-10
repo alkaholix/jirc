@@ -35,6 +35,10 @@ pub enum Action {
     /// Start the accept loop for a listener bound by `/socklisten` (carries the
     /// owning connection's context to apply-time so events route correctly).
     SockListen { name: String },
+    /// `/server [-m] <host> <port> [password]` — connect the native client (also
+    /// used by scripts that stand up a local bridge/proxy). The frontend opens the
+    /// server window and starts the connection.
+    Server { host: String, port: u16, pass: String },
     /// Open a custom dialog (`/dialog`).
     DialogOpen {
         name: String,
@@ -761,6 +765,7 @@ impl<'a> Runtime<'a> {
                     );
                 }
             }
+            "server" => self.cmd_server(raw_args),
             "sockopen" => self.cmd_sockopen(raw_args),
             "sockwrite" => self.cmd_sockwrite(raw_args),
             "sockclose" => {
@@ -1697,6 +1702,20 @@ impl<'a> Runtime<'a> {
 
     /// `/socklisten [-options] <name> [port]` — bind a listening socket. With no
     /// (or 0) port the OS assigns one, readable via `$sock(name).port`.
+    /// `/server [-m|-mn…] <host> <port> [password]` — connect the native IRC
+    /// client to a server (or a local bridge). mIRC switches (`-m` new window,
+    /// etc.) are accepted and ignored; the frontend opens the window + connects.
+    fn cmd_server(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        let mut toks = expanded.split_whitespace().filter(|t| !t.starts_with('-'));
+        let Some(host) = toks.next().map(|s| s.to_string()) else {
+            return;
+        };
+        let port = toks.next().and_then(|p| p.parse::<u16>().ok()).unwrap_or(6667);
+        let pass = toks.collect::<Vec<_>>().join(" ");
+        self.actions.push(Action::Server { host, port, pass });
+    }
+
     fn cmd_socklisten(&mut self, raw: &str) {
         let expanded = self.expand(raw);
         // mIRC syntax: /socklisten [-d] [bindip] <name> [port]. The `-d` switch

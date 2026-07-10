@@ -86,6 +86,32 @@ function App() {
         });
       }
       if (e.payload.type === "dccLocalHost") dccDetect.set(e.payload.host);
+      // A script ran `/server host port [pass]` (e.g. a local bridge): open a
+      // server window and connect the native client to it. Main window only.
+      if (e.payload.type === "scriptServer" && detachedKey === null) {
+        const o = e.payload;
+        const serverId = crypto.randomUUID();
+        const profile: ServerProfile = {
+          id: serverId,
+          name: o.host,
+          host: o.host,
+          port: o.port,
+          nick: `Guest${Math.floor(1000 + Math.random() * 9000)}`,
+          password: o.pass || undefined,
+          tls: false,
+          autojoin: [],
+        };
+        ensureServer(serverId, o.host);
+        ensureBuffer(serverId, STATUS, "status");
+        setActive(bufferKey(serverId, STATUS));
+        appendLine(serverId, STATUS, "status", {
+          kind: "system",
+          text: `Connecting to ${o.host}:${o.port}…`,
+        });
+        api.connect(profile).catch((err) =>
+          appendLine(serverId, STATUS, "status", { kind: "error", text: `Connect failed: ${err}` })
+        );
+      }
     });
     return () => {
       unlisten.then((f) => f());

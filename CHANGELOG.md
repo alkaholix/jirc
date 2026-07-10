@@ -12,6 +12,12 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🌉 26.7.49 — `/server` works from scripts (bridges can connect the client)
+
+- Implemented **`/server [-m] <host> <port> [password]`** as a script command. Previously a script's `/server` fell through to a raw `SERVER` line (which went nowhere), so a script that stands up a **local bridge/proxy** and then does `/server 127.0.0.1 <port> <key>` could never get the client to connect. Now it opens a server window and connects the native client — so the bridge's listener accepts, and its `on SOCKLISTEN` / `on SOCKREAD` handlers finally run.
+
+---
+
 ## 🔌 26.7.48 — `/socklisten -d <ip>` fixed (local bridges connect)
 
 - Fixed **`/socklisten -d <bindip> <name>`** — jIRC was treating the bind IP (e.g. `127.0.0.1`) as the **socket name**, so the listener registered under the wrong name and `$sock(<name>).port` came back **blank**. Scripts that set up a local proxy/bridge and then do `/server 127.0.0.1 $sock(<name>).port` now get the real port and connect. (mIRC's full `/socklisten [-d] [bindip] <name> [port]` syntax is parsed correctly.)

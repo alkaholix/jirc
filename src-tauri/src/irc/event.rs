@@ -270,6 +270,14 @@ pub enum UiEvent {
         text: String,
     },
 
+    /// A script ran `/server <host> <port> [pass]` — the frontend opens a server
+    /// window and starts the native connection (used by local bridges/proxies).
+    ScriptServer {
+        host: String,
+        port: u16,
+        pass: String,
+    },
+
     // ---- Script-driven custom windows (@window) ----
     /// Open/create a custom window.
     WindowOpen {
