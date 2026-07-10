@@ -867,6 +867,16 @@ img.nick-icon {
   opacity: 0.85;
 }
 
+/* The "new connection" chooser (Connect to a server / Open a local console),
+   shown from the + button — mirrors the startup welcome options. */
+.chooser-modal {
+  text-align: center;
+}
+.chooser-lead {
+  color: var(--muted);
+  margin: 0 0 1.2rem;
+}
+
 /* ---- Modal ---- */
 .modal-backdrop {
   position: fixed;

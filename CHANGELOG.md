@@ -12,6 +12,12 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🚪 26.7.43 — "New connection" chooser is back
+
+- Clicking **＋ Add a connection** now opens the two-option chooser again — **Connect to a server** or **Open a local console** — the same choice you get on the startup screen, instead of jumping straight into the connect form. (Esc or a click outside closes it.)
+
+---
+
 ## 🛰️ 26.7.42 — Channel detection is purely ISUPPORT-driven
 
 - Reverted the hardcoded `%#`/`%&` channel-prefix special-casing from 26.7.40. Whether a name is a channel is now decided **entirely by the server's advertised `CHANTYPES`** (from ISUPPORT/005) — no client-side assumptions. IRCX servers list their `%#`/`%&` prefixes there (e.g. `CHANTYPES=%#`), so `%#` channels still work exactly as before. `$chan` still returns the full name **with** the `%#` prefix on IRCX (it always did — it's the raw channel name, unlike mIRC which drops it).

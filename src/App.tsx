@@ -34,6 +34,7 @@ import { applyTheme, applyCustomCss, applyChatFont, useSettings } from "./state/
 
 function App() {
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [chooserOpen, setChooserOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [scriptOpen, setScriptOpen] = useState(false);
   const [autoJoinOpen, setAutoJoinOpen] = useState(false);
@@ -158,6 +159,16 @@ function App() {
     api.dccConfigure(dccIp, dccPortFrom, dccPortTo).catch(() => {});
   }, [dccIp, dccPortFrom, dccPortTo]);
 
+  // Close the "new connection" chooser on Escape.
+  useEffect(() => {
+    if (!chooserOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setChooserOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [chooserOpen]);
+
   // Detached single-window mode: render just one buffer in its own OS window.
   // (Empty string = a detached window whose route wasn't found; still not the main UI.)
   if (detachedKey !== null) {
@@ -204,7 +215,7 @@ function App() {
   };
 
   const actions = {
-    onAddServer: () => setDialogOpen(true),
+    onAddServer: () => setChooserOpen(true),
     onOpenSettings: () => setSettingsOpen(true),
     onOpenScripts: () => setScriptOpen(true),
     onOpenAutoJoin: () => setAutoJoinOpen(true),
@@ -262,6 +273,36 @@ function App() {
           </div>
         )}
       </main>
+      {chooserOpen && (
+        <div className="modal-backdrop" onClick={() => setChooserOpen(false)}>
+          <div className="modal chooser-modal" onClick={(e) => e.stopPropagation()}>
+            <h2>New connection</h2>
+            <p className="chooser-lead">
+              Connect to an IRC server, or open a local console to run scripts and socket
+              bots without connecting.
+            </p>
+            <div className="welcome-actions">
+              <button
+                onClick={() => {
+                  setChooserOpen(false);
+                  setDialogOpen(true);
+                }}
+              >
+                Connect to a server
+              </button>
+              <button
+                className="ghost"
+                onClick={() => {
+                  setChooserOpen(false);
+                  openLocalConsole();
+                }}
+              >
+                Open a local console
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {dialogOpen && <ConnectDialog onClose={() => setDialogOpen(false)} onConnect={onConnect} />}
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
       {scriptOpen && <ScriptDialog onClose={() => setScriptOpen(false)} />}
