@@ -1699,7 +1699,17 @@ impl<'a> Runtime<'a> {
     /// (or 0) port the OS assigns one, readable via `$sock(name).port`.
     fn cmd_socklisten(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        // mIRC syntax: /socklisten [-d] [bindip] <name> [port]. The `-d` switch
+        // means an explicit bind-IP token (e.g. 127.0.0.1) precedes <name>; skip
+        // it so the socket is registered under <name> and not the IP. Without -d
+        // the first non-switch token is <name>.
+        let has_bindip = expanded
+            .split_whitespace()
+            .any(|t| t.starts_with('-') && t.contains('d'));
         let mut toks = expanded.split_whitespace().filter(|t| !t.starts_with('-'));
+        if has_bindip {
+            toks.next(); // the bind IP — jIRC binds the loopback/all interfaces itself
+        }
         if let Some(name) = toks.next() {
             let name = name.to_string();
             let port = toks.next().and_then(|p| p.parse::<u16>().ok()).unwrap_or(0);

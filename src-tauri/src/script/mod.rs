@@ -3664,6 +3664,17 @@ mod tests {
     }
 
     #[test]
+    fn socklisten_dash_d_bindip_registers_under_the_name() {
+        // mIRC's `/socklisten -d <bindip> <name>` — the bind IP must NOT be taken
+        // as the socket name, or `$sock(name).port` reads blank (breaking a local
+        // bridge that then does `/server 127.0.0.1 $sock(name).port`).
+        let engine = ScriptEngine::new();
+        engine.load("alias go { /socklisten -d 127.0.0.1 lsn }");
+        let actions = engine.run_alias(&ctx(), "#c", "go", "");
+        assert_eq!(actions, vec![Action::SockListen { name: "lsn".into() }]);
+    }
+
+    #[test]
     fn protocol_commands_emit_raw_lines() {
         let engine = ScriptEngine::new();
         engine.load(
