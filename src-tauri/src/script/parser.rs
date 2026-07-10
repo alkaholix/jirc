@@ -511,8 +511,8 @@ fn parse_dialog(name: String, src: &str) -> Dialog {
 fn parse_popup_body(src: &str) -> Vec<PopupItem> {
     // Flatten lines into (depth, item) then assemble into a tree.
     let mut flat: Vec<(usize, PopupItem)> = Vec::new();
-    for raw in src.lines() {
-        let line = raw.trim();
+    for line in split_popup_lines(src) {
+        let line = line.trim();
         if line.is_empty() || line.starts_with(';') {
             continue;
         }
@@ -532,18 +532,7 @@ fn parse_popup_body(src: &str) -> Vec<PopupItem> {
             ));
             continue;
         }
-        // A popup item takes its command either as `Label:commands` or
-        // `Label { commands }` (single line) — mIRC accepts both. Handle the brace
-        // form first so a `{ … }` body isn't left sitting in the label (which
-        // surfaced the raw popup code in the menu).
-        let (label, command) = if let Some(open) = rest.find('{') {
-            let close = rest.rfind('}').filter(|&c| c > open).unwrap_or(rest.len());
-            (rest[..open].trim().to_string(), rest[open + 1..close].trim().to_string())
-        } else if let Some((l, c)) = rest.split_once(':') {
-            (l.trim().to_string(), c.trim().to_string())
-        } else {
-            (rest.to_string(), String::new())
-        };
+        let (label, command) = split_popup_item(rest);
         flat.push((
             depth,
             PopupItem {
@@ -558,6 +547,83 @@ fn parse_popup_body(src: &str) -> Vec<PopupItem> {
     }
     let mut idx = 0;
     assemble_popup(&flat, &mut idx, 0)
+}
+
+/// Splits a popup body into logical item-lines. A newline ends an item only at
+/// brace depth 0, so a multi-line `{ … }` command block (mIRC lets a menu item's
+/// command span lines — `while`/`if` blocks, etc.) stays attached to its item
+/// instead of each body line becoming a bogus menu entry.
+fn split_popup_lines(src: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut depth = 0i32;
+    for c in src.chars() {
+        match c {
+            '{' => {
+                depth += 1;
+                cur.push(c);
+            }
+            '}' => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+                cur.push(c);
+            }
+            '\n' if depth == 0 => out.push(std::mem::take(&mut cur)),
+            _ => cur.push(c),
+        }
+    }
+    out.push(cur);
+    out
+}
+
+/// Splits a popup item's text into `(label, command)`. mIRC accepts
+/// `Label:command` and `Label { block }` (and the hybrid `Label : { block }`); a
+/// line with neither is a submenu parent / display item. Whichever of `:`/`{`
+/// comes first decides the form — so a `:command` that itself contains braces
+/// (e.g. `: if (x) { y }`) isn't mistaken for the brace form.
+fn split_popup_item(rest: &str) -> (String, String) {
+    let colon = rest.find(':');
+    let brace = rest.find('{');
+    let brace_first = match (colon, brace) {
+        (_, None) => false,
+        (None, Some(_)) => true,
+        (Some(ci), Some(bi)) => bi < ci,
+    };
+    if brace_first {
+        let bi = brace.unwrap();
+        let close = rest.rfind('}').filter(|&c| c > bi).unwrap_or(rest.len());
+        (rest[..bi].trim().to_string(), rest[bi + 1..close].trim().to_string())
+    } else if let Some(ci) = colon {
+        // `Label : command`; if the command is wrapped in `{ … }`, drop them.
+        (rest[..ci].trim().to_string(), strip_wrapping_braces(rest[ci + 1..].trim()).to_string())
+    } else {
+        (rest.to_string(), String::new())
+    }
+}
+
+/// Drops a single wrapping `{ … }` off a `: { block }` command, leaving other
+/// commands (and unbalanced / multi-block text) untouched.
+fn strip_wrapping_braces(s: &str) -> &str {
+    let t = s.trim();
+    if !t.starts_with('{') || !t.ends_with('}') {
+        return t;
+    }
+    let mut depth = 0i32;
+    for (i, c) in t.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                // Only strip when the opening brace closes exactly at the end.
+                if depth == 0 {
+                    return if i + 1 == t.len() { t[1..i].trim() } else { t };
+                }
+            }
+            _ => {}
+        }
+    }
+    t
 }
 
 /// Recursively assembles flat (depth, item) entries into a tree.
@@ -885,6 +951,43 @@ mod tests {
         assert_eq!(top.children[1].children[0].command, "i7floodnick numbers");
         assert_eq!(top.children[2].label, "Stop");
         assert_eq!(top.children[2].command, "i7floodstop");
+    }
+
+    #[test]
+    fn parses_popup_multiline_command_block() {
+        // A menu item whose `{ … }` command spans multiple lines (loops/ifs) must
+        // stay one item — not shatter into a bogus entry per body line.
+        let s = parse(
+            "menu nicklist {\n  Kick {\n    var %i = 1\n    while (%i <= 3) { inc %i }\n    /kick # $1\n  }\n  Whois : /whois $1\n}",
+        );
+        let p = &s.popups[0];
+        assert_eq!(p.items.len(), 2, "exactly two items, not one-per-line");
+        assert_eq!(p.items[0].label, "Kick");
+        assert!(p.items[0].command.contains("while (%i <= 3)"));
+        assert!(p.items[0].command.contains("/kick # $1"));
+        assert!(!p.items[0].separator);
+        assert_eq!(p.items[1].label, "Whois");
+        assert_eq!(p.items[1].command, "/whois $1");
+    }
+
+    #[test]
+    fn parses_popup_colon_brace_hybrid() {
+        // `Label : { block }` — the `:` is the separator, the braces are stripped,
+        // and no stray `:` is left dangling on the label.
+        let s = parse("menu channel {\n  Rename : { var %n = 1 | /msg # done }\n}");
+        let p = &s.popups[0];
+        assert_eq!(p.items[0].label, "Rename");
+        assert_eq!(p.items[0].command, "var %n = 1 | /msg # done");
+    }
+
+    #[test]
+    fn popup_colon_command_keeps_inline_braces() {
+        // `Label : if (x) { y }` — colon comes first, so it's the colon form and
+        // the inline `{ y }` stays part of the command (not treated as the wrapper).
+        let s = parse("menu status {\n  Cond : if (x) { echo -a y }\n}");
+        let p = &s.popups[0];
+        assert_eq!(p.items[0].label, "Cond");
+        assert_eq!(p.items[0].command, "if (x) { echo -a y }");
     }
 
     #[test]

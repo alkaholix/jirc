@@ -12,6 +12,13 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🖱️ 26.7.46 — Popup menus: multi-line commands & `: { }` form
+
+- Fixed popup (`menu`) items whose command is a **multi-line `{ … }` block** (e.g. a `while`/`if` loop across several lines). The parser was reading popups line-by-line, so those items shattered into one broken entry per line; now the whole block stays with its item and runs correctly.
+- Fixed the **`Label : { command }`** form (colon *and* braces) — the label no longer keeps a stray trailing `:`, and a `: command` that contains its own `{ }` (like `: if (x) { … }`) is no longer mistaken for a block.
+
+---
+
 ## 🔵 26.7.45 — Icon recoloured to the accent blue
 
 - Recoloured the app icon to sit in jIRC's **blue** accent (`#7aa2f7`) instead of leaning purple — the white `#` on a blue gradient now matches the rest of the UI.
