@@ -12,6 +12,12 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🎨 26.7.37 — Colour & number identifiers
+
+- **`$rgb`** (convert R,G,B ↔ mIRC colour number), **`$ansi2mirc`** (turn ANSI colour codes into mIRC ones — handy for relaying ANSI text), and **`$bits`** / **`$numbits`**. This closes out the pure-logic identifier gaps.
+
+---
+
 ## ↩️ 26.7.36 — `$!` last-input value
 
 - Added **`$!`** — after a `$?`/`$input` prompt, `$!` gives you back what was typed (no need for a temp variable). `$!name` also works as delayed evaluation (the literal `$name`).

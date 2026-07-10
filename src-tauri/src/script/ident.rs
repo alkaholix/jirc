@@ -701,6 +701,28 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "maxlenl" => "10240".to_string(),
         "maxlenm" => "2048".to_string(),
         "maxlens" => "512".to_string(),
+        // $bits -> the app's bit width (64 for jIRC). $numbits(N) -> the number of
+        // bits in N's base-2 representation (= length of its binary string).
+        "bits" => (std::mem::size_of::<usize>() * 8).to_string(),
+        "numbits" => a(0)
+            .trim()
+            .parse::<u64>()
+            .map(|n| format!("{n:b}").len().to_string())
+            .unwrap_or_default(),
+        // $rgb(R,G,B) -> mIRC's RGB number (R + G*256 + B*65536); $rgb(N) -> "R,G,B".
+        // System-colour names are platform-specific and not supported.
+        "rgb" => {
+            if args.len() >= 3 {
+                let v = |k: usize| a(k).trim().parse::<u64>().unwrap_or(0) & 255;
+                (v(0) + v(1) * 256 + v(2) * 65536).to_string()
+            } else if let Ok(n) = a(0).trim().parse::<u64>() {
+                format!("{},{},{}", n & 255, (n >> 8) & 255, (n >> 16) & 255)
+            } else {
+                String::new()
+            }
+        }
+        // $ansi2mirc(text) -> ANSI SGR escape sequences converted to mIRC codes.
+        "ansi2mirc" => ansi_to_mirc(&a(0)),
         // $mircexe — full path to the jIRC executable.
         "mircexe" => std::env::current_exe()
             .map(|p| p.to_string_lossy().into_owned())
@@ -2418,6 +2440,51 @@ pub(crate) fn eval_var(rt: &mut Runtime, args: &[String], prop: &str) -> String 
     }
 }
 
+/// Converts ANSI SGR escape sequences (`ESC[…m`) to mIRC control codes: reset,
+/// bold, underline, reverse, and the 8 standard foreground (30-37) / background
+/// (40-47) colours, mapped to the same-named mIRC colour. Other text passes
+/// through unchanged.
+fn ansi_to_mirc(s: &str) -> String {
+    const MAP: [u8; 8] = [1, 4, 3, 8, 2, 6, 10, 15]; // ANSI 0-7 -> mIRC colour
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '\u{1b}' && chars.get(i + 1) == Some(&'[') {
+            i += 2;
+            let start = i;
+            while i < chars.len() && chars[i] != 'm' {
+                i += 1;
+            }
+            let codes: String = chars[start..i].iter().collect();
+            if i < chars.len() {
+                i += 1; // skip the terminating 'm'
+            }
+            for code in codes.split(';') {
+                match code.trim().parse::<u8>() {
+                    Ok(0) => out.push('\u{f}'),  // reset
+                    Ok(1) => out.push('\u{2}'),  // bold
+                    Ok(4) => out.push('\u{1f}'), // underline
+                    Ok(7) => out.push('\u{16}'), // reverse
+                    Ok(c @ 30..=37) => {
+                        out.push('\u{3}');
+                        out.push_str(&MAP[(c - 30) as usize].to_string());
+                    }
+                    Ok(c @ 40..=47) => {
+                        out.push('\u{3}');
+                        out.push_str(&format!(",{}", MAP[(c - 40) as usize]));
+                    }
+                    _ => {}
+                }
+            }
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
 pub(crate) fn fmt_num(n: f64) -> String {
     if n.fract() == 0.0 {
         format!("{}", n as i64)
@@ -2779,6 +2846,13 @@ mod tests {
         assert_eq!(id("maxlenl", &[]), "10240");
         assert_eq!(id("maxlenm", &[]), "2048");
         assert_eq!(id("maxlens", &[]), "512");
+        assert_eq!(id("bits", &[]), (std::mem::size_of::<usize>() * 8).to_string());
+        assert_eq!(id("numbits", &["255"]), "8");
+        assert_eq!(id("numbits", &["0"]), "1");
+        assert_eq!(id("numbits", &["256"]), "9");
+        assert_eq!(id("rgb", &["252", "127", "0"]), "32764"); // R,G,B -> number
+        assert_eq!(id("rgb", &["32764"]), "252,127,0"); // number -> R,G,B
+        assert_eq!(id("ansi2mirc", &["\u{1b}[32mgreen"]), "\u{3}3green");
         assert_eq!(id("count", &["banana", "a", "n"]), "5");
         assert_eq!(id("replace", &["abcabc", "a", "X", "c", "Y"]), "XbYXbY");
         assert_eq!(id("remove", &["abcabc", "a", "c"]), "bb");
