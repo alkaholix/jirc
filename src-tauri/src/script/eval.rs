@@ -87,6 +87,8 @@ pub const V1_KEY: &str = "\u{0}v1";
 pub const V2_KEY: &str = "\u{0}v2";
 /// Value returned by the most recently called alias, for `$result`.
 pub const RESULT_KEY: &str = "\u{0}result";
+/// The most recent `$?`/`$input` answer, for `$!`.
+pub const LASTINPUT_KEY: &str = "\u{0}lastinput";
 
 /// Sentinel that `$style(N)` returns; consumed while building a popup menu (a
 /// Private-Use char, so it can't collide with a real label). The digit that
@@ -2117,6 +2119,22 @@ impl<'a> Runtime<'a> {
             }
             return "+".to_string();
         }
+        // `$!name` — delayed evaluation: return the literal `$name` (evaluated zero
+        // times; any `(args)`/`.prop` after it fall through as literal text). Bare
+        // `$!` returns the last `$?`/`$input` answer.
+        if chars.get(*i) == Some(&'!') {
+            *i += 1;
+            match chars.get(*i).copied() {
+                Some('+') => {
+                    *i += 1;
+                    return "$+".to_string();
+                }
+                Some(c) if c.is_alphanumeric() || c == '_' => {
+                    return format!("${}", read_name(chars, i));
+                }
+                _ => return self.vars.get(LASTINPUT_KEY).cloned().unwrap_or_default(),
+            }
+        }
         // `$$N` — a require prefix: like `$N`, but the script halts when the
         // parameter is empty. Only when a digit follows (a literal `$$`
         // elsewhere is left untouched).
@@ -2304,6 +2322,7 @@ impl<'a> Runtime<'a> {
         }
         let msg = if message.is_empty() { "Enter reply:".to_string() } else { message };
         let answer = self.input.prompt(&msg, "", "").unwrap_or_default();
+        self.vars.insert(LASTINPUT_KEY.to_string(), answer.clone());
         if yes_no {
             return if answer.is_empty() { "$false" } else { "$true" }.to_string();
         }

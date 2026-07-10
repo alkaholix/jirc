@@ -12,6 +12,12 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## ↩️ 26.7.36 — `$!` last-input value
+
+- Added **`$!`** — after a `$?`/`$input` prompt, `$!` gives you back what was typed (no need for a temp variable). `$!name` also works as delayed evaluation (the literal `$name`).
+
+---
+
 ## ❓ 26.7.35 — The classic `$?` input prompt
 
 - Added **`$?`** — the old-style input identifier (`$?="Pick one"`, `$?*=` for passwords, `$?!=` for yes/no, `$$?` to require an answer). Scripts written with `$?` instead of the newer `$input` now work.

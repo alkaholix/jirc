@@ -3126,13 +3126,17 @@ mod tests {
                 Some(self.0.clone())
             }
         }
-        // $?="msg" returns the typed answer; $?! maps a non-empty answer to $true.
+        // $? returns the answer + fills $!; $!name is delayed ($name literal);
+        // $?! maps a non-empty answer to $true.
         let e = ScriptEngine::new();
         e.set_input(std::sync::Arc::new(Fake("banana".into())));
-        e.load("alias t { /msg #c $?=\"fruit\" / $?!\"ok\" }");
+        e.load("alias t { /msg #c $?=\"fruit\" | /msg #c got $! and $!me yn $?!\"ok\" }");
         assert_eq!(
             e.run_alias(&ctx(), "#c", "t", ""),
-            vec![Action::Send("PRIVMSG #c :banana / $true".into())]
+            vec![
+                Action::Send("PRIVMSG #c :banana".into()),
+                Action::Send("PRIVMSG #c :got banana and $me yn $true".into()),
+            ]
         );
         // $$? halts the run when the answer is empty.
         let e2 = ScriptEngine::new();

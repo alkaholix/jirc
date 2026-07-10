@@ -407,7 +407,11 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             .unwrap_or_default(),
         // $input(message, type, title, default, …) — a modal text prompt. We
         // drive the edit form; returns the entered text, or empty if cancelled.
-        "input" => rt.input.prompt(&a(0), &a(2), &a(3)).unwrap_or_default(),
+        "input" => {
+            let v = rt.input.prompt(&a(0), &a(2), &a(3)).unwrap_or_default();
+            rt.vars.insert(super::eval::LASTINPUT_KEY.to_string(), v.clone());
+            v
+        }
         "str" => {
             let n: usize = a(1).parse().unwrap_or(0);
             a(0).repeat(n)
