@@ -193,6 +193,30 @@ impl ScriptInput for NoInput {
     }
 }
 
+/// A snapshot of one active `/timer`, for `$timer`.
+#[derive(Clone, Default)]
+pub struct TimerInfo {
+    pub name: String,
+    pub command: String,
+    pub reps: u32,
+    /// Delay between fires, in seconds.
+    pub delay: u64,
+}
+
+/// Read-only access to the active timers, for `$timer(...)`. Implemented by a
+/// bridge that reads the Tauri-managed `TimerManager`.
+pub trait ScriptTimers: Send + Sync {
+    fn snapshot(&self) -> Vec<TimerInfo>;
+}
+
+/// A no-op timers backend (tests / before a real one is installed).
+pub struct NoTimers;
+impl ScriptTimers for NoTimers {
+    fn snapshot(&self) -> Vec<TimerInfo> {
+        Vec::new()
+    }
+}
+
 /// A per-run view of the connection registry, for `$cid`/`$scon`/`$activecid`.
 #[derive(Clone, Default)]
 pub struct ConnsView {
@@ -264,6 +288,8 @@ pub struct Runtime<'a> {
     pub wins: WinView,
     /// Synchronous socket backend for `/socklisten`/`/sockaccept`/`$sock(...)`.
     pub sockets: std::sync::Arc<dyn ScriptSockets>,
+    /// Read-only view of active timers, for `$timer(...)`.
+    pub timers: std::sync::Arc<dyn ScriptTimers>,
     /// Backend for `$input` prompts.
     pub input: std::sync::Arc<dyn ScriptInput>,
     /// Open file handles for `/fopen`/`/fwrite`/`$fread`/`$fopen(...)`.

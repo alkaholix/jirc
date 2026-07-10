@@ -723,6 +723,18 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         }
         // $ansi2mirc(text) -> ANSI SGR escape sequences converted to mIRC codes.
         "ansi2mirc" => ansi_to_mirc(&a(0)),
+        // $timer(name/N)[.com|.reps|.delay] -> info about a `/timer` (N=0 -> count).
+        "timer" => {
+            let list = rt.timers.snapshot();
+            let arg = a(0);
+            match arg.trim().parse::<usize>() {
+                Ok(0) => list.len().to_string(),
+                Ok(k) => timer_prop(list.get(k - 1), prop),
+                Err(_) => {
+                    timer_prop(list.iter().find(|t| t.name.eq_ignore_ascii_case(arg.trim())), prop)
+                }
+            }
+        }
         // $mircexe — full path to the jIRC executable.
         "mircexe" => std::env::current_exe()
             .map(|p| p.to_string_lossy().into_owned())
@@ -2440,6 +2452,20 @@ pub(crate) fn eval_var(rt: &mut Runtime, args: &[String], prop: &str) -> String 
     }
 }
 
+/// Formats a `$timer(...)` result: the requested property (`.com`/`.reps`/
+/// `.delay`) or the timer's name; empty when there is no such timer.
+fn timer_prop(e: Option<&crate::script::eval::TimerInfo>, prop: &str) -> String {
+    match e {
+        Some(t) => match prop.to_ascii_lowercase().as_str() {
+            "com" => t.command.clone(),
+            "reps" => t.reps.to_string(),
+            "delay" => t.delay.to_string(),
+            _ => t.name.clone(),
+        },
+        None => String::new(),
+    }
+}
+
 /// Converts ANSI SGR escape sequences (`ESC[…m`) to mIRC control codes: reset,
 /// bold, underline, reverse, and the 8 standard foreground (30-37) / background
 /// (40-47) colours, mapped to the same-named mIRC colour. Other text passes
@@ -2815,6 +2841,7 @@ mod tests {
             conns: Default::default(),
             wins: Default::default(),
             sockets: std::sync::Arc::new(crate::script::eval::NoSockets),
+            timers: std::sync::Arc::new(crate::script::eval::NoTimers),
             input: std::sync::Arc::new(crate::script::eval::NoInput),
             caller: "command",
             show: true,
@@ -3054,6 +3081,7 @@ mod tests {
             conns: Default::default(),
             wins: Default::default(),
             sockets: std::sync::Arc::new(crate::script::eval::NoSockets),
+            timers: std::sync::Arc::new(crate::script::eval::NoTimers),
             input: std::sync::Arc::new(crate::script::eval::NoInput),
             caller: "command",
             show: true,
@@ -3146,6 +3174,7 @@ mod tests {
             conns: Default::default(),
             wins: Default::default(),
             sockets: std::sync::Arc::new(crate::script::eval::NoSockets),
+            timers: std::sync::Arc::new(crate::script::eval::NoTimers),
             input: std::sync::Arc::new(crate::script::eval::NoInput),
             caller: "command",
             show: true,

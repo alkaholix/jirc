@@ -22,7 +22,10 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use ast::{PopupItem, Script};
-use eval::{wildcard_match, Action, EventVars, NoInput, NoSockets, Runtime, ScriptInput, ScriptSockets};
+use eval::{
+    wildcard_match, Action, EventVars, NoInput, NoSockets, NoTimers, Runtime, ScriptInput,
+    ScriptSockets, ScriptTimers,
+};
 
 /// Connection context supplied by the caller for each run.
 pub struct RunCtx<'a> {
@@ -44,6 +47,7 @@ struct Inner {
     windows: window::WindowStore,
     users: users::UserList,
     sockets: std::sync::Arc<dyn ScriptSockets>,
+    timers: std::sync::Arc<dyn ScriptTimers>,
     input: std::sync::Arc<dyn ScriptInput>,
     /// The frontend's currently-focused window/buffer name, for `$active`.
     active: String,
@@ -64,6 +68,7 @@ impl Inner {
             windows: window::WindowStore::default(),
             users: users::UserList::default(),
             sockets: std::sync::Arc::new(NoSockets),
+            timers: std::sync::Arc::new(NoTimers),
             input: std::sync::Arc::new(NoInput),
             active: String::new(),
             conns: ConnReg::default(),
@@ -173,6 +178,10 @@ impl ScriptEngine {
 
     /// Installs the (production) socket backend; called once at startup so the
     /// engine can run `/socklisten`/`/sockaccept`/`$sock(...)` against real sockets.
+    pub fn set_timers(&self, timers: std::sync::Arc<dyn ScriptTimers>) {
+        self.inner.lock().unwrap().timers = timers;
+    }
+
     pub fn set_sockets(&self, sockets: std::sync::Arc<dyn ScriptSockets>) {
         self.inner.lock().unwrap().sockets = sockets;
     }
@@ -294,6 +303,7 @@ impl ScriptEngine {
             conns: g.conns.view(),
             wins: g.wins.view(),
             sockets: g.sockets.clone(),
+            timers: g.timers.clone(),
             input: g.input.clone(),
             caller: "menu",
             show: true,
@@ -346,6 +356,7 @@ impl ScriptEngine {
             conns: g.conns.view(),
             wins: g.wins.view(),
             sockets: g.sockets.clone(),
+            timers: g.timers.clone(),
             input: g.input.clone(),
             caller: "command",
             show: true,
@@ -423,6 +434,7 @@ impl ScriptEngine {
             conns: g.conns.view(),
             wins: g.wins.view(),
             sockets: g.sockets.clone(),
+            timers: g.timers.clone(),
             input: g.input.clone(),
             caller: "command",
             show: true,
@@ -523,6 +535,7 @@ impl ScriptEngine {
             conns: g.conns.view(),
             wins: g.wins.view(),
                 sockets: g.sockets.clone(),
+            timers: g.timers.clone(),
             input: g.input.clone(),
                 caller: "event",
                 show: true,
@@ -556,6 +569,36 @@ impl ScriptEngine {
                 } else if users.auto_should_apply(AutoKind::Avoice, addr, &event.nick, &event.chan, ctx.network) {
                     actions.push(Action::Send(format!("MODE {} +v {}", event.chan, event.nick)));
                 }
+            }
+        }
+        // Protect: re-op a protected user who is deopped ($knick) in a channel
+        // where I hold op.
+        if kind == "DEOP" && !event.knick.is_empty() && !event.knick.eq_ignore_ascii_case(ctx.my_nick) {
+            let addr = ctx
+                .state
+                .ial
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(&event.knick))
+                .map(|(_, a)| a.as_str())
+                .unwrap_or("");
+            let am_op = ctx
+                .state
+                .channels
+                .iter()
+                .find(|c| c.name.eq_ignore_ascii_case(&event.chan))
+                .and_then(|c| c.members.iter().find(|(n, _)| n.eq_ignore_ascii_case(ctx.my_nick)))
+                .map(|(_, p)| p.contains('@') || p.contains('&') || p.contains('~'))
+                .unwrap_or(false);
+            if am_op
+                && users.auto_should_apply(
+                    users::AutoKind::Protect,
+                    addr,
+                    &event.knick,
+                    &event.chan,
+                    ctx.network,
+                )
+            {
+                actions.push(Action::Send(format!("MODE {} +o {}", event.chan, event.knick)));
             }
         }
         if users.take_dirty() {
@@ -3118,6 +3161,28 @@ mod tests {
     }
 
     #[test]
+    fn timer_identifier() {
+        use crate::script::eval::{ScriptTimers, TimerInfo};
+        struct Fake;
+        impl ScriptTimers for Fake {
+            fn snapshot(&self) -> Vec<TimerInfo> {
+                vec![
+                    TimerInfo { name: "greet".into(), command: "/msg #c hi".into(), reps: 3, delay: 5 },
+                    TimerInfo { name: "poll".into(), command: "/who".into(), reps: 0, delay: 60 },
+                ]
+            }
+        }
+        let engine = ScriptEngine::new();
+        engine.set_timers(std::sync::Arc::new(Fake));
+        engine.load("alias t { /msg #c $timer(0) $timer(greet).com $timer(greet).reps $timer(2) }");
+        // 2 timers; greet's command + reps; the 2nd timer's name.
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :2 /msg #c hi 3 poll".into())]
+        );
+    }
+
+    #[test]
     fn question_input_identifier() {
         use crate::script::eval::ScriptInput;
         struct Fake(String);
@@ -3235,6 +3300,52 @@ mod tests {
         );
         // eve doesn't match -> nothing queued.
         assert_eq!(engine.dispatch_event(&rctx, "JOIN", join("eve")), vec![]);
+    }
+
+    #[test]
+    fn protect_reop_on_deop() {
+        use crate::irc::state::{ChannelView, StateSnapshot};
+        let engine = ScriptEngine::new();
+        engine.load("on *:TEXT:!setup:#:{ protect on | protect vip }");
+        let snap = StateSnapshot {
+            ial: vec![("vip".into(), "vip!u@vip.com".into())],
+            channels: vec![ChannelView {
+                name: "#c".into(),
+                nicks: vec!["me".into(), "vip".into()],
+                members: vec![("me".into(), "@".into())],
+                bans: vec![],
+            }],
+            ..Default::default()
+        };
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(snap),
+        };
+        let setup = EventVars {
+            nick: "x".into(),
+            chan: "#c".into(),
+            target: "#c".into(),
+            text: "!setup".into(),
+            params: vec!["!setup".into()],
+            ..Default::default()
+        };
+        engine.dispatch_event(&rctx, "TEXT", setup);
+        let deop = |who: &str| EventVars {
+            nick: "baddie".into(),
+            knick: who.into(),
+            chan: "#c".into(),
+            target: "#c".into(),
+            ..Default::default()
+        };
+        // vip is protected -> re-op; rando isn't -> nothing.
+        assert_eq!(
+            engine.dispatch_event(&rctx, "DEOP", deop("vip")),
+            vec![Action::Send("MODE #c +o vip".into())]
+        );
+        assert_eq!(engine.dispatch_event(&rctx, "DEOP", deop("rando")), vec![]);
     }
 
     #[test]

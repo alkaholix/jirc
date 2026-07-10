@@ -49,6 +49,10 @@ pub fn run() {
             engine.set_sockets(std::sync::Arc::new(script::socket::EngineSockets::new(
                 app.handle().clone(),
             )));
+            // Install the `$timer` view (reads the managed TimerManager).
+            engine.set_timers(std::sync::Arc::new(script::timer::EngineTimers::new(
+                app.handle().clone(),
+            )));
             // Install the `$input` prompt backend (shares the managed registry).
             let registry = app.state::<script::input::PromptRegistry>().inner().clone();
             engine.set_input(std::sync::Arc::new(script::input::EngineInput::new(

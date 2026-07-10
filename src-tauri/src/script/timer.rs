@@ -14,8 +14,17 @@ use crate::irc::ConnectionManager;
 
 #[derive(Default)]
 pub struct TimerManager {
-    timers: Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>,
+    timers: Mutex<HashMap<String, TimerEntry>>,
     counter: Mutex<u64>,
+}
+
+/// A running timer: its task handle plus the metadata `$timer` reports.
+struct TimerEntry {
+    handle: tauri::async_runtime::JoinHandle<()>,
+    command: String,
+    reps: u32,
+    /// Delay between fires, in seconds.
+    delay: u64,
 }
 
 impl TimerManager {
@@ -46,9 +55,10 @@ impl TimerManager {
     ) {
         let name = if name.is_empty() { self.auto_name() } else { name };
         if let Some(old) = self.timers.lock().unwrap().remove(&name) {
-            old.abort();
+            old.handle.abort();
         }
         let task_name = name.clone();
+        let entry_command = command.clone();
         let task = tauri::async_runtime::spawn(async move {
             for _ in 0..reps {
                 tokio::time::sleep(std::time::Duration::from_millis(interval_ms)).await;
@@ -78,18 +88,21 @@ impl TimerManager {
                 m.timers.lock().unwrap().remove(&task_name);
             }
         });
-        self.timers.lock().unwrap().insert(name, task);
+        self.timers.lock().unwrap().insert(
+            name,
+            TimerEntry { handle: task, command: entry_command, reps, delay: interval_ms / 1000 },
+        );
     }
 
     /// Stops a timer by name, or all timers when `name` is "*".
     pub fn stop(&self, name: &str) {
         let mut timers = self.timers.lock().unwrap();
         if name == "*" {
-            for (_, h) in timers.drain() {
-                h.abort();
+            for (_, e) in timers.drain() {
+                e.handle.abort();
             }
-        } else if let Some(h) = timers.remove(name) {
-            h.abort();
+        } else if let Some(e) = timers.remove(name) {
+            e.handle.abort();
         }
     }
 
@@ -97,5 +110,40 @@ impl TimerManager {
         let mut names: Vec<String> = self.timers.lock().unwrap().keys().cloned().collect();
         names.sort();
         names
+    }
+
+    /// A snapshot of every active timer (sorted by name), for `$timer`.
+    pub fn snapshot(&self) -> Vec<super::eval::TimerInfo> {
+        let mut out: Vec<super::eval::TimerInfo> = self
+            .timers
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(name, e)| super::eval::TimerInfo {
+                name: name.clone(),
+                command: e.command.clone(),
+                reps: e.reps,
+                delay: e.delay,
+            })
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out
+    }
+}
+
+/// Bridges the engine's `$timer` reads to the Tauri-managed [`TimerManager`].
+pub struct EngineTimers {
+    app: AppHandle,
+}
+
+impl EngineTimers {
+    pub fn new(app: AppHandle) -> Self {
+        Self { app }
+    }
+}
+
+impl super::eval::ScriptTimers for EngineTimers {
+    fn snapshot(&self) -> Vec<super::eval::TimerInfo> {
+        self.app.try_state::<TimerManager>().map(|m| m.snapshot()).unwrap_or_default()
     }
 }

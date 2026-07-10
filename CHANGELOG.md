@@ -12,6 +12,13 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## ⏱️ 26.7.38 — `$timer` + protect enforcement
+
+- **`$timer`** lets scripts check running timers — how many, a timer's command, its remaining reps, its delay.
+- **Protect now acts**: if someone deops a person on your protect list in a channel you run, jIRC re-ops them automatically. That finishes the auto-op / auto-voice / protect feature.
+
+---
+
 ## 🎨 26.7.37 — Colour & number identifiers
 
 - **`$rgb`** (convert R,G,B ↔ mIRC colour number), **`$ansi2mirc`** (turn ANSI colour codes into mIRC ones — handy for relaying ANSI text), and **`$bits`** / **`$numbits`**. This closes out the pure-logic identifier gaps.
