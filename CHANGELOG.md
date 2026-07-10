@@ -12,6 +12,13 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 📏 26.7.47 — Popup menus fit their content
+
+- Popup menus now **grow to fit the widest item on one line** instead of wrapping long labels onto a second row and looking cramped.
+- mIRC's **tab hints** (a `$chr(9)` in a menu label, e.g. `Take` + `- rotate keys`) render as a **dimmed, right-aligned hint** rather than collapsing into the label.
+
+---
+
 ## 🖱️ 26.7.46 — Popup menus: multi-line commands & `: { }` form
 
 - Fixed popup (`menu`) items whose command is a **multi-line `{ … }` block** (e.g. a `while`/`if` loop across several lines). The parser was reading popups line-by-line, so those items shattered into one broken entry per line; now the whole block stays with its item and runs correctly.

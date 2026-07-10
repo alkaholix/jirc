@@ -1,6 +1,19 @@
 import { ReactNode, useLayoutEffect, useRef, useState } from "react";
 import { PopupItem } from "../lib/api";
 
+/** Renders a menu label, splitting mIRC's `$chr(9)` (tab) into the label and a
+ *  dimmed right-aligned hint (e.g. `Take` + `- rotate keys`). */
+function LabelText({ text }: { text: string }) {
+  const tab = text.indexOf("\t");
+  if (tab === -1) return <>{text}</>;
+  return (
+    <>
+      {text.slice(0, tab)}
+      <span className="pmenu-hint">{text.slice(tab + 1)}</span>
+    </>
+  );
+}
+
 /** A popup item with children — its flyout opens left when it would otherwise run
  *  off the right edge of the window. (Labels arrive already evaluated from the
  *  engine, so this is pure rendering.) */
@@ -19,7 +32,7 @@ export function SubMenu({ item, onRun }: { item: PopupItem; onRun: (command: str
   return (
     <div className="pmenu-item has-sub" onMouseEnter={onEnter}>
       <span className="pmenu-label">
-        {item.label} <span className="pmenu-arrow">▸</span>
+        <LabelText text={item.label} /> <span className="pmenu-arrow">▸</span>
       </span>
       <div ref={subRef} className={`pmenu-sub context-menu${flipLeft ? " flip-left" : ""}`}>
         <PopupItems items={item.children} onRun={onRun} />
@@ -39,7 +52,7 @@ export function PopupItems({ items, onRun }: { items: PopupItem[]; onRun: (comma
         const label = (
           <>
             {item.checked && <span className="pmenu-check">✓</span>}
-            {item.label}
+            <LabelText text={item.label} />
           </>
         );
         if (item.disabled)
