@@ -12,6 +12,13 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🧊 26.7.40 — Dialog freeze fix + IRCX `%#` channels
+
+- **Fixed the frozen `$input` / `$?` dialog.** Running an alias that shows an input prompt from the input bar (e.g. `passx` with `mode $me +h $?="Enter Password"`) locked up the whole app — the dialog appeared but you couldn't type, cancel, or click anything. The alias now runs on a worker thread, so the prompt blocks the *script* and not the UI (the same way right-click popup commands already worked).
+- **`%#` and `%&` channels** are now treated as channels everywhere `#` is — even when the server doesn't advertise `%` in its CHANTYPES. Fixes channel modes on a `%#` channel being misread as user modes, and `%#`/`%&` buffers rendering as a query instead of a channel. `/part %#chan` and `/channel %#chan` recognize the prefix too.
+
+---
+
 ## 🩹 26.7.39 — Multi-word `$?` prompts
 
 - Fixed **`$?="Enter Password"`** and other multi-word input prompts — the whole message is kept now (it used to get cut off and leave stray text behind). `$input` benefits too.

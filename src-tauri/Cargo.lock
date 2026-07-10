@@ -2321,7 +2321,7 @@ dependencies = [
 
 [[package]]
 name = "jirc"
-version = "26.7.39"
+version = "26.7.40"
 dependencies = [
  "base64 0.22.1",
  "chrono",

@@ -258,15 +258,11 @@ impl ScriptEngine {
             .is_some_and(|a| !a.local && g.script.group_enabled(&g.vars, &a.group))
     }
 
-    /// Returns the user-defined popup items for a context (nicklist, channel, …).
-    pub fn popups(&self, context: &str) -> Vec<PopupItem> {
-        self.inner.lock().unwrap().script.popup_items(context)
-    }
-
-    /// Like [`popups`], but evaluates each item's dynamic label ($iif/$sock/…) in a
-    /// run context (the right-clicked nick + channel), dropping items whose label
-    /// renders empty — mIRC's display behaviour. The `command` is left unexpanded
-    /// (it's expanded when the item runs via [`run_command`]).
+    /// Returns the user-defined popup items for a context (nicklist, channel, …),
+    /// evaluating each item's dynamic label ($iif/$sock/…) in a run context (the
+    /// right-clicked nick + channel) and dropping items whose label renders empty
+    /// — mIRC's display behaviour. The `command` is left unexpanded (it's expanded
+    /// when the item runs via [`run_command`]).
     pub fn popups_evaluated(&self, ctx: &RunCtx, context: &str, nick: &str, chan: &str) -> Vec<PopupItem> {
         let mut g = self.inner.lock().unwrap();
         let script = g.script.clone();
@@ -1419,18 +1415,25 @@ pub fn script_run_alias(
     if !engine.has_alias(&name) {
         return false;
     }
-    let ctx = RunCtx {
-        my_nick: &my_nick,
-        network: &network,
-        server: "",
-        data_dir: script_data_dir(&app),
-        state: app
-            .try_state::<crate::irc::state::StateStore>()
-            .map(|s| s.get(&server_id))
-            .unwrap_or_default(),
-    };
-    let actions = engine.run_alias(&ctx, &target, &name, &args);
-    apply_actions(&app, &server_id, &my_nick, &network, "", actions);
+    // The alias may call `$input`/`$?`, which blocks the run waiting for the UI
+    // dialog. Run it on a blocking thread so the main thread (and WebView2) stay
+    // responsive — a sync command blocking the main thread freezes the dialog.
+    // (The `has_alias` check above is cheap and stays synchronous for the return.)
+    tauri::async_runtime::spawn_blocking(move || {
+        let engine = app.state::<ScriptEngine>();
+        let ctx = RunCtx {
+            my_nick: &my_nick,
+            network: &network,
+            server: "",
+            data_dir: script_data_dir(&app),
+            state: app
+                .try_state::<crate::irc::state::StateStore>()
+                .map(|s| s.get(&server_id))
+                .unwrap_or_default(),
+        };
+        let actions = engine.run_alias(&ctx, &target, &name, &args);
+        apply_actions(&app, &server_id, &my_nick, &network, "", actions);
+    });
     true
 }
 
@@ -1647,7 +1650,6 @@ fn fire_window_event(app: &AppHandle, server_id: &str, name: &str, kind: &str) {
 #[allow(clippy::too_many_arguments)]
 pub fn script_run_command(
     app: AppHandle,
-    engine: State<'_, ScriptEngine>,
     server_id: String,
     target: String,
     my_nick: String,
@@ -1655,23 +1657,30 @@ pub fn script_run_command(
     command: String,
     args: String,
 ) {
-    let ctx = RunCtx {
-        my_nick: &my_nick,
-        network: &network,
-        server: "",
-        data_dir: script_data_dir(&app),
-        state: app
-            .try_state::<crate::irc::state::StateStore>()
-            .map(|s| s.get(&server_id))
-            .unwrap_or_default(),
-    };
-    let line = if args.is_empty() {
-        command
-    } else {
-        format!("{command} {args}")
-    };
-    let actions = engine.run_command(&ctx, &target, &line, &[]);
-    apply_actions(&app, &server_id, &my_nick, &network, "", actions);
+    // The line may resolve to an alias that calls `$input`/`$?`, which blocks the
+    // run waiting for the UI dialog. Run it on a blocking thread so the main
+    // thread (and WebView2) stay responsive — a sync command blocking the main
+    // thread deadlocks the webview and freezes the dialog.
+    tauri::async_runtime::spawn_blocking(move || {
+        let engine = app.state::<ScriptEngine>();
+        let ctx = RunCtx {
+            my_nick: &my_nick,
+            network: &network,
+            server: "",
+            data_dir: script_data_dir(&app),
+            state: app
+                .try_state::<crate::irc::state::StateStore>()
+                .map(|s| s.get(&server_id))
+                .unwrap_or_default(),
+        };
+        let line = if args.is_empty() {
+            command
+        } else {
+            format!("{command} {args}")
+        };
+        let actions = engine.run_command(&ctx, &target, &line, &[]);
+        apply_actions(&app, &server_id, &my_nick, &network, "", actions);
+    });
 }
 
 /// Fires `on INPUT` handlers for a line the user typed (the line is still sent

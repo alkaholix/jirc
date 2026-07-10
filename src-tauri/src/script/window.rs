@@ -8,11 +8,11 @@
 
 use std::collections::HashMap;
 
-/// The display kind of a custom window (Phase 1 renders listbox/text the same).
+/// The display kind of a custom window (the default listbox also renders plain
+/// text lines).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowKind {
     Listbox,
-    Text,
     Editbox,
     Picture,
 }
@@ -21,7 +21,6 @@ impl WindowKind {
     pub fn as_str(self) -> &'static str {
         match self {
             WindowKind::Listbox => "listbox",
-            WindowKind::Text => "text",
             WindowKind::Editbox => "editbox",
             WindowKind::Picture => "picture",
         }

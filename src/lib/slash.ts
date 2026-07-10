@@ -108,7 +108,9 @@ export async function handleInput(input: string, buffer: Buffer): Promise<void> 
     case "part":
     case "leave": {
       const parts = args.split(" ");
-      const channel = parts[0]?.startsWith("#") ? parts.shift()! : name;
+      // An explicit channel arg: '#chan' or IRCX '%#chan' / '%&chan'.
+      const hasChanArg = /^(#|%[#&])/.test(parts[0] ?? "");
+      const channel = hasChanArg ? parts.shift()! : name;
       await api.part(serverId, channel, parts.join(" ") || undefined);
       break;
     }
@@ -318,7 +320,9 @@ export async function handleInput(input: string, buffer: Buffer): Promise<void> 
     }
     case "channel": {
       // Open Channel Central for a channel (defaults to the current one).
-      const chan = args.trim().startsWith("#") ? args.trim().split(/\s+/)[0] : kind === "channel" ? name : "";
+      const arg = args.trim();
+      // '#chan' or IRCX '%#chan' / '%&chan'; else the current channel.
+      const chan = /^(#|%[#&])/.test(arg) ? arg.split(/\s+/)[0] : kind === "channel" ? name : "";
       if (chan) useChannelCentral.getState().open(serverId, chan);
       break;
     }
