@@ -3183,6 +3183,26 @@ mod tests {
     }
 
     #[test]
+    fn if_multi_paren_and_or() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias t {\n\
+               if ($1 == a) && ($2 == b) /msg #c both\n\
+               if ($1 == a) && ($2 == x) /msg #c nope\n\
+               if ($1 == z) || ($2 == b) /msg #c either\n\
+             }",
+        );
+        // `(a) && (b)` and `(a) || (b)` bracketed conditions both work.
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", "a b"),
+            vec![
+                Action::Send("PRIVMSG #c :both".into()),
+                Action::Send("PRIVMSG #c :either".into()),
+            ]
+        );
+    }
+
+    #[test]
     fn question_input_identifier() {
         use crate::script::eval::ScriptInput;
         struct Fake(String);
@@ -3202,6 +3222,12 @@ mod tests {
                 Action::Send("PRIVMSG #c :banana".into()),
                 Action::Send("PRIVMSG #c :got banana and $me yn $true".into()),
             ]
+        );
+        // A multi-word quoted prompt message stays intact (no trailing tokens).
+        e.load("alias p { /msg #c pass=$?=\"Enter Password\" }");
+        assert_eq!(
+            e.run_alias(&ctx(), "#c", "p", ""),
+            vec![Action::Send("PRIVMSG #c :pass=banana".into())]
         );
         // $$? halts the run when the answer is empty.
         let e2 = ScriptEngine::new();

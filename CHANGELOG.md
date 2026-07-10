@@ -12,6 +12,12 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🩹 26.7.39 — Multi-word `$?` prompts
+
+- Fixed **`$?="Enter Password"`** and other multi-word input prompts — the whole message is kept now (it used to get cut off and leave stray text behind). `$input` benefits too.
+
+---
+
 ## ⏱️ 26.7.38 — `$timer` + protect enforcement
 
 - **`$timer`** lets scripts check running timers — how many, a timer's command, its remaining reps, its delay.

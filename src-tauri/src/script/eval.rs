@@ -2593,21 +2593,30 @@ fn split_top_level(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut depth = 0i32;
+    // Spaces inside a `"…"` don't split, so a quoted message stays one token
+    // (`$?="Enter Password"`, `/timer name`). This is output-neutral for plain
+    // text: tokens are re-joined with spaces, so the quotes render the same.
+    let mut in_quote = false;
     for c in text.chars() {
         match c {
+            '"' => {
+                in_quote = !in_quote;
+                cur.push(c);
+            }
             // Only a `$id(`/`id(`/`$+(` paren groups arguments; a bare `(` is
             // literal, so `$+` and spaces around plain parens still work.
-            '(' if depth > 0
-                || cur.chars().last().is_some_and(|p| p.is_alphanumeric() || p == '_' || p == '+') =>
+            '(' if !in_quote
+                && (depth > 0
+                    || cur.chars().last().is_some_and(|p| p.is_alphanumeric() || p == '_' || p == '+')) =>
             {
                 depth += 1;
                 cur.push(c);
             }
-            ')' if depth > 0 => {
+            ')' if !in_quote && depth > 0 => {
                 depth -= 1;
                 cur.push(c);
             }
-            ' ' if depth == 0 => out.push(std::mem::take(&mut cur)),
+            ' ' if depth == 0 && !in_quote => out.push(std::mem::take(&mut cur)),
             _ => cur.push(c),
         }
     }
