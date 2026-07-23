@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { api, IrcEvent, ServerProfile } from "./lib/api";
@@ -11,7 +11,6 @@ import { NickList } from "./components/NickList";
 import { InputBar } from "./components/InputBar";
 import { ConnectDialog } from "./components/ConnectDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
-import { ScriptDialog } from "./components/ScriptDialog";
 import { ChannelListDialog } from "./components/ChannelListDialog";
 import { AutoJoinDialog } from "./components/AutoJoinDialog";
 import { TransfersPanel } from "./components/TransfersPanel";
@@ -36,8 +35,21 @@ import { routeToolbarEvent } from "./state/toolbar";
 import { ScriptToolbar } from "./components/ScriptToolbar";
 import { routePanelEvent } from "./state/panels";
 import { ScriptPanels } from "./components/ScriptPanels";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
-function App() {
+const ScriptDialog = lazy(() =>
+  import("./components/ScriptDialog").then((module) => ({ default: module.ScriptDialog }))
+);
+
+function ScriptEditorDialog(props: { onClose: () => void; standalone?: boolean }) {
+  return (
+    <Suspense fallback={<div className="script-loading">Loading script editor…</div>}>
+      <ScriptDialog {...props} />
+    </Suspense>
+  );
+}
+
+function MainApp() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [chooserOpen, setChooserOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -397,7 +409,7 @@ function App() {
       )}
       {dialogOpen && <ConnectDialog onClose={() => setDialogOpen(false)} onConnect={onConnect} />}
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
-      {scriptOpen && <ScriptDialog onClose={() => setScriptOpen(false)} />}
+      {scriptOpen && <ScriptEditorDialog onClose={() => setScriptOpen(false)} />}
       {autoJoinOpen && <AutoJoinDialog onClose={() => setAutoJoinOpen(false)} />}
       <ChannelListDialog />
       <ChannelCentral />
@@ -407,6 +419,22 @@ function App() {
       <TransfersPanel />
     </div>
   );
+}
+
+function App() {
+  const tauriWindow =
+    "__TAURI_INTERNALS__" in window ? getCurrentWindow() : null;
+  if (tauriWindow?.label === "script-editor") {
+    return (
+      <ScriptEditorDialog
+        standalone
+        onClose={() => {
+          tauriWindow.close().catch(() => {});
+        }}
+      />
+    );
+  }
+  return <MainApp />;
 }
 
 export default App;

@@ -12,6 +12,29 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🧩 26.7.52 — Alias compatibility & detachable script editor
+
+### Added
+- A larger, user-resizable mSL editor with line numbers, syntax highlighting,
+  bracket and quote diagnostics, lint markers, draft recovery, and
+  <kbd>Ctrl</kbd>+<kbd>S</kbd> saving.
+- The script editor can be popped out into its own resizable operating-system
+  window and used independently from the main jIRC window.
+- Script aliases can be bound to F1–F12, Shift+F-key, and Ctrl+F-key shortcuts.
+
+### Fixed
+- `/alias` now accepts mIRC-compatible `/alias [-l] [filename] <name> [command]`
+  syntax, normalizes leading slashes, evaluates definitions at the correct
+  time, persists local aliases, and safely stops direct or indirect recursion.
+- The standalone browser development preview remains usable when Tauri window
+  metadata is unavailable.
+
+### Verified
+- Alias compatibility tests, frontend tests and production build, the complete
+  non-live Rust suite, and the full Tauri release build.
+
+---
+
 ## 🧰 26.7.51 — mIRC parity, script UI, DCC fserve & flood protection
 
 ### Added

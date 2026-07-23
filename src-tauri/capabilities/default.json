@@ -2,6 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capability set granted to the main window and detached buffer windows.",
-  "windows": ["main", "detached-*"],
+  "windows": ["main", "detached-*", "script-editor"],
   "permissions": ["core:default", "notification:default", "opener:allow-open-url", "dialog:allow-open"]
 }

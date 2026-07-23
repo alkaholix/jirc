@@ -73,6 +73,25 @@ pub async fn open_detached_window(
     Ok(())
 }
 
+/// Opens or focuses the dedicated, freely resizable script editor window.
+#[tauri::command]
+pub async fn open_script_editor(app: AppHandle) -> Result<(), String> {
+    use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+    const LABEL: &str = "script-editor";
+    if let Some(window) = app.get_webview_window(LABEL) {
+        let _ = window.set_focus();
+        return Ok(());
+    }
+    WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App("index.html".into()))
+        .title("jIRC Script Editor")
+        .inner_size(1050.0, 760.0)
+        .min_inner_size(600.0, 400.0)
+        .resizable(true)
+        .build()
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 /// Focuses an existing detached window (clicking its popped-out switchbar entry).
 #[tauri::command]
 pub fn focus_window(app: AppHandle, label: String) {

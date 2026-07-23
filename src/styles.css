@@ -1310,7 +1310,41 @@ label.inline {
 }
 
 .script-modal {
-  width: 640px;
+  width: min(1000px, 94vw);
+  height: min(720px, 88vh);
+  min-width: 600px;
+  min-height: 400px;
+  max-width: 96vw;
+  max-height: 94vh;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  resize: both;
+  overflow: hidden;
+}
+.script-window {
+  width: 100vw;
+  height: 100vh;
+  background: var(--panel);
+}
+.script-modal.standalone {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  max-width: none;
+  max-height: none;
+  padding: 0.8rem;
+  resize: none;
+}
+.script-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.script-titlebar h2 {
+  margin: 0 0 0.6rem;
 }
 .script-hint {
   color: var(--muted);
@@ -1325,7 +1359,9 @@ label.inline {
 .script-layout {
   display: flex;
   gap: 0.6rem;
-  height: 340px;
+  flex: 1;
+  min-height: 240px;
+  overflow: hidden;
 }
 .script-list {
   flex: 0 0 150px;
@@ -1375,6 +1411,9 @@ label.inline {
 .script-editor-pane {
   flex: 1;
   display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 .script-placeholder {
   margin: auto;
@@ -1470,6 +1509,19 @@ label.inline {
   line-height: 1.5;
   white-space: pre;
   tab-size: 2;
+}
+.msl-editor {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.script-diagnostics {
+  color: var(--yellow);
+  font-size: 0.78rem;
 }
 .script-status {
   margin-right: auto;

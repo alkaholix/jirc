@@ -90,6 +90,7 @@ export const api = {
   // Detachable windows (pop-out / dock-back).
   openDetachedWindow: (label: string, title: string) =>
     invoke("open_detached_window", { label, title }),
+  openScriptEditor: () => invoke<void>("open_script_editor"),
   focusWindow: (label: string) => invoke("focus_window", { label }),
   dockWindow: (label: string, bufferKey: string) =>
     invoke("dock_window", { label, bufferKey }),

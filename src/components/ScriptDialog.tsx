@@ -1,5 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
+import { MslEditor } from "./MslEditor";
+import { mslDiagnostics } from "../lib/mslLanguage";
+
+const DRAFT_PREFIX = "jirc.script-draft.";
 
 const EXAMPLE = `; jIRC script (mSL subset)
 ; Type /hello in a channel
@@ -36,18 +40,26 @@ menu nicklist {
 }
 `;
 
-export function ScriptDialog({ onClose }: { onClose: () => void }) {
+export function ScriptDialog({
+  onClose,
+  standalone = false,
+}: {
+  onClose: () => void;
+  standalone?: boolean;
+}) {
   const [names, setNames] = useState<string[]>([]);
   const [current, setCurrent] = useState<string | null>(null);
   const [source, setSource] = useState("");
   const [status, setStatus] = useState("");
   const [dirty, setDirty] = useState(false);
+  const diagnostics = useMemo(() => mslDiagnostics(source), [source]);
 
   const select = async (name: string) => {
     const text = await api.scriptRead(name).catch(() => "");
+    const draft = localStorage.getItem(DRAFT_PREFIX + name);
     setCurrent(name);
-    setSource(text);
-    setDirty(false);
+    setSource(draft ?? text);
+    setDirty(draft !== null && draft !== text);
   };
 
   const refresh = async (selectName?: string) => {
@@ -86,6 +98,7 @@ export function ScriptDialog({ onClose }: { onClose: () => void }) {
     if (!current) return;
     try {
       await api.scriptWrite(current, source);
+      localStorage.removeItem(DRAFT_PREFIX + current);
       setDirty(false);
       setStatus("Saved & compiled ✓");
       setTimeout(() => setStatus(""), 2000);
@@ -98,14 +111,35 @@ export function ScriptDialog({ onClose }: { onClose: () => void }) {
     if (!current) return;
     if (!confirm(`Delete script "${current}"?`)) return;
     await api.scriptDelete(current).catch(() => {});
+    localStorage.removeItem(DRAFT_PREFIX + current);
     setCurrent(null);
     await refresh();
   };
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal script-modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Scripts (mSL)</h2>
+    <div
+      className={standalone ? "script-window" : "modal-backdrop"}
+      onClick={standalone ? undefined : onClose}
+    >
+      <div
+        className={standalone ? "script-modal standalone" : "modal script-modal"}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="script-titlebar">
+          <h2>Scripts (mSL)</h2>
+          {!standalone && (
+            <button
+              className="ghost"
+              onClick={() => {
+                if (current && dirty) localStorage.setItem(DRAFT_PREFIX + current, source);
+                api.openScriptEditor().then(onClose).catch(() => {});
+              }}
+              title="Open the script editor in a separate resizable window"
+            >
+              ⧉ Pop out
+            </button>
+          )}
+        </div>
         <p className="script-hint">
           Multiple script files live in <code>scripts/*.mrc</code> and are all compiled
           together. Aliases, events, <code>if</code>/<code>while</code>, <code>%vars</code>,
@@ -133,14 +167,14 @@ export function ScriptDialog({ onClose }: { onClose: () => void }) {
           </div>
           <div className="script-editor-pane">
             {current ? (
-              <textarea
-                className="script-editor"
+              <MslEditor
                 value={source}
-                spellCheck={false}
-                onChange={(e) => {
-                  setSource(e.target.value);
+                onChange={(value) => {
+                  setSource(value);
                   setDirty(true);
+                  localStorage.setItem(DRAFT_PREFIX + current, value);
                 }}
+                onSave={save}
               />
             ) : (
               <div className="script-placeholder">Select a script, or create a new one.</div>
@@ -149,13 +183,19 @@ export function ScriptDialog({ onClose }: { onClose: () => void }) {
         </div>
         <div className="modal-actions">
           <span className="script-status">{status}</span>
+          {diagnostics.length > 0 && (
+            <span className="script-diagnostics">
+              {diagnostics.filter((item) => item.severity === "error").length} errors,{" "}
+              {diagnostics.filter((item) => item.severity === "warning").length} warnings
+            </span>
+          )}
           {current && (
             <button className="ghost danger-text" onClick={remove}>
               Delete
             </button>
           )}
           <button className="ghost" onClick={onClose}>
-            Close
+            {standalone ? "Close window" : "Close"}
           </button>
           <button onClick={save} disabled={!current || !dirty}>
             Save &amp; compile

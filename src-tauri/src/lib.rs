@@ -82,6 +82,7 @@ pub fn run() {
             commands::open_help,
             commands::open_url,
             commands::open_detached_window,
+            commands::open_script_editor,
             commands::focus_window,
             commands::dock_window,
             commands::close_detached,
