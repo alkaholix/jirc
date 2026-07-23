@@ -252,6 +252,12 @@ pub enum Action {
     Dcc {
         args: String,
     },
+    Fserve {
+        nick: String,
+        max_gets: usize,
+        home: String,
+        welcome: Option<String>,
+    },
     /// Define/replace (`command` = Some) or remove (`command` = None) a runtime
     /// alias (`/alias <name> [command]`). Persisted to a `_runtime.mrc` file.
     DefineAlias {
@@ -1399,6 +1405,19 @@ impl<'a> Runtime<'a> {
             "dcc" => {
                 let args = self.expand(raw_args);
                 self.actions.push(Action::Dcc { args });
+            }
+            "fserve" => {
+                let args = split_params(&self.expand(raw_args));
+                if args.len() >= 3 {
+                    if let Ok(max_gets) = args[1].parse::<usize>() {
+                        self.actions.push(Action::Fserve {
+                            nick: args[0].clone(),
+                            max_gets,
+                            home: args[2].clone(),
+                            welcome: args.get(3).cloned(),
+                        });
+                    }
+                }
             }
             // /scon N command  — run `command` on the Nth connection.
             // /scid cid command — run `command` on the connection with that cid.

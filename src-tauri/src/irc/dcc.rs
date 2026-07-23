@@ -18,7 +18,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, SeekFrom};
+use tokio::io::{
+    AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt, BufReader, SeekFrom,
+};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{
     mpsc::{self, UnboundedReceiver, UnboundedSender},
@@ -486,6 +488,7 @@ const MAX_TRANSFER_HISTORY: usize = 256;
 #[derive(Default)]
 pub struct DccManager {
     chats: Mutex<HashMap<String, DccChat>>,
+    fserves: Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>,
     config: Mutex<DccConfig>,
     transfers: Mutex<HashMap<String, TransferRecord>>,
     outgoing_sends: Mutex<HashMap<DccKey, OutgoingSend>>,
@@ -753,6 +756,77 @@ impl DccManager {
             emit_closed(app, &c.server_id, id);
             fire_chat_event(app, &c.server_id, "CLOSE", &c.nick, "");
         }
+    }
+
+    /// `/fserve <nick> <maxgets> <homedir> [welcome]` — offer a DCC chat
+    /// file-server session rooted inside scriptdata.
+    pub fn fserve(
+        &self,
+        app: AppHandle,
+        server_id: String,
+        nick: String,
+        max_gets: usize,
+        sandbox: std::path::PathBuf,
+        home: std::path::PathBuf,
+        welcome: Option<std::path::PathBuf>,
+    ) -> Result<(), String> {
+        if max_gets == 0 {
+            return Err("fserve maxgets must be greater than zero".into());
+        }
+        let sandbox = canonical_fserve_root(&sandbox)?;
+        let home = canonical_fserve_path(&sandbox, &home)?;
+        if !home.is_dir() {
+            return Err("fserve home must be a directory".into());
+        }
+        let welcome_text = welcome
+            .map(|path| {
+                let path = canonical_fserve_path(&sandbox, &path)?;
+                std::fs::read_to_string(path).map_err(|error| error.to_string())
+            })
+            .transpose()?;
+        let key = chat_key(&server_id, &format!("fserve:{nick}"));
+        if self.fserves.lock().unwrap().contains_key(&key) {
+            return Err(format!("fserve for {nick} is already waiting"));
+        }
+        let cfg = self.config.lock().unwrap().clone();
+        let ip = resolve_dcc_ip(&cfg.ip)?;
+        let (listener, port) =
+            bind_in_range(ip, cfg.port_from, cfg.port_to).ok_or("no free DCC port in range")?;
+        send_ctcp(&app, &server_id, &nick, &format_chat_offer(ip, port))?;
+        let app2 = app.clone();
+        let sid = server_id.clone();
+        let who = nick.clone();
+        let key2 = key.clone();
+        let task = tauri::async_runtime::spawn(async move {
+            let result = async {
+                let listener =
+                    TcpListener::from_std(listener).map_err(|error| error.to_string())?;
+                let (stream, _) = timeout(OFFER_TIMEOUT, listener.accept())
+                    .await
+                    .map_err(|_| "fserve offer timed out".to_string())?
+                    .map_err(|error| error.to_string())?;
+                run_fserve(
+                    app2.clone(),
+                    sid.clone(),
+                    who.clone(),
+                    stream,
+                    home,
+                    max_gets,
+                    welcome_text,
+                )
+                .await
+            }
+            .await;
+            if let Err(error) = result {
+                dcc_notice(&app2, &sid, &format!("DCC fserve for {who}: {error}"));
+            }
+            if let Some(manager) = app2.try_state::<DccManager>() {
+                manager.fserves.lock().unwrap().remove(&key2);
+            }
+        });
+        self.fserves.lock().unwrap().insert(key, task);
+        dcc_notice(&app, &server_id, &format!("DCC fserve offered to {nick}"));
+        Ok(())
     }
 
     /// Records or consumes an inbound DCC negotiation. Returns true when the
@@ -1528,6 +1602,186 @@ async fn run_chat(
     emit_closed_and_script(&app, &server_id, &id, &nick);
 }
 
+async fn run_fserve(
+    app: AppHandle,
+    server_id: String,
+    nick: String,
+    stream: TcpStream,
+    root: std::path::PathBuf,
+    max_gets: usize,
+    welcome: Option<String>,
+) -> Result<(), String> {
+    let (read_half, mut write_half) = tokio::io::split(stream);
+    let mut reader = BufReader::new(read_half);
+    write_fserve_line(&mut write_half, "jIRC DCC file server").await?;
+    if let Some(welcome) = welcome {
+        for line in welcome.lines().take(100) {
+            write_fserve_line(&mut write_half, line).await?;
+        }
+    }
+    write_fserve_line(
+        &mut write_half,
+        "Commands: dir, cd <dir>, get <file>, pwd, help, quit",
+    )
+    .await?;
+    let mut cwd = root.clone();
+    let mut buf = Vec::new();
+    loop {
+        write_fserve_line(&mut write_half, "fserve>").await?;
+        let read = timeout(IO_TIMEOUT, reader.read_until(b'\n', &mut buf))
+            .await
+            .map_err(|_| "session timed out".to_string())?
+            .map_err(|error| error.to_string())?;
+        if read == 0 {
+            break;
+        }
+        let input = String::from_utf8_lossy(&buf).trim().to_string();
+        buf.clear();
+        let (command, argument) = input
+            .split_once(char::is_whitespace)
+            .map(|(a, b)| (a, b.trim()))
+            .unwrap_or((input.as_str(), ""));
+        match command.to_ascii_lowercase().as_str() {
+            "dir" | "ls" => {
+                let mut entries = std::fs::read_dir(&cwd)
+                    .map_err(|error| error.to_string())?
+                    .filter_map(Result::ok)
+                    .collect::<Vec<_>>();
+                entries
+                    .sort_by_key(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase());
+                for entry in entries.into_iter().take(500) {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    let line = if entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+                        format!("[{name}]")
+                    } else {
+                        format!("{} {name}", entry.metadata().map(|m| m.len()).unwrap_or(0))
+                    };
+                    write_fserve_line(&mut write_half, &line).await?;
+                }
+            }
+            "cd" => match resolve_fserve_input(&root, &cwd, argument, true) {
+                Ok(path) => cwd = path,
+                Err(error) => {
+                    write_fserve_line(&mut write_half, &format!("Error: {error}")).await?
+                }
+            },
+            "pwd" => {
+                let relative = cwd
+                    .strip_prefix(&root)
+                    .unwrap_or_else(|_| std::path::Path::new(""));
+                write_fserve_line(&mut write_half, &format!("/{}", relative.display())).await?;
+            }
+            "get" => {
+                let active = app
+                    .try_state::<DccManager>()
+                    .map(|manager| {
+                        manager
+                            .transfer_snapshots(&server_id, Some("send"))
+                            .into_iter()
+                            .filter(|item| {
+                                item.nick.eq_ignore_ascii_case(&nick)
+                                    && matches!(item.status.as_str(), "active" | "waiting")
+                            })
+                            .count()
+                    })
+                    .unwrap_or(0);
+                if active >= max_gets {
+                    write_fserve_line(&mut write_half, "All send slots are in use.").await?;
+                    continue;
+                }
+                match resolve_fserve_input(&root, &cwd, argument, false) {
+                    Ok(path) => {
+                        let result = app
+                            .try_state::<DccManager>()
+                            .ok_or("DCC manager is unavailable".to_string())?
+                            .send_file(app.clone(), server_id.clone(), nick.clone(), path);
+                        match result {
+                            Ok(()) => {
+                                write_fserve_line(&mut write_half, "DCC SEND offered.").await?
+                            }
+                            Err(error) => {
+                                write_fserve_line(&mut write_half, &format!("Error: {error}"))
+                                    .await?
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        write_fserve_line(&mut write_half, &format!("Error: {error}")).await?
+                    }
+                }
+            }
+            "help" => {
+                write_fserve_line(
+                    &mut write_half,
+                    "Commands: dir, cd <dir>, get <file>, pwd, help, quit",
+                )
+                .await?
+            }
+            "quit" | "exit" => break,
+            "" => {}
+            _ => write_fserve_line(&mut write_half, "Unknown command. Type help.").await?,
+        }
+    }
+    Ok(())
+}
+
+async fn write_fserve_line<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    line: &str,
+) -> Result<(), String> {
+    timeout(
+        IO_TIMEOUT,
+        writer.write_all(format!("{line}\r\n").as_bytes()),
+    )
+    .await
+    .map_err(|_| "write timed out".to_string())?
+    .map_err(|error| error.to_string())
+}
+
+fn canonical_fserve_root(path: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let root = path.canonicalize().map_err(|error| error.to_string())?;
+    if !root.is_dir() {
+        return Err("fserve home must be a directory".into());
+    }
+    Ok(root)
+}
+
+fn canonical_fserve_path(
+    root: &std::path::Path,
+    path: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    let path = path.canonicalize().map_err(|error| error.to_string())?;
+    if !path.starts_with(root) {
+        return Err("path is outside the fserve home".into());
+    }
+    Ok(path)
+}
+
+fn resolve_fserve_input(
+    root: &std::path::Path,
+    cwd: &std::path::Path,
+    input: &str,
+    directory: bool,
+) -> Result<std::path::PathBuf, String> {
+    if input.is_empty() {
+        return Err("missing path".into());
+    }
+    let relative = input.trim_start_matches(['/', '\\']);
+    let candidate = if input.starts_with(['/', '\\']) {
+        root.join(relative)
+    } else {
+        cwd.join(relative)
+    };
+    let path = canonical_fserve_path(root, &candidate)?;
+    if directory && !path.is_dir() {
+        return Err("not a directory".into());
+    }
+    if !directory && !path.is_file() {
+        return Err("not a file".into());
+    }
+    Ok(path)
+}
+
 fn emit_closed(app: &AppHandle, server_id: &str, id: &str) {
     let _ = app.emit(
         IRC_EVENT,
@@ -2261,6 +2515,29 @@ mod tests {
             unused_destination(&dir, "file.txt").file_name().unwrap(),
             "file (1).txt"
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn fserve_paths_cannot_escape_the_served_root() {
+        let dir = std::env::temp_dir().join(format!(
+            "jirc-fserve-test-{}",
+            NEXT_TOKEN.fetch_add(1, Ordering::Relaxed)
+        ));
+        let root = dir.join("public");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("file.txt"), b"safe").unwrap();
+        std::fs::write(dir.join("secret.txt"), b"secret").unwrap();
+        let root = canonical_fserve_root(&root).unwrap();
+        assert_eq!(
+            resolve_fserve_input(&root, &root, "file.txt", false)
+                .unwrap()
+                .file_name()
+                .unwrap(),
+            "file.txt"
+        );
+        assert!(resolve_fserve_input(&root, &root, "../secret.txt", false).is_err());
+        assert!(resolve_fserve_input(&root, &root, "file.txt", true).is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

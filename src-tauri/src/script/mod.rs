@@ -2033,6 +2033,36 @@ fn apply_actions_depth(
                     }
                 }
             }
+            Action::Fserve {
+                nick,
+                max_gets,
+                home,
+                welcome,
+            } => {
+                if let Some(dcc) = app.try_state::<crate::irc::dcc::DccManager>() {
+                    let data_dir = script_data_dir(app);
+                    let home = data_dir.join(home);
+                    let welcome = welcome.map(|path| data_dir.join(path));
+                    if let Err(error) = dcc.fserve(
+                        app.clone(),
+                        server_id.to_string(),
+                        nick,
+                        max_gets,
+                        data_dir,
+                        home,
+                        welcome,
+                    ) {
+                        let _ = app.emit(
+                            IRC_EVENT,
+                            UiEvent::Echo {
+                                server_id: server_id.to_string(),
+                                target: "(status)".to_string(),
+                                text: format!("DCC fserve: {error}"),
+                            },
+                        );
+                    }
+                }
+            }
             Action::DefineAlias { name, command } => {
                 update_runtime_alias(app, &name, command.as_deref());
             }
@@ -3982,6 +4012,21 @@ mod tests {
                     source: "<memory>".into(),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn fserve_command_preserves_sandbox_relative_arguments() {
+        let engine = ScriptEngine::new();
+        engine.load("alias serve { fserve $1 3 public welcome.txt }");
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "serve", "bob"),
+            vec![Action::Fserve {
+                nick: "bob".into(),
+                max_gets: 3,
+                home: "public".into(),
+                welcome: Some("welcome.txt".into()),
+            }]
         );
     }
 

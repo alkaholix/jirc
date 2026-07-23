@@ -656,6 +656,7 @@ each time you interact, so <code>$did</code> always reads the current form state
   <tr><td><code>/sockopen /socklisten /sockudp /sockwrite /sockread /sockclose</code></td><td>TCP, UDP, direct TLS and STARTTLS sockets (see Sockets).</td></tr>
   <tr><td><code>/parseline [switches] line</code></td><td>Replace or queue a byte-preserving incoming/outgoing protocol line from <code>on PARSELINE</code>.</td></tr>
   <tr><td><code>/dcc chat|send|get|close|retry</code></td><td>DCC chat and file transfer, including resume and passive/reverse negotiation.</td></tr>
+  <tr><td><code>/fserve nick maxgets homedir [welcome]</code></td><td>Offer a sandboxed DCC file server rooted under <code>scriptdata</code>.</td></tr>
   <tr><td><code>/dialog /did</code></td><td>Open/manage a custom dialog (see Dialogs).</td></tr>
   <tr><td><code>/nickicon nick icon</code></td><td>Badge a nick in the nick list (emoji or image URL).</td></tr>
   <tr><td><code>/toolbar -a name "tip" icon "/command $!1"</code></td><td>Add or replace a script toolbar button. Also supports <code>-d</code> delete, <code>-c</code> clear, and <code>-t</code>/<code>-p</code>/<code>-l</code> updates. Icons may be text/emoji or an image URL; clicking supplies the button name as <code>$1</code> (use delayed <code>$!1</code> when defining it).</td></tr>
@@ -1027,7 +1028,7 @@ Some aren't in the reference tables above yet.
 <div class="note warn">
 Planned or possible future work — scripts using these won't work today:
 <ul style="margin:.5rem 0 0">
-  <li>DCC server / fileserver (<code>/dccserver</code>, <code>/fserve</code>).</li>
+  <li>DCC server mode (<code>/dccserver</code>).</li>
   <li>Picture / drawing <code>@windows</code> and richer script panel controls beyond text and buttons.</li>
   <li>A few <strong>property suffixes</strong> such as <code>$chan(#).topic</code> — most
     now work, just not every one.</li>
