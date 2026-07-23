@@ -474,3 +474,14 @@ pub fn dcc_retry_transfer(
 pub fn dcc_local_ip() -> String {
     crate::irc::dcc::detect_local_ip()
 }
+
+/// Updates outbound user/script line throttling for all connections.
+#[tauri::command]
+pub fn irc_configure_flood(
+    manager: State<'_, ConnectionManager>,
+    enabled: bool,
+    messages: usize,
+    seconds: u64,
+) {
+    manager.configure_flood(enabled, messages, seconds);
+}

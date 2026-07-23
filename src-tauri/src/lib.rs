@@ -114,6 +114,7 @@ pub fn run() {
             commands::dcc_cancel_transfer,
             commands::dcc_retry_transfer,
             commands::dcc_local_ip,
+            commands::irc_configure_flood,
             storage::profiles_load,
             storage::profiles_save,
             storage::profiles_delete,

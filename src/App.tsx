@@ -53,6 +53,9 @@ function App() {
   const dccPortFrom = useSettings((s) => s.dccPortFrom);
   const dccPortTo = useSettings((s) => s.dccPortTo);
   const dccPassive = useSettings((s) => s.dccPassive);
+  const floodEnabled = useSettings((s) => s.floodEnabled);
+  const floodMessages = useSettings((s) => s.floodMessages);
+  const floodSeconds = useSettings((s) => s.floodSeconds);
   const handleEvent = useStore((s) => s.handleEvent);
   const ensureServer = useStore((s) => s.ensureServer);
   const ensureBuffer = useStore((s) => s.ensureBuffer);
@@ -214,6 +217,10 @@ function App() {
   useEffect(() => {
     api.dccConfigure(dccIp, dccPortFrom, dccPortTo, dccPassive).catch(() => {});
   }, [dccIp, dccPortFrom, dccPortTo, dccPassive]);
+
+  useEffect(() => {
+    api.configureFlood(floodEnabled, floodMessages, floodSeconds).catch(() => {});
+  }, [floodEnabled, floodMessages, floodSeconds]);
 
   // Close the "new connection" chooser on Escape.
   useEffect(() => {

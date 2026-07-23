@@ -17,7 +17,44 @@ use crate::irc::auth::{self, AuthState};
 use crate::irc::event::{Direction, MessageKind, UiEvent, IRC_EVENT};
 use crate::irc::state::{SessionState, StateSnapshot};
 use crate::irc::stream;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+
+#[derive(Default)]
+struct FloodLimiter {
+    sent: VecDeque<Instant>,
+}
+
+impl FloodLimiter {
+    fn delay(&mut self, config: &super::manager::FloodConfig, now: Instant) -> Duration {
+        if !config.enabled {
+            self.sent.clear();
+            return Duration::ZERO;
+        }
+        let window = Duration::from_secs(config.seconds);
+        while self
+            .sent
+            .front()
+            .is_some_and(|sent| now.duration_since(*sent) >= window)
+        {
+            self.sent.pop_front();
+        }
+        let next_in_order = self.sent.back().copied().map_or(now, |last| last.max(now));
+        let scheduled = if self.sent.len() < config.messages {
+            next_in_order
+        } else {
+            (self.sent.front().copied().unwrap() + window).max(next_in_order)
+        };
+        while self
+            .sent
+            .front()
+            .is_some_and(|sent| scheduled.duration_since(*sent) >= window)
+        {
+            self.sent.pop_front();
+        }
+        self.sent.push_back(scheduled);
+        scheduled.saturating_duration_since(now)
+    }
+}
 
 fn emit(app: &AppHandle, ev: UiEvent) {
     if let Err(e) = app.emit(IRC_EVENT, ev) {
@@ -642,6 +679,7 @@ async fn run_once(
     let mut names_accum: HashMap<String, Vec<String>> = HashMap::new();
     let mut whois_accum: HashMap<String, Vec<String>> = HashMap::new();
     let mut auth = AuthState::default();
+    let mut flood = FloodLimiter::default();
 
     let reason = loop {
         tokio::select! {
@@ -735,6 +773,14 @@ async fn run_once(
                             store.set(server_id, state.snapshot());
                         }
                     } else {
+                        let config = app
+                            .try_state::<super::manager::ConnectionManager>()
+                            .map(|manager| manager.flood_config())
+                            .unwrap_or_default();
+                        let delay = flood.delay(&config, Instant::now());
+                        if !delay.is_zero() {
+                            tokio::time::sleep(delay).await;
+                        }
                         // Capture our own away message for $awaymsg: "AWAY :msg" sets it,
                         // bare "AWAY" clears it. Propagate the snapshot to the engine.
                         if let Some(rest) = line.strip_prefix("AWAY") {
@@ -2220,6 +2266,29 @@ fn whois_line(code: u16, args: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outbound_flood_limiter_allows_burst_then_spaces_lines() {
+        let config = super::super::manager::FloodConfig {
+            enabled: true,
+            messages: 2,
+            seconds: 1,
+        };
+        let start = Instant::now();
+        let mut limiter = FloodLimiter::default();
+        assert_eq!(limiter.delay(&config, start), Duration::ZERO);
+        assert_eq!(limiter.delay(&config, start), Duration::ZERO);
+        assert_eq!(limiter.delay(&config, start), Duration::from_secs(1));
+        assert_eq!(
+            limiter.delay(&config, start + Duration::from_millis(500)),
+            Duration::from_millis(500)
+        );
+        let disabled = super::super::manager::FloodConfig {
+            enabled: false,
+            ..config
+        };
+        assert_eq!(limiter.delay(&disabled, start), Duration::ZERO);
+    }
 
     #[test]
     fn user_modes_accumulate() {

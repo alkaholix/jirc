@@ -34,6 +34,10 @@ export interface Settings {
   skipMotd: boolean;
   showPingPong: boolean;
   trace: boolean;
+  /** Rate-limit user/script IRC lines to avoid excess-flood disconnects. */
+  floodEnabled: boolean;
+  floodMessages: number;
+  floodSeconds: number;
 
   // DCC networking (for transfers across NAT).
   dccIp: string; // advertised IP; "" = auto (local IP)
@@ -66,6 +70,9 @@ const DEFAULTS: Settings = {
   skipMotd: false,
   showPingPong: false,
   trace: false,
+  floodEnabled: true,
+  floodMessages: 4,
+  floodSeconds: 2,
 
   dccIp: "",
   dccPortFrom: 0,

@@ -100,6 +100,8 @@ export const api = {
   disconnect: (serverId: string, quitMessage?: string) =>
     invoke("irc_disconnect", { serverId, quitMessage }),
   sendRaw: (serverId: string, line: string) => invoke("irc_send_raw", { serverId, line }),
+  configureFlood: (enabled: boolean, messages: number, seconds: number) =>
+    invoke("irc_configure_flood", { enabled, messages, seconds }),
   sendMessage: (serverId: string, target: string, text: string) =>
     invoke("irc_send_message", { serverId, target, text }),
   join: (serverId: string, channel: string) => invoke("irc_join", { serverId, channel }),

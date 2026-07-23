@@ -19,9 +19,27 @@ struct ConnHandle {
     task: tauri::async_runtime::JoinHandle<()>,
 }
 
+#[derive(Debug, Clone)]
+pub struct FloodConfig {
+    pub enabled: bool,
+    pub messages: usize,
+    pub seconds: u64,
+}
+
+impl Default for FloodConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            messages: 4,
+            seconds: 2,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct ConnectionManager {
     conns: Mutex<HashMap<String, ConnHandle>>,
+    flood: Mutex<FloodConfig>,
 }
 
 impl ConnectionManager {
@@ -84,6 +102,18 @@ impl ConnectionManager {
             .outgoing
             .send(line)
             .map_err(|_| "connection is closed".to_string())
+    }
+
+    pub fn configure_flood(&self, enabled: bool, messages: usize, seconds: u64) {
+        *self.flood.lock().unwrap() = FloodConfig {
+            enabled,
+            messages: messages.clamp(1, 100),
+            seconds: seconds.clamp(1, 60),
+        };
+    }
+
+    pub fn flood_config(&self) -> FloodConfig {
+        self.flood.lock().unwrap().clone()
     }
 
     /// Sends QUIT and tears down the connection.

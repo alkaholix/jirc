@@ -392,6 +392,44 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               {toggle("skipMotd", "Skip the MOTD (message of the day)")}
               {toggle("showPingPong", "Show ping? pong! events")}
               {toggle("trace", "Trace: show all raw lines & numerics in the server window")}
+              <div className="settings-label">Outbound flood protection</div>
+              {toggle("floodEnabled", "Rate-limit user and script output")}
+              <div className="row">
+                <label className="grow">
+                  Messages
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={settings.floodMessages}
+                    onChange={(e) =>
+                      settings.set(
+                        "floodMessages",
+                        Math.max(1, Math.min(100, Number(e.target.value) || 1))
+                      )
+                    }
+                  />
+                </label>
+                <label className="grow">
+                  per seconds
+                  <input
+                    type="number"
+                    min={1}
+                    max={60}
+                    value={settings.floodSeconds}
+                    onChange={(e) =>
+                      settings.set(
+                        "floodSeconds",
+                        Math.max(1, Math.min(60, Number(e.target.value) || 1))
+                      )
+                    }
+                  />
+                </label>
+              </div>
+              <p className="cheat-tip">
+                Default: 4 messages per 2 seconds. Protocol replies and connection
+                negotiation bypass this user-output queue.
+              </p>
             </>
           )}
         </div>
