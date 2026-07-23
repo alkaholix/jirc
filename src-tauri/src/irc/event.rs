@@ -300,6 +300,12 @@ pub enum UiEvent {
         n: u32,
         text: String,
     },
+    WindowDraw {
+        server_id: String,
+        name: String,
+        op: String,
+        args: Vec<String>,
+    },
     /// A DCC chat session opened (`id` is the buffer key, mIRC-style `=nick`).
     DccChatOpen {
         server_id: String,

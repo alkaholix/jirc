@@ -212,6 +212,12 @@ pub enum Action {
         n: u32,
         text: String,
     },
+    /// A canvas operation for a picture `@window`.
+    WindowDraw {
+        name: String,
+        op: String,
+        args: Vec<String>,
+    },
     /// Open a native browser window with its own persistent profile.
     WebviewOpen {
         name: String,
@@ -1571,6 +1577,9 @@ impl<'a> Runtime<'a> {
             "iline" => self.cmd_window_line(raw_args, "insert"),
             "dline" => self.cmd_window_line(raw_args, "delete"),
             "sline" => self.cmd_window_select(raw_args),
+            "drawdot" | "drawline" | "drawrect" | "drawtext" | "drawsize" => {
+                self.cmd_window_draw(lname, raw_args)
+            }
             "clear" => self.cmd_window_clear(raw_args),
             "mkdir" => {
                 let dir = self.expand(raw_args);
@@ -3308,6 +3317,39 @@ impl<'a> Runtime<'a> {
             .to_string(),
             n,
             text: String::new(),
+        });
+    }
+
+    fn cmd_window_draw(&mut self, op: &str, raw: &str) {
+        let expanded = self.expand(raw);
+        let mut rest = expanded.trim();
+        let mut switches = String::new();
+        if rest.starts_with('-') {
+            let (value, more) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+            switches = value.to_string();
+            rest = more.trim();
+        }
+        let mut parts = rest.splitn(2, char::is_whitespace);
+        let name = parts.next().unwrap_or("");
+        if !name.starts_with('@')
+            || self
+                .windows
+                .get(name)
+                .is_none_or(|window| window.kind != super::window::WindowKind::Picture)
+        {
+            return;
+        }
+        let mut args: Vec<String> = parts
+            .next()
+            .unwrap_or("")
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
+        args.insert(0, switches);
+        self.actions.push(Action::WindowDraw {
+            name: name.to_string(),
+            op: op.to_string(),
+            args,
         });
     }
 

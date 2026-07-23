@@ -578,11 +578,13 @@ Line and selection positions are one-based, matching mIRC.</p>
   <tr><th>Command / Identifier</th><th>Effect</th></tr>
   <tr><td><code>/window @name</code></td><td>open a selectable listbox window</td></tr>
   <tr><td><code>/window -e @name</code></td><td>open a text window with an editbox; Enter fires <code>on INPUT</code> for <code>@name</code></td></tr>
+  <tr><td><code>/window -p @name</code></td><td>open a detachable canvas-backed picture window</td></tr>
   <tr><td><code>/window -c @name</code></td><td>close the custom window</td></tr>
   <tr><td><code>/aline</code> · <code>/iline</code> · <code>/rline</code> · <code>/dline</code> · <code>/clear</code></td><td>append, insert, replace, delete, or clear lines</td></tr>
   <tr><td><code>/sline [-a|-r] @name N</code></td><td>select, add, or remove a listbox row</td></tr>
   <tr><td><code>$line(@name,N)</code> · <code>.state</code></td><td>line text or whether that row is selected</td></tr>
   <tr><td><code>$sline(@name,N)</code> · <code>.ln</code></td><td>Nth selected row's text or original line number; N=0 returns the count</td></tr>
+  <tr><td><code>/drawsize</code> · <code>/drawdot</code> · <code>/drawline</code> · <code>/drawrect</code> · <code>/drawtext</code></td><td>size and draw on a picture window; rectangles support <code>-f</code> fill and <code>-e</code> ellipse</td></tr>
 </table>
 
 <h2 id="dialogs">Custom dialogs</h2>

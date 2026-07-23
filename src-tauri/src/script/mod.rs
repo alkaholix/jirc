@@ -2295,6 +2295,17 @@ fn apply_actions_depth(
                     },
                 );
             }
+            Action::WindowDraw { name, op, args } => {
+                let _ = app.emit(
+                    IRC_EVENT,
+                    UiEvent::WindowDraw {
+                        server_id: server_id.to_string(),
+                        name,
+                        op,
+                        args,
+                    },
+                );
+            }
             Action::WebviewOpen {
                 name,
                 profile,
@@ -5146,6 +5157,15 @@ mod tests {
             action,
             Action::WindowOpen { name, kind, .. }
                 if name == "@input" && kind == "editbox"
+        )));
+
+        engine.run_command(&ctx(), "#c", "/window -p @graph", &[]);
+        let picture = engine.run_command(&ctx(), "#c", "/drawline @graph 4 2 10 20 30 40", &[]);
+        assert!(picture.iter().any(|action| matches!(
+            action,
+            Action::WindowDraw { name, op, args }
+                if name == "@graph" && op == "drawline"
+                    && args == &["", "4", "2", "10", "20", "30", "40"]
         )));
     }
 

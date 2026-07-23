@@ -7,6 +7,7 @@ import { Sidebar } from "./components/Sidebar";
 import { SwitchBar } from "./components/SwitchBar";
 import { TopicBar } from "./components/TopicBar";
 import { MessageList } from "./components/MessageList";
+import { PictureWindow } from "./components/PictureWindow";
 import { NickList } from "./components/NickList";
 import { InputBar } from "./components/InputBar";
 import { ConnectDialog } from "./components/ConnectDialog";
@@ -411,7 +412,11 @@ function MainApp() {
               <TopicBar buffer={active} onPopOut={() => popOutBuffer(active.key)} />
               <div className="main-body">
                 <div className="chat-pane">
-                  <MessageList buffer={active} />
+                  {active.kind === "window" && active.windowKind === "picture" ? (
+                    <PictureWindow buffer={active} />
+                  ) : (
+                    <MessageList buffer={active} />
+                  )}
                   {(active.kind !== "window" || active.windowKind === "editbox") && (
                     <InputBar buffer={active} />
                   )}

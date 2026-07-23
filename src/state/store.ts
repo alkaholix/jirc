@@ -43,6 +43,8 @@ export interface Buffer {
   windowKind?: string;
   /** One-based selected rows in a custom listbox window. */
   windowSelected?: number[];
+  /** Retained canvas operations for a custom picture window. */
+  windowDrawing?: Array<{ op: string; args: string[] }>;
 }
 
 export type IrcCaseMapping = "ascii" | "rfc1459" | "strict-rfc1459";
@@ -503,7 +505,7 @@ export const useStore = create<State>((set, get) => {
               break;
             }
             case "clear":
-              return { ...b, lines: [], windowSelected: [] };
+              return { ...b, lines: [], windowSelected: [], windowDrawing: [] };
             case "select":
               return {
                 ...b,
@@ -525,6 +527,17 @@ export const useStore = create<State>((set, get) => {
           }
           return { ...b, lines };
         });
+        break;
+      }
+      case "windowDraw": {
+        const key = ensureBuffer(sid, ev.name, "window");
+        patchBuffer(key, (buffer) => ({
+          ...buffer,
+          windowDrawing:
+            ev.op === "drawsize"
+              ? [...(buffer.windowDrawing ?? []).filter((draw) => draw.op !== "drawsize"), { op: ev.op, args: ev.args }]
+              : [...(buffer.windowDrawing ?? []), { op: ev.op, args: ev.args }],
+        }));
         break;
       }
       case "awayChange":

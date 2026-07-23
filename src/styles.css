@@ -478,6 +478,14 @@ select {
 .msg-row.window-selected {
   background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
+.picture-window {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  background: #000;
+  object-fit: contain;
+}
 .messages {
   flex: 1;
   min-height: 0;

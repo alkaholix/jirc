@@ -401,6 +401,18 @@ describe("custom @windows", () => {
     expect(winLines("@auto")).toEqual(["hi"]);
   });
 
+  it("retains picture drawing operations and replaces the canvas size", () => {
+    const s = useStore.getState();
+    s.handleEvent({ type: "windowOpen", serverId: SID, name: "@pic", kind: "picture", title: "@pic" });
+    s.handleEvent({ type: "windowDraw", serverId: SID, name: "@pic", op: "drawsize", args: ["", "640", "480"] });
+    s.handleEvent({ type: "windowDraw", serverId: SID, name: "@pic", op: "drawline", args: ["", "4", "2", "0", "0", "20", "20"] });
+    s.handleEvent({ type: "windowDraw", serverId: SID, name: "@pic", op: "drawsize", args: ["", "800", "600"] });
+    expect(useStore.getState().buffers[bufferKey(SID, "@pic")]?.windowDrawing).toEqual([
+      { op: "drawline", args: ["", "4", "2", "0", "0", "20", "20"] },
+      { op: "drawsize", args: ["", "800", "600"] },
+    ]);
+  });
+
   it("does not steal focus when /window re-opens an existing window", () => {
     const s = useStore.getState();
     s.handleEvent({ type: "windowOpen", serverId: SID, name: "@dash", kind: "listbox", title: "@dash" });

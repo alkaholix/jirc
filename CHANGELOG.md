@@ -12,6 +12,22 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🖼️ 26.7.61 — Picture-window drawing
+
+### Added
+- `/window -p @name` now renders a persistent, detachable HTML canvas instead
+  of a text buffer.
+- Core cross-platform mSL drawing is supported with `/drawsize`, `/drawdot`,
+  `/drawline`, `/drawrect` (including `-f` and `-e`), and `/drawtext`.
+- Drawing operations are retained and replayed when the window rerenders or is
+  detached, with mIRC palette numbers and RGB values supported.
+
+### Verified
+- Focused picture-window engine/store tests, complete frontend and non-live
+  Rust suites, production frontend build, and full Tauri release build.
+
+---
+
 ## 🪟 26.7.60 — Interactive custom windows
 
 ### Added
