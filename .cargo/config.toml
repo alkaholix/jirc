@@ -1,0 +1,8 @@
+[target.'cfg(windows)']
+# tauri-plugin-dialog links TaskDialogIndirect from Common Controls v6. Tauri
+# embeds this dependency in the packaged app, but Rust test executables also
+# need it or Windows exits before the test harness starts.
+rustflags = [
+  "-C",
+  "link-arg=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'",
+]
