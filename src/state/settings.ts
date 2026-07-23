@@ -1,10 +1,13 @@
 import { create } from "zustand";
 
 export type Theme = "dark" | "light" | "system";
+export type ScriptTheme = "vscode-dark" | "vscode-light" | "monokai" | "solarized-dark";
 export type Layout = "tree" | "switchbar";
 
 export interface Settings {
   theme: Theme;
+  /** Colour theme used by the mSL script editor. */
+  scriptTheme: ScriptTheme;
   layout: Layout;
   showTimestamps: boolean;
   showJoinPart: boolean;
@@ -49,6 +52,7 @@ export interface Settings {
 
 const DEFAULTS: Settings = {
   theme: "dark",
+  scriptTheme: "vscode-dark",
   layout: "tree",
   showTimestamps: true,
   showJoinPart: true,

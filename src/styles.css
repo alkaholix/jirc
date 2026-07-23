@@ -1346,6 +1346,22 @@ label.inline {
 .script-titlebar h2 {
   margin: 0 0 0.6rem;
 }
+.script-theme {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.script-theme select {
+  min-width: 145px;
+  padding: 0.3rem 0.45rem;
+  background: var(--bg2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
 .script-hint {
   color: var(--muted);
   font-size: 0.82rem;

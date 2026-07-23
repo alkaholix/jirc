@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import { MslEditor } from "./MslEditor";
 import { mslDiagnostics } from "../lib/mslLanguage";
+import { SCRIPT_THEMES } from "../lib/mslLanguage";
+import { useSettings, type ScriptTheme } from "../state/settings";
 
 const DRAFT_PREFIX = "jirc.script-draft.";
 
@@ -52,6 +54,8 @@ export function ScriptDialog({
   const [source, setSource] = useState("");
   const [status, setStatus] = useState("");
   const [dirty, setDirty] = useState(false);
+  const scriptTheme = useSettings((state) => state.scriptTheme);
+  const setSetting = useSettings((state) => state.set);
   const diagnostics = useMemo(() => mslDiagnostics(source), [source]);
 
   const select = async (name: string) => {
@@ -127,6 +131,21 @@ export function ScriptDialog({
       >
         <div className="script-titlebar">
           <h2>Scripts (mSL)</h2>
+          <label className="script-theme">
+            Editor theme
+            <select
+              value={scriptTheme}
+              onChange={(event) =>
+                setSetting("scriptTheme", event.target.value as ScriptTheme)
+              }
+            >
+              {SCRIPT_THEMES.map((theme) => (
+                <option key={theme.value} value={theme.value}>
+                  {theme.label}
+                </option>
+              ))}
+            </select>
+          </label>
           {!standalone && (
             <button
               className="ghost"
@@ -175,6 +194,7 @@ export function ScriptDialog({
                   localStorage.setItem(DRAFT_PREFIX + current, value);
                 }}
                 onSave={save}
+                theme={scriptTheme}
               />
             ) : (
               <div className="script-placeholder">Select a script, or create a new one.</div>

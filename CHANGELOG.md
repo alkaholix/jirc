@@ -12,6 +12,21 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🎨 26.7.59 — Selectable mSL editor themes
+
+### Added
+- The script editor now defaults to familiar VS Code Dark+ syntax colours.
+- A persistent editor-theme selector offers VS Code Dark+, VS Code Light+,
+  Monokai, and Solarized Dark.
+- Theme changes apply immediately in both the docked and detached script
+  editors without changing the main jIRC theme.
+
+### Verified
+- Editor-theme coverage, complete frontend test suite, production frontend
+  build, complete non-live Rust suite, and full Tauri release build.
+
+---
+
 ## 🪟 26.7.58 — Client-state scripting identifiers
 
 ### Added

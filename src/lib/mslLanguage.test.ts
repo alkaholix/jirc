@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { mslDiagnostics } from "./mslLanguage";
+import { SCRIPT_THEMES, mslDiagnostics, mslTheme } from "./mslLanguage";
+
+describe("mSL editor themes", () => {
+  it("offers distinct VS Code, Monokai, and Solarized choices", () => {
+    expect(SCRIPT_THEMES.map((theme) => theme.value)).toEqual([
+      "vscode-dark",
+      "vscode-light",
+      "monokai",
+      "solarized-dark",
+    ]);
+    for (const theme of SCRIPT_THEMES) {
+      expect(mslTheme(theme.value)).toHaveLength(2);
+    }
+  });
+});
 
 describe("mSL diagnostics", () => {
   it("accepts a normal alias and event", () => {

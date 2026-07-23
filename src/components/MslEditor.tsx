@@ -1,24 +1,28 @@
 import { useEffect, useRef } from "react";
 import { basicSetup } from "codemirror";
-import { EditorState } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
 import { lintGutter } from "@codemirror/lint";
-import { mslHighlighting, mslLanguage, mslLinter } from "../lib/mslLanguage";
+import { mslLanguage, mslLinter, mslTheme } from "../lib/mslLanguage";
+import type { ScriptTheme } from "../state/settings";
 
 export function MslEditor({
   value,
   onChange,
   onSave,
+  theme,
 }: {
   value: string;
   onChange: (value: string) => void;
   onSave: () => void;
+  theme: ScriptTheme;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const change = useRef(onChange);
   const save = useRef(onSave);
+  const themeCompartment = useRef(new Compartment());
   change.current = onChange;
   save.current = onSave;
 
@@ -31,7 +35,7 @@ export function MslEditor({
         extensions: [
           basicSetup,
           mslLanguage,
-          mslHighlighting,
+          themeCompartment.current.of(mslTheme(theme)),
           mslLinter,
           lintGutter(),
           keymap.of([
@@ -47,23 +51,6 @@ export function MslEditor({
           ]),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) change.current(update.state.doc.toString());
-          }),
-          EditorView.theme({
-            "&": { height: "100%", backgroundColor: "var(--bg2)", color: "var(--fg)" },
-            ".cm-scroller": {
-              overflow: "auto",
-              fontFamily: '"Cascadia Code", "Consolas", monospace',
-              fontSize: "13px",
-              lineHeight: "1.5",
-            },
-            ".cm-gutters": {
-              backgroundColor: "var(--panel)",
-              color: "var(--muted)",
-              borderRight: "1px solid var(--border)",
-            },
-            ".cm-activeLine, .cm-activeLineGutter": { backgroundColor: "rgba(122,162,247,.08)" },
-            ".cm-cursor": { borderLeftColor: "var(--fg)" },
-            "&.cm-focused": { outline: "none" },
           }),
         ],
       }),
@@ -84,6 +71,12 @@ export function MslEditor({
       changes: { from: 0, to: editor.state.doc.length, insert: value },
     });
   }, [value]);
+
+  useEffect(() => {
+    view.current?.dispatch({
+      effects: themeCompartment.current.reconfigure(mslTheme(theme)),
+    });
+  }, [theme]);
 
   return <div className="msl-editor" ref={host} />;
 }

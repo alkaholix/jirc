@@ -3,6 +3,8 @@ import { Diagnostic, linter } from "@codemirror/lint";
 import { EditorView } from "@codemirror/view";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
+import type { Extension } from "@codemirror/state";
+import type { ScriptTheme } from "../state/settings";
 
 interface MslState {
   blockComment: boolean;
@@ -54,20 +56,104 @@ const parser: StreamParser<MslState> = {
 
 export const mslLanguage = StreamLanguage.define(parser);
 
-export const mslHighlighting = syntaxHighlighting(
-  HighlightStyle.define([
-    { tag: tags.keyword, color: "#bb9af7", fontWeight: "600" },
-    { tag: tags.variableName, color: "#7dcfff" },
-    { tag: tags.special(tags.variableName), color: "#2ac3de" },
-    { tag: tags.string, color: "#9ece6a" },
-    { tag: tags.number, color: "#ff9e64" },
-    { tag: tags.bool, color: "#ff9e64", fontWeight: "600" },
-    { tag: tags.operator, color: "#89ddff" },
-    { tag: tags.labelName, color: "#e0af68" },
-    { tag: [tags.lineComment, tags.blockComment], color: "#6f7892", fontStyle: "italic" },
-    { tag: tags.punctuation, color: "#a9b1d6" },
-  ])
-);
+interface EditorPalette {
+  background: string;
+  foreground: string;
+  gutter: string;
+  gutterText: string;
+  activeLine: string;
+  selection: string;
+  keyword: string;
+  variable: string;
+  special: string;
+  string: string;
+  number: string;
+  operator: string;
+  label: string;
+  comment: string;
+  punctuation: string;
+  dark: boolean;
+}
+
+export const SCRIPT_THEMES: ReadonlyArray<{ value: ScriptTheme; label: string }> = [
+  { value: "vscode-dark", label: "VS Code Dark+" },
+  { value: "vscode-light", label: "VS Code Light+" },
+  { value: "monokai", label: "Monokai" },
+  { value: "solarized-dark", label: "Solarized Dark" },
+];
+
+const palettes: Record<ScriptTheme, EditorPalette> = {
+  "vscode-dark": {
+    background: "#1e1e1e", foreground: "#d4d4d4", gutter: "#1e1e1e",
+    gutterText: "#858585", activeLine: "#2a2d2e", selection: "#264f78",
+    keyword: "#c586c0", variable: "#9cdcfe", special: "#4fc1ff",
+    string: "#ce9178", number: "#b5cea8", operator: "#d4d4d4",
+    label: "#dcdcaa", comment: "#6a9955", punctuation: "#d4d4d4", dark: true,
+  },
+  "vscode-light": {
+    background: "#ffffff", foreground: "#000000", gutter: "#ffffff",
+    gutterText: "#237893", activeLine: "#f3f3f3", selection: "#add6ff",
+    keyword: "#af00db", variable: "#001080", special: "#0070c1",
+    string: "#a31515", number: "#098658", operator: "#000000",
+    label: "#795e26", comment: "#008000", punctuation: "#000000", dark: false,
+  },
+  monokai: {
+    background: "#272822", foreground: "#f8f8f2", gutter: "#272822",
+    gutterText: "#90908a", activeLine: "#3e3d32", selection: "#49483e",
+    keyword: "#f92672", variable: "#fd971f", special: "#66d9ef",
+    string: "#e6db74", number: "#ae81ff", operator: "#f92672",
+    label: "#a6e22e", comment: "#75715e", punctuation: "#f8f8f2", dark: true,
+  },
+  "solarized-dark": {
+    background: "#002b36", foreground: "#839496", gutter: "#073642",
+    gutterText: "#586e75", activeLine: "#073642", selection: "#274b52",
+    keyword: "#859900", variable: "#268bd2", special: "#2aa198",
+    string: "#2aa198", number: "#d33682", operator: "#859900",
+    label: "#b58900", comment: "#586e75", punctuation: "#839496", dark: true,
+  },
+};
+
+export function mslTheme(theme: ScriptTheme): Extension {
+  const palette = palettes[theme] ?? palettes["vscode-dark"];
+  return [
+    EditorView.theme(
+      {
+        "&": { height: "100%", backgroundColor: palette.background, color: palette.foreground },
+        ".cm-scroller": {
+          overflow: "auto",
+          fontFamily: '"Cascadia Code", "Consolas", monospace',
+          fontSize: "13px",
+          lineHeight: "1.5",
+        },
+        ".cm-content, .cm-gutter": { caretColor: palette.foreground },
+        ".cm-gutters": {
+          backgroundColor: palette.gutter,
+          color: palette.gutterText,
+          borderRight: `1px solid ${palette.activeLine}`,
+        },
+        ".cm-activeLine, .cm-activeLineGutter": { backgroundColor: palette.activeLine },
+        ".cm-selectionBackground, ::selection": { backgroundColor: `${palette.selection} !important` },
+        ".cm-cursor": { borderLeftColor: palette.foreground },
+        "&.cm-focused": { outline: "none" },
+      },
+      { dark: palette.dark }
+    ),
+    syntaxHighlighting(
+      HighlightStyle.define([
+        { tag: tags.keyword, color: palette.keyword, fontWeight: "600" },
+        { tag: tags.variableName, color: palette.variable },
+        { tag: tags.special(tags.variableName), color: palette.special },
+        { tag: tags.string, color: palette.string },
+        { tag: tags.number, color: palette.number },
+        { tag: tags.bool, color: palette.number, fontWeight: "600" },
+        { tag: tags.operator, color: palette.operator },
+        { tag: tags.labelName, color: palette.label },
+        { tag: [tags.lineComment, tags.blockComment], color: palette.comment, fontStyle: "italic" },
+        { tag: tags.punctuation, color: palette.punctuation },
+      ])
+    ),
+  ];
+}
 
 export function mslDiagnostics(source: string): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
