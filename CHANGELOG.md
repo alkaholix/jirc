@@ -12,6 +12,20 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🧭 26.7.57 — Sandboxed path comparison
+
+### Added
+- `$samepath(path1,path2)` compares paths within `scriptdata`, resolving
+  existing paths and normalizing nonexistent ones.
+- Comparisons follow Windows case-insensitivity and Unix case-sensitivity while
+  preserving jIRC's traversal-safe leaf-name sandbox.
+
+### Verified
+- Focused sandbox/platform path tests, complete non-live Rust suite, and
+  production frontend/help build.
+
+---
+
 ## 🧳 26.7.56 — Process and portable identifiers
 
 ### Added

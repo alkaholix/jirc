@@ -5087,6 +5087,20 @@ mod tests {
     }
 
     #[test]
+    fn samepath_identifier_compares_sandboxed_paths() {
+        let engine = ScriptEngine::new();
+        assert_eq!(
+            engine.run_command(
+                &ctx(),
+                "#c",
+                "/msg #c $samepath(file.txt,nested/file.txt) $samepath(file.txt,other.txt)",
+                &[]
+            ),
+            vec![Action::Send("PRIVMSG #c :$true $false".into())]
+        );
+    }
+
+    #[test]
     fn ialchan_filters_ial_by_channel() {
         use crate::irc::state::{ChannelView, StateSnapshot};
         let snap = StateSnapshot {

@@ -886,6 +886,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         // $longfn/$shortfn -> long / 8.3-short filename; we pass through (modern
         // filesystems use the long form).
         "longfn" | "shortfn" => a(0),
+        "samepath" => bool_str(same_sandbox_path(&rt.data_dir, &a(0), &a(1))),
         // $file(name).prop -> file info. Sandboxed to the script-data dir like
         // $isfile/$read (sandbox_path keeps only the leaf name). Times are unix
         // seconds ($ctime-style). attr is best-effort/cross-platform; the
@@ -2429,6 +2430,27 @@ fn portable_from_executable(executable: &std::path::Path) -> bool {
     executable
         .parent()
         .is_some_and(|directory| directory.join("portable.txt").is_file())
+}
+
+fn same_sandbox_path(sandbox: &std::path::Path, left: &str, right: &str) -> bool {
+    fn resolved(sandbox: &std::path::Path, value: &str) -> std::path::PathBuf {
+        let path = super::eval::sandbox_path(sandbox, value);
+        path.canonicalize().unwrap_or_else(|_| {
+            let root = sandbox
+                .canonicalize()
+                .unwrap_or_else(|_| sandbox.to_path_buf());
+            root.join(path.file_name().unwrap_or_default())
+        })
+    }
+
+    let left = resolved(sandbox, left);
+    let right = resolved(sandbox, right);
+    if cfg!(windows) {
+        left.to_string_lossy()
+            .eq_ignore_ascii_case(&right.to_string_lossy())
+    } else {
+        left == right
+    }
 }
 
 fn channel_names_equal(state: &crate::irc::state::StateSnapshot, known: &str, query: &str) -> bool {
@@ -5254,6 +5276,23 @@ mod tests {
         assert!(!portable_from_executable(&executable));
         std::fs::write(executable.parent().unwrap().join("portable.txt"), "").unwrap();
         assert!(portable_from_executable(&executable));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn samepath_stays_in_the_sandbox_and_matches_platform_case_rules() {
+        let root = std::env::temp_dir().join(format!("jirc-samepath-ident-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("file.txt"), "test").unwrap();
+
+        assert!(same_sandbox_path(&root, "file.txt", "nested/file.txt"));
+        assert!(same_sandbox_path(&root, "../file.txt", "file.txt"));
+        assert!(!same_sandbox_path(&root, "file.txt", "other.txt"));
+        assert_eq!(
+            same_sandbox_path(&root, "FILE.TXT", "file.txt"),
+            cfg!(windows)
+        );
+
         std::fs::remove_dir_all(root).unwrap();
     }
 }
