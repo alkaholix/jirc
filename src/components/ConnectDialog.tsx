@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, ServerProfile } from "../lib/api";
+import { tlsClientAuthError } from "../lib/profileValidation";
 import { confirmDialog } from "../state/confirm";
 
 interface Props {
@@ -93,6 +94,7 @@ export function ConnectDialog({ onClose, onConnect }: Props) {
 
   const connect = async () => {
     const profile = build();
+    if (tlsClientAuthError(profile)) return;
     await save();
     onConnect(profile);
     onClose();
@@ -100,6 +102,9 @@ export function ConnectDialog({ onClose, onConnect }: Props) {
 
   const set = <K extends keyof ServerProfile>(k: K, v: ServerProfile[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
+
+  const clientAuthError = tlsClientAuthError(build());
+  const showClientIdentity = !!form.tls || (!!form.sasl && form.saslMechanism === "EXTERNAL");
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -177,11 +182,11 @@ export function ConnectDialog({ onClose, onConnect }: Props) {
               <input
                 value={form.account ?? ""}
                 onChange={(e) => set("account", e.target.value)}
-                placeholder="defaults to nick"
+                placeholder={form.saslMechanism === "EXTERNAL" ? "optional authorization identity" : "defaults to nick"}
               />
             </label>
             <label className="grow">
-              Password
+              Password{form.saslMechanism === "EXTERNAL" ? " (not used by EXTERNAL)" : ""}
               <input
                 type="password"
                 value={form.accountPassword ?? ""}
@@ -189,7 +194,53 @@ export function ConnectDialog({ onClose, onConnect }: Props) {
                 placeholder="account password"
               />
             </label>
+            {form.sasl && (
+              <label className="grow">
+                SASL mechanism
+                <select
+                  value={form.saslMechanism ?? "PLAIN"}
+                  onChange={(e) =>
+                    set(
+                      "saslMechanism",
+                      e.target.value as NonNullable<ServerProfile["saslMechanism"]>,
+                    )
+                  }
+                >
+                  <option value="PLAIN">PLAIN</option>
+                  <option value="EXTERNAL">EXTERNAL</option>
+                  <option value="SCRAM-SHA-256">SCRAM-SHA-256</option>
+                </select>
+              </label>
+            )}
           </div>
+          {showClientIdentity && (
+            <>
+              <div className="field-label">TLS client identity (PEM)</div>
+              <div className="row">
+                <label className="grow">
+                  Client certificate path
+                  <input
+                    value={form.tlsClientCertPath ?? ""}
+                    onChange={(e) => set("tlsClientCertPath", e.target.value)}
+                    placeholder="C:\\certs\\client-cert.pem"
+                  />
+                </label>
+                <label className="grow">
+                  Private-key path
+                  <input
+                    type="password"
+                    value={form.tlsClientKeyPath ?? ""}
+                    onChange={(e) => set("tlsClientKeyPath", e.target.value)}
+                    placeholder="C:\\certs\\client-key.pem"
+                  />
+                </label>
+              </div>
+              <div className="keyring-note">
+                Only these file paths are saved; jIRC never copies private-key material into the profile.
+              </div>
+            </>
+          )}
+          {clientAuthError && <div className="keyring-note warn">⚠ {clientAuthError}</div>}
           {keyring !== null && (
             <div className={`keyring-note ${keyring ? "ok" : "warn"}`}>
               {keyring
@@ -300,7 +351,7 @@ export function ConnectDialog({ onClose, onConnect }: Props) {
           <button className="ghost" onClick={onClose}>
             Cancel
           </button>
-          <button onClick={connect} disabled={!form.host || !form.nick}>
+          <button onClick={connect} disabled={!form.host || !form.nick || !!clientAuthError}>
             Connect
           </button>
         </div>

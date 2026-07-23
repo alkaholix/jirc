@@ -177,8 +177,8 @@ export function MessageList({ buffer }: { buffer: Buffer }) {
       })
       .catch(() => {});
   };
-  const runPopup = (command: string) => {
-    api.scriptRunPopup(buffer.serverId, popupTarget, server?.nick ?? "", server?.name ?? "", command, []).catch(() => {});
+  const runPopup = (item: PopupItem) => {
+    api.scriptRunPopup(buffer.serverId, popupTarget, server?.nick ?? "", server?.name ?? "", item.command, [], undefined, item.source).catch(() => {});
     setMenu(null);
   };
 

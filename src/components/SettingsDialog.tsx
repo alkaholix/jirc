@@ -372,6 +372,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   />
                 </label>
               </div>
+              {toggle(
+                "dccPassive",
+                "Use passive/reverse DCC for outgoing chats and sends"
+              )}
               <p className="cheat-tip">
                 For DCC over the internet, click <strong>Detect from server</strong> —
                 if you have IPv6 it'll use that (works through carrier/CGNAT, no

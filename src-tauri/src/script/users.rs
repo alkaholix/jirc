@@ -136,7 +136,11 @@ impl UserList {
         if let Some(i) = self.position(address) {
             if add {
                 for l in new_levels {
-                    if !self.entries[i].levels.iter().any(|x| x.eq_ignore_ascii_case(&l)) {
+                    if !self.entries[i]
+                        .levels
+                        .iter()
+                        .any(|x| x.eq_ignore_ascii_case(&l))
+                    {
                         self.entries[i].levels.push(l);
                     }
                 }
@@ -162,12 +166,14 @@ impl UserList {
         self.dirty = true;
         if let Some(prefix) = address.strip_suffix('!') {
             let p = prefix.to_lowercase();
-            self.entries.retain(|e| !e.address.to_lowercase().starts_with(&p));
+            self.entries
+                .retain(|e| !e.address.to_lowercase().starts_with(&p));
             return;
         }
         let rm = split_levels(levels);
         if rm.is_empty() {
-            self.entries.retain(|e| !e.address.eq_ignore_ascii_case(address));
+            self.entries
+                .retain(|e| !e.address.eq_ignore_ascii_case(address));
         } else if let Some(i) = self.position(address) {
             self.entries[i]
                 .levels
@@ -197,7 +203,9 @@ impl UserList {
                 let m = complete_mask(&e.address);
                 (wildcard_match(&q, &m) || wildcard_match(&m, &q))
                     && level.map_or(true, |want| {
-                        e.levels.iter().any(|l| l.trim_start_matches('=').eq_ignore_ascii_case(want))
+                        e.levels
+                            .iter()
+                            .any(|l| l.trim_start_matches('=').eq_ignore_ascii_case(want))
                     })
             })
             .collect()
@@ -223,13 +231,50 @@ impl UserList {
         }
         let mut out: Vec<String> = Vec::new();
         for e in entries {
-            for l in &e.levels {
-                if !out.iter().any(|x| x.eq_ignore_ascii_case(l)) {
-                    out.push(l.clone());
+            for (i, level) in e.levels.iter().enumerate() {
+                // In mIRC only the first numeric level on a user-list entry is
+                // general (it grants that level and every lower one). All later
+                // levels are specific, as is an explicitly `=N` first level.
+                let normalized = if i == 0 || level.starts_with('=') {
+                    level.clone()
+                } else {
+                    format!("={level}")
+                };
+                if !out.iter().any(|x| x.eq_ignore_ascii_case(&normalized)) {
+                    out.push(normalized);
                 }
             }
         }
+        // mIRC's default access level for an unlisted user is 1. Without this,
+        // the canonical `on 1:TEXT:...` form never fires in a fresh jIRC setup.
+        if out.is_empty() {
+            out.push("1".into());
+        }
         out
+    }
+
+    /// The user-list mask that supplied the access level selected for an
+    /// event. This is mIRC's `$maddress` (the matching list address), which is
+    /// distinct from the triggering user's concrete `$fulladdress`.
+    pub fn matched_address_for(&self, nick: &str, address: &str, level: &str) -> Option<&str> {
+        let wanted = level.trim_start_matches('=');
+        let mut entries = Vec::new();
+        if !nick.is_empty() {
+            entries.extend(self.matching(nick, None));
+        }
+        if !address.is_empty() {
+            entries.extend(self.matching(address, None));
+        }
+        entries
+            .into_iter()
+            .find(|entry| {
+                entry.levels.iter().any(|entry_level| {
+                    entry_level
+                        .trim_start_matches('=')
+                        .eq_ignore_ascii_case(wanted)
+                })
+            })
+            .map(|entry| entry.address.as_str())
     }
 
     // ---- auto-op / auto-voice / protect lists ----
@@ -260,10 +305,20 @@ impl UserList {
     }
 
     /// Add or merge an auto-list entry (merging channels on an existing address).
-    pub fn auto_add(&mut self, kind: AutoKind, address: &str, channels: Vec<String>, network: String) {
+    pub fn auto_add(
+        &mut self,
+        kind: AutoKind,
+        address: &str,
+        channels: Vec<String>,
+        network: String,
+    ) {
         self.dirty = true;
         let list = self.auto_mut(kind);
-        if let Some(e) = list.entries.iter_mut().find(|e| e.address.eq_ignore_ascii_case(address)) {
+        if let Some(e) = list
+            .entries
+            .iter_mut()
+            .find(|e| e.address.eq_ignore_ascii_case(address))
+        {
             for c in channels {
                 if !e.channels.iter().any(|x| x.eq_ignore_ascii_case(&c)) {
                     e.channels.push(c);
@@ -273,13 +328,19 @@ impl UserList {
                 e.network = network;
             }
         } else {
-            list.entries.push(AutoEntry { address: address.to_string(), channels, network });
+            list.entries.push(AutoEntry {
+                address: address.to_string(),
+                channels,
+                network,
+            });
         }
     }
 
     pub fn auto_remove(&mut self, kind: AutoKind, address: &str) {
         self.dirty = true;
-        self.auto_mut(kind).entries.retain(|e| !e.address.eq_ignore_ascii_case(address));
+        self.auto_mut(kind)
+            .entries
+            .retain(|e| !e.address.eq_ignore_ascii_case(address));
     }
 
     /// `$aop(addr/N)[.prop]`: Nth entry's field (N=0 -> count) or an address match.
@@ -289,7 +350,11 @@ impl UserList {
             if n == 0 {
                 return list.entries.len().to_string();
             }
-            return list.entries.get(n - 1).map(|e| auto_prop(e, prop)).unwrap_or_default();
+            return list
+                .entries
+                .get(n - 1)
+                .map(|e| auto_prop(e, prop))
+                .unwrap_or_default();
         }
         let q = complete_mask(arg);
         for e in &list.entries {
@@ -322,7 +387,8 @@ impl UserList {
                 wildcard_match(&m, &x) || wildcard_match(&x, &m)
             };
             let addr_ok = (!address.is_empty() && hit(address)) || hit(nick);
-            let chan_ok = e.channels.is_empty() || e.channels.iter().any(|c| c.eq_ignore_ascii_case(channel));
+            let chan_ok =
+                e.channels.is_empty() || e.channels.iter().any(|c| c.eq_ignore_ascii_case(channel));
             let net_ok = e.network.is_empty() || e.network.eq_ignore_ascii_case(network);
             addr_ok && chan_ok && net_ok
         })
@@ -344,17 +410,15 @@ fn highest_level(user_levels: &[String]) -> String {
 /// user holding `user_levels`, whose channel-status prefixes are `status`
 /// (e.g. `"@+"`). Returns `Some((clevel, ulevel))` — the event level and the
 /// user's matched level — when it fires, else `None`.
-pub fn level_matches(event_level: &str, user_levels: &[String], status: &str) -> Option<(String, String)> {
+pub fn level_matches(
+    event_level: &str,
+    user_levels: &[String],
+    _status: &str,
+) -> Option<(String, String)> {
     let lvl = event_level.trim();
     // `*` or empty: fires for anyone.
     if lvl.is_empty() || lvl == "*" {
         return Some(("*".into(), highest_level(user_levels)));
-    }
-    // Channel-status prefix (~ owner, & admin, @ op, % halfop, + voice).
-    if lvl.chars().count() == 1 {
-        if let Some(c) = lvl.chars().next().filter(|c| "~&@%+".contains(*c)) {
-            return status.contains(c).then(|| (lvl.into(), lvl.into()));
-        }
     }
     // `=N`: the user must hold exactly that level.
     if let Some(n) = lvl.strip_prefix('=') {
@@ -363,9 +427,17 @@ pub fn level_matches(event_level: &str, user_levels: &[String], status: &str) ->
             .any(|l| l.trim_start_matches('=') == n)
             .then(|| (lvl.into(), n.into()));
     }
-    // `N` or `+N`: the user needs a level >= N (an `=M` level only matches M == N).
-    let num = lvl.strip_prefix('+').unwrap_or(lvl);
-    if let Ok(want) = num.parse::<i64>() {
+    // `+N` is an exact event level in mIRC: a general level 10 user must not
+    // trigger `+5`, while an explicit/specific level 5 user does.
+    if let Some(exact) = lvl.strip_prefix('+') {
+        return user_levels
+            .iter()
+            .any(|l| l.trim_start_matches('=').eq_ignore_ascii_case(exact))
+            .then(|| (lvl.into(), exact.into()));
+    }
+    // Plain `N`: a general level >= N matches; an `=M` specific level only
+    // matches when M == N.
+    if let Ok(want) = lvl.parse::<i64>() {
         let mut best: Option<i64> = None;
         for l in user_levels {
             let matched = match l.strip_prefix('=') {
@@ -383,4 +455,58 @@ pub fn level_matches(event_level: &str, user_levels: &[String], status: &str) ->
         .iter()
         .any(|l| l.trim_start_matches('=').eq_ignore_ascii_case(lvl))
         .then(|| (lvl.into(), lvl.into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unlisted_users_have_mirc_default_level_one() {
+        let users = UserList::default();
+        let levels = users.levels_of("someone", "someone!u@example.test");
+        assert_eq!(levels, vec!["1"]);
+        assert!(level_matches("1", &levels, "").is_some());
+        assert!(level_matches("2", &levels, "").is_none());
+    }
+
+    #[test]
+    fn only_first_user_level_is_general_and_plus_is_exact() {
+        let mut users = UserList::default();
+        users.add("3,5,6", "nick!*@*", "", false);
+        let levels = users.levels_of("nick", "nick!u@example.test");
+        assert_eq!(levels, vec!["3", "=5", "=6"]);
+
+        assert!(level_matches("2", &levels, "").is_some());
+        assert!(level_matches("4", &levels, "").is_none());
+        assert!(level_matches("5", &levels, "").is_some());
+        assert!(level_matches("+5", &levels, "").is_some());
+        assert!(level_matches("+3", &levels, "").is_some());
+        assert!(level_matches("+2", &levels, "").is_none());
+    }
+
+    #[test]
+    fn explicit_first_level_is_not_general() {
+        let mut users = UserList::default();
+        users.add("=3,5", "nick!*@*", "", false);
+        let levels = users.levels_of("nick", "nick!u@example.test");
+        assert_eq!(levels, vec!["=3", "=5"]);
+        assert!(level_matches("2", &levels, "").is_none());
+        assert!(level_matches("3", &levels, "").is_some());
+    }
+
+    #[test]
+    fn maddress_is_the_user_list_mask_that_supplied_the_level() {
+        let mut users = UserList::default();
+        users.add("3", "nick!*@*", "", false);
+        users.add("8", "*!*@example.test", "", false);
+        assert_eq!(
+            users.matched_address_for("nick", "nick!u@example.test", "8"),
+            Some("*!*@example.test")
+        );
+        assert_eq!(
+            users.matched_address_for("nick", "nick!u@example.test", "3"),
+            Some("nick!*@*")
+        );
+    }
 }

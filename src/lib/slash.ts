@@ -1,5 +1,5 @@
 import { api } from "./api";
-import { bufferKey, Buffer, useStore } from "../state/store";
+import { serverBufferKey, Buffer, useStore } from "../state/store";
 import { useSettings } from "../state/settings";
 import { useUrlGrabber } from "../state/urlGrabber";
 import { useChannelCentral } from "../state/channelModes";
@@ -49,8 +49,10 @@ export async function handleInput(input: string, buffer: Buffer): Promise<void> 
     const body = expandEmoji(text);
     if (name.startsWith("=")) {
       // A DCC chat buffer: send over the peer connection, not the server.
-      await api.dccSend(name, body).catch(() => {});
-      echoSelf(name, body, "msg");
+      await api
+        .dccSend(serverId, name, body)
+        .then(() => echoSelf(name, body, "msg"))
+        .catch(() => {});
       return;
     }
     await api.sendMessage(serverId, name, body);
@@ -74,7 +76,20 @@ export async function handleInput(input: string, buffer: Buffer): Promise<void> 
   }
   const [cmd, ...rest] = afterSlash.split(" ");
   const args = rest.join(" ");
-  const command = cmd.toLowerCase();
+  const typedCommand = cmd.toLowerCase();
+  // In mIRC a user alias takes precedence over a built-in command. Prefixing
+  // the command with `!` explicitly bypasses that alias (`/!join`, etc.). Do
+  // this before the frontend's built-in switch so aliases named /join, /msg,
+  // /mode, ... work the same way as aliases with otherwise-unknown names.
+  const bypassAlias = typedCommand.startsWith("!");
+  const command = bypassAlias ? typedCommand.slice(1) : typedCommand;
+  if (!bypassAlias && command) {
+    const target = kind === "status" ? "" : name;
+    const handled = await api
+      .scriptRunAlias(serverId, target, nick, srv?.name ?? "", command, args)
+      .catch(() => false);
+    if (handled) return;
+  }
 
   switch (command) {
     case "join":
@@ -91,17 +106,26 @@ export async function handleInput(input: string, buffer: Buffer): Promise<void> 
         if (path) await api.dccSendFile(serverId, who, path).catch(() => {});
       } else if (sub === "close") {
         const id = name.startsWith("=") ? name : who ? `=${who}` : "";
-        if (id) await api.dccClose(id).catch(() => {});
+        if (id) await api.dccClose(serverId, id).catch(() => {});
       } else if ((sub === "get" || sub === "accept") && who) {
         const file = dccOffers.takeFile(serverId, who);
         if (file) {
           await api
-            .dccRecv(serverId, file.nick, file.filename, file.ip, file.port, file.size)
+            .dccRecv(serverId, file.nick, file.filename, file.ip, file.port, file.size, file.token)
             .catch(() => {});
         } else {
           const offer = dccOffers.take(serverId, who);
-          if (offer) await api.dccAccept(serverId, offer.nick, offer.ip, offer.port).catch(() => {});
+          if (offer) await api.dccAccept(serverId, offer.nick, offer.ip, offer.port, offer.token).catch(() => {});
         }
+      } else if (sub === "resume" && who) {
+        const file = dccOffers.takeFile(serverId, who);
+        if (file) {
+          await api
+            .dccRecv(serverId, file.nick, file.filename, file.ip, file.port, file.size, file.token, true)
+            .catch(() => {});
+        }
+      } else if (sub === "passive" && who) {
+        useSettings.getState().set("dccPassive", who.toLowerCase() === "on");
       }
       break;
     }
@@ -216,7 +240,7 @@ export async function handleInput(input: string, buffer: Buffer): Promise<void> 
     case "queryrn": {
       const [oldNick, newNick] = rest;
       if (oldNick && newNick) {
-        const oldKey = bufferKey(serverId, oldNick);
+        const oldKey = serverBufferKey(serverId, oldNick);
         if (store.buffers[oldKey]?.kind === "query") {
           store.renameBuffer(oldKey, newNick);
         }
@@ -294,7 +318,7 @@ export async function handleInput(input: string, buffer: Buffer): Promise<void> 
     }
     case "close":
     case "wc":
-      store.closeBuffer(bufferKey(serverId, name));
+      store.closeBuffer(serverBufferKey(serverId, name));
       break;
     case "quit":
       await api.disconnect(serverId, args || useSettings.getState().quitMessage || undefined);
@@ -378,7 +402,16 @@ export async function handleInput(input: string, buffer: Buffer): Promise<void> 
       // raw IRC command for anything it doesn't recognise.
       const network = srv?.name ?? "";
       const target = kind === "status" ? "" : name;
-      await api.scriptRunCommand(serverId, target, nick, network, command, args).catch(() => {});
+      await api
+        .scriptRunCommand(
+          serverId,
+          target,
+          nick,
+          network,
+          bypassAlias ? `!${command}` : command,
+          args
+        )
+        .catch(() => {});
       break;
     }
   }

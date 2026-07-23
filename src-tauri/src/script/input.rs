@@ -76,7 +76,11 @@ impl ScriptInput for EngineInput {
             PromptReq {
                 id,
                 message: message.to_string(),
-                title: if title.is_empty() { "Input".to_string() } else { title.to_string() },
+                title: if title.is_empty() {
+                    "Input".to_string()
+                } else {
+                    title.to_string()
+                },
                 default: default.to_string(),
             },
         );

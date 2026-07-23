@@ -12,33 +12,148 @@ pub enum Action {
     /// A raw line to send to the server.
     Send(String),
     /// Text to display locally in `target` (channel/query/status).
-    Echo { target: String, text: String },
+    Echo {
+        target: String,
+        text: String,
+    },
+    /// Add, stop, or otherwise control an application-wide `/play` queue.
+    Play {
+        args: String,
+        current_target: String,
+        remote: bool,
+        /// Script file in which `/play` was invoked, for deferred local aliases.
+        source: String,
+    },
+    /// One line emitted by the `/play` worker. `echo` is `/play -e`; ordinary
+    /// playback deliberately does not use [`Action::Send`]'s local echo.
+    PlayLine {
+        target: String,
+        text: String,
+        notice: bool,
+        echo: bool,
+    },
     /// Schedule a command to run later, `reps` times every `interval_ms`.
     /// An empty `name` means auto-assign one.
     Timer {
         name: String,
         reps: u32,
         interval_ms: u64,
+        /// Optional local wall-clock start (`HH:nn[:ss]`).
+        start_at: Option<String>,
         command: String,
         target: String,
+        /// `-o`: keep running after the originating connection closes.
+        offline: bool,
+        /// `-c`: retain the real-time schedule and catch up missed intervals.
+        catch_up: bool,
+        /// `-d`: serialize this timer with other ordered timers.
+        ordered: bool,
+        /// `-m`/`-h`: the interval is expressed in milliseconds.
+        milliseconds: bool,
+        /// `-h`: high-resolution millisecond timer (Tokio already uses its
+        /// monotonic high-resolution clock; retained for `$timer().mmt`).
+        high_resolution: bool,
+        /// `-i`: move to another live connection if the original one closes.
+        dynamic: bool,
+        /// Script file in which the timer was created, for local aliases.
+        source: String,
     },
-    /// Stop a named timer (`name` = "*" stops all).
-    TimerStop { name: String },
+    /// Stop timers matching a name or wildcard (`name` = "*" stops all).
+    TimerStop {
+        name: String,
+    },
+    /// Execute timers matching a name or wildcard immediately (`-e`).
+    TimerExecute {
+        name: String,
+    },
+    /// Pause timers matching a name or wildcard (`-p`/`-P`).
+    TimerPause {
+        name: String,
+        countdown: bool,
+    },
+    /// Resume paused timers matching a name or wildcard (`-r`).
+    TimerResume {
+        name: String,
+    },
     /// Echo the list of active timers into `target`.
-    TimerList { target: String },
+    TimerList {
+        target: String,
+        name: String,
+    },
     /// Open a TCP socket (`/sockopen`); `tls` for `-e` (encrypted).
-    SockOpen { name: String, host: String, port: u16, tls: bool },
+    SockOpen {
+        name: String,
+        host: String,
+        port: u16,
+        tls: bool,
+        /// `-a`: accept an invalid TLS certificate for this socket only.
+        accept_invalid: bool,
+        bind_ip: String,
+        /// `-n`: disable Nagle's algorithm.
+        nodelay: bool,
+        /// `-4`/`-6`; zero lets the resolver choose either family.
+        ip_version: u8,
+        /// Stable synchronous reservation consumed when the deferred connect starts.
+        reservation_id: u64,
+    },
+    /// Send a UDP datagram, optionally retaining the socket for `on UDPREAD`.
+    SockUdp {
+        name: String,
+        bind_ip: String,
+        local_port: u16,
+        dest_ip: String,
+        dest_port: u16,
+        data: Vec<u8>,
+        keep: bool,
+        /// `-u`: create an IPv4/IPv6 dual-stack UDP socket.
+        dual_stack: bool,
+        /// Stable synchronous reservation, or zero when reusing an existing UDP socket.
+        reservation_id: u64,
+    },
     /// Write bytes to a socket (`/sockwrite`).
-    SockWrite { name: String, data: Vec<u8> },
+    SockWrite {
+        name: String,
+        data: Vec<u8>,
+    },
+    /// Dispatch a deferred socket error event after the current routine returns.
+    SockError {
+        kind: String,
+        name: String,
+        error: i32,
+    },
     /// Close a socket (`/sockclose`).
-    SockClose { name: String },
+    SockClose {
+        name: String,
+    },
+    /// Deferred fallbacks used before a production socket backend is installed.
+    SockMark {
+        name: String,
+        mark: String,
+    },
+    SockRename {
+        name: String,
+        newname: String,
+    },
+    SockPause {
+        name: String,
+        resume: bool,
+    },
     /// Start the accept loop for a listener bound by `/socklisten` (carries the
     /// owning connection's context to apply-time so events route correctly).
-    SockListen { name: String },
+    SockListen {
+        name: String,
+        /// Stable listener identity so a same-handler rename cannot stale the action.
+        listener_id: u64,
+    },
     /// `/server [-m] <host> <port> [password]` — connect the native client (also
-    /// used by scripts that stand up a local bridge/proxy). The frontend opens the
-    /// server window and starts the connection.
-    Server { host: String, port: u16, pass: String },
+    /// used by scripts that stand up a local bridge/proxy). The frontend opens or
+    /// reuses the server window and starts the connection.
+    Server {
+        host: String,
+        port: u16,
+        pass: String,
+        new_window: bool,
+    },
     /// Open a custom dialog (`/dialog`).
     DialogOpen {
         name: String,
@@ -46,7 +161,9 @@ pub enum Action {
         controls: Vec<super::ast::DialogControl>,
     },
     /// Close a dialog (`/dialog -c`).
-    DialogClose { name: String },
+    DialogClose {
+        name: String,
+    },
     /// Mutate a dialog control (`/did`): `op` is set/add/clear.
     DialogSet {
         dialog: String,
@@ -55,30 +172,100 @@ pub enum Action {
         value: String,
     },
     /// Set (or clear, if empty) a nick-list icon for a nick (`/nickicon`).
-    NickIcon { nick: String, icon: String },
+    NickIcon {
+        nick: String,
+        icon: String,
+    },
     /// Open a custom `@window` (`/window`).
-    WindowOpen { name: String, kind: String, title: String },
+    WindowOpen {
+        name: String,
+        kind: String,
+        title: String,
+    },
     /// Close a custom `@window` (`/window -c`).
-    WindowClose { name: String },
+    WindowClose {
+        name: String,
+    },
     /// A line op on a custom `@window`: `op` = add/insert/replace/delete/clear.
-    WindowLine { name: String, op: String, n: u32, text: String },
+    WindowLine {
+        name: String,
+        op: String,
+        n: u32,
+        text: String,
+    },
+    /// Open a native browser window with its own persistent profile.
+    WebviewOpen {
+        name: String,
+        profile: String,
+        width: u32,
+        height: u32,
+        url: String,
+        title: String,
+    },
+    /// Navigate a managed native browser window.
+    WebviewNavigate {
+        name: String,
+        url: String,
+    },
+    /// Read cookies visible to `url` and emit `on WEBVIEW` cookie events.
+    WebviewCookies {
+        name: String,
+        url: String,
+    },
+    /// Focus a managed native browser window.
+    WebviewFocus {
+        name: String,
+    },
+    /// Close a managed native browser window.
+    WebviewClose {
+        name: String,
+    },
     /// Set a stored identity field (`/anick`/`/mnick`/`/fullname`). `field` is
     /// `anick`/`mnick`/`fullname`; updates the live session state so the matching
     /// `$anick`/`$mnick`/`$fullname` reflects it.
-    SetIdentity { field: String, value: String },
+    SetIdentity {
+        field: String,
+        value: String,
+    },
     /// Recompile every script file from disk (`/reload`).
     ReloadScripts,
+    /// Execute a client-local mIRC `/dcc` subcommand.
+    Dcc {
+        args: String,
+    },
     /// Define/replace (`command` = Some) or remove (`command` = None) a runtime
     /// alias (`/alias <name> [command]`). Persisted to a `_runtime.mrc` file.
-    DefineAlias { name: String, command: Option<String> },
+    DefineAlias {
+        name: String,
+        command: Option<String>,
+    },
     /// Fire `on SIGNAL` handlers matching `name` (`/signal`); `params` become `$1-`.
-    Signal { name: String, params: Vec<String> },
+    Signal {
+        name: String,
+        params: Vec<String>,
+    },
     /// Control the connect-time autojoin from within `on CONNECT` (`/autojoin`):
     /// `skip` cancels it, `delay_secs` > 0 postpones it that many seconds.
-    Autojoin { skip: bool, delay_secs: u32 },
+    Autojoin {
+        skip: bool,
+        delay_secs: u32,
+    },
     /// Run `command` on another connection (`/scon`/`/scid`): re-dispatched in
     /// that connection's context so its output routes there.
-    RunOn { server_id: String, command: String },
+    RunOn {
+        server_id: String,
+        command: String,
+    },
+    /// Replace the line currently being handled by `on PARSELINE`, or enqueue a
+    /// synthetic incoming/outgoing line when `queue` is set (`/parseline -q`).
+    ParseLine {
+        direction: String,
+        bytes: Vec<u8>,
+        queue: bool,
+        trigger: bool,
+        append_crlf: bool,
+        utf8: bool,
+    },
 }
 
 /// Reserved `%var` key holding the byte count of the last `/sockread` (read by
@@ -93,6 +280,44 @@ pub const V2_KEY: &str = "\u{0}v2";
 pub const RESULT_KEY: &str = "\u{0}result";
 /// The most recent `$?`/`$input` answer, for `$!`.
 pub const LASTINPUT_KEY: &str = "\u{0}lastinput";
+pub const LTIMER_KEY: &str = "\u{0}ltimer";
+/// Number of lines selected by the most recent `/filter` command.
+pub const FILTERED_KEY: &str = "\u{0}filtered";
+
+/// Lifetime attached to a variable or hash item by mIRC's `-uN` switch.
+/// `Instant` keeps expiry independent of wall-clock changes; `EndOfRun` is
+/// mIRC's special `-u0` form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TimedExpiry {
+    At(std::time::Instant),
+    EndOfRun,
+}
+
+impl TimedExpiry {
+    fn after(seconds: u64) -> Self {
+        if seconds == 0 {
+            Self::EndOfRun
+        } else {
+            Self::At(std::time::Instant::now() + std::time::Duration::from_secs(seconds))
+        }
+    }
+
+    fn expired(self, now: std::time::Instant) -> bool {
+        matches!(self, Self::At(deadline) if deadline <= now)
+    }
+
+    /// Whole seconds remaining, rounded up like mIRC's `.secs`/`.unset`
+    /// properties so a newly-created `-u10` value reports 10 rather than 9.
+    pub(crate) fn seconds_remaining(self, now: std::time::Instant) -> u64 {
+        match self {
+            Self::At(deadline) => {
+                let remaining = deadline.saturating_duration_since(now);
+                remaining.as_secs() + u64::from(remaining.subsec_nanos() != 0)
+            }
+            Self::EndOfRun => 0,
+        }
+    }
+}
 
 /// Sentinel that `$style(N)` returns; consumed while building a popup menu (a
 /// Private-Use char, so it can't collide with a real label). The digit that
@@ -117,8 +342,38 @@ pub struct EventVars {
     pub did: std::collections::HashMap<String, String>,
     /// The event type name, e.g. "text"/"raw"/"op" — exposed as `$event`.
     pub event: String,
+    /// Name of the `/timer` currently invoking the command (`$ctimer`).
+    pub timer: String,
+    /// Destination of the active `/play` item (`$pnick`).
+    pub pnick: String,
+    /// Stable identity of the loaded script file whose alias/event is running.
+    /// Used to enforce mIRC's file-local `alias -l` visibility.
+    pub script_source: String,
+    /// One-based source line for `$scriptline` (definition line for the current
+    /// alias/event; nested aliases replace and restore it with their source).
+    pub script_line: usize,
+    /// Whether an earlier `^` handler suppressed mIRC's default event text.
+    /// `/haltdef` updates this without stopping the current routine.
+    pub default_halted: bool,
     /// The numeric of a raw server line (`on RAW`) — exposed as `$numeric`.
     pub numeric: String,
+    /// Raw protocol context retained for server-driven events.
+    pub raw_msg: String,
+    pub raw_bytes: Vec<u8>,
+    /// IRCv3 tags as `(key, decoded value)`, plus their original tag string.
+    /// IRCv3 tags as `(tag, raw key, had '=')`. mIRC exposes the escaped wire
+    /// value through `$msgtags(...).key`; it does not unescape it first.
+    pub msg_tags: Vec<(String, String, bool)>,
+    pub msg_tags_raw: String,
+    pub msg_stamp: String,
+    /// `on PARSELINE` context.
+    pub parse_line: String,
+    pub parse_type: String,
+    pub parse_utf: bool,
+    pub parse_em: bool,
+    /// Wildcard/access data for `$matchkey` and `$maddress`.
+    pub match_key: String,
+    pub matched_address: String,
     /// The event's matched access level (`$clevel`) and the triggering user's
     /// matched level (`$ulevel`), set by the dispatcher's level gate.
     pub clevel: String,
@@ -127,6 +382,13 @@ pub struct EventVars {
     /// `sockread &binvar` can read binary protocols byte-for-byte. Empty for
     /// every other event.
     pub sock_bytes: Vec<u8>,
+    /// Error code for the current socket event (`$sockerr`). Zero means that
+    /// the event/command completed normally.
+    pub sock_error: i32,
+    /// Full local path for DCC file events (`$filename`).
+    pub filename: String,
+    /// Transfer/session id for DCC event-local identifiers.
+    pub dcc_id: String,
 }
 
 const STEP_LIMIT: u32 = 100_000;
@@ -136,24 +398,121 @@ const STEP_LIMIT: u32 = 100_000;
 const LOOP_BREAK: &str = "\u{0}break";
 const LOOP_CONTINUE: &str = "\u{0}continue";
 const STATUS: &str = "(status)";
+const WSA_INVALID_ARGUMENT: i32 = 10_022;
+// Deferred values are wrapped and base64-encoded instead of replacing special
+// characters with Private-Use code points. NUL framing cannot collide with
+// mIRC file/script text (text reads stop at NUL), while allowing every visible
+// Unicode scalar, including the old U+E101..U+E106 sentinels, to pass through.
+const DELAY_PREFIX: &str = "\0jirc-unsafe:";
+const PIPE_PREFIX: &str = "\0jirc-read-pipe:";
+const ENVELOPE_END: char = '\0';
 
 /// Synchronous socket operations the engine can call *during* a run, so
 /// `/socklisten` binds immediately and `$sock(name).port` is readable on the
 /// same line (like mIRC). The production backend is the SocketManager; tests use
 /// [`NoSockets`] or a fake. Names may be wildcards for the query methods.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SocketReadOptions {
+    /// Destination is a binary variable. This controls mIRC's default 4096-byte
+    /// binary read and whether unread data causes another SOCKREAD event.
+    pub binary: bool,
+    /// `-f`: return an unterminated partial line instead of waiting for CRLF.
+    pub force: bool,
+    /// Text reads and `sockread -n &binvar` consume one CRLF-terminated line.
+    pub line: bool,
+    /// Maximum bytes for a raw binary read (4096 when omitted by the script).
+    pub max_bytes: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SocketReadResult {
+    /// Bytes placed in the destination after any CRLF stripping.
+    pub data: Vec<u8>,
+    /// Total bytes consumed from the socket receive queue. For a line read this
+    /// includes the stripped CRLF, allowing an empty line to keep `$sockbr > 0`.
+    pub bytes_read: usize,
+}
+
+/// Result of synchronously queueing a `/sockwrite`. `failures` retains the
+/// concrete socket names for wildcard writes so each failed socket can receive
+/// its own `on SOCKWRITE` event.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SocketWriteResult {
+    pub error: i32,
+    pub failures: Vec<(String, i32)>,
+}
+
 pub trait ScriptSockets: Send + Sync {
-    /// Binds a listening socket; returns the bound port (`port == 0` → OS-assigned).
-    fn listen(&self, name: &str, port: u16) -> Option<u16>;
+    /// Reserves a new TCP socket synchronously so `$sock()` and state commands
+    /// observe it before the deferred network connect starts.
+    fn reserve_open(
+        &self,
+        _name: &str,
+        _host: &str,
+        _port: u16,
+        _tls: bool,
+        _bind_ip: &str,
+    ) -> Option<Result<u64, i32>> {
+        None
+    }
+    /// Reserves a new UDP socket synchronously. An id of zero means an existing
+    /// compatible UDP socket will be reused.
+    fn reserve_udp(
+        &self,
+        _name: &str,
+        _bind_ip: &str,
+        _local_port: u16,
+        _dest_ip: &str,
+        _dest_port: u16,
+    ) -> Option<Result<u64, i32>> {
+        None
+    }
+    /// Binds a listening socket; `None` means no synchronous backend is installed.
+    fn listen(
+        &self,
+        bind_ip: &str,
+        name: &str,
+        port: u16,
+        nodelay: bool,
+        dual_stack: bool,
+    ) -> Option<Result<u16, i32>>;
+    /// Binds a listener and returns its stable identity. Backends without stable
+    /// reservations retain the original behavior with identity zero.
+    fn listen_reserved(
+        &self,
+        bind_ip: &str,
+        name: &str,
+        port: u16,
+        nodelay: bool,
+        dual_stack: bool,
+    ) -> Option<Result<(u16, u64), i32>> {
+        self.listen(bind_ip, name, port, nodelay, dual_stack)
+            .map(|result| result.map(|bound_port| (bound_port, 0)))
+    }
     /// Accepts the pending incoming connection of listener `listener` into a
     /// socket named `name`.
-    fn accept(&self, name: &str, listener: &str) -> bool;
-    fn set_mark(&self, name: &str, mark: &str);
+    fn accept(&self, name: &str, listener: &str, nodelay: bool) -> Option<i32>;
+    fn close(&self, pattern: &str) -> Option<i32>;
+    fn set_mark(&self, name: &str, mark: &str) -> Option<i32>;
     /// `/sockrename <name> <newname>`.
-    fn rename(&self, name: &str, newname: &str);
+    fn rename(&self, name: &str, newname: &str) -> Option<i32>;
     /// `/sockpause [-r]` — pause (or, with `resume`, restart) reading.
-    fn pause(&self, name: &str, resume: bool);
+    fn pause(&self, name: &str, resume: bool) -> Option<i32>;
+    /// Queues a TCP write synchronously so `$sock().sq` and `$sockerr` are
+    /// observable on the next script line. `None` asks the evaluator to retain
+    /// its deferred [`Action::SockWrite`] fallback; `Some(result)` handled it.
+    fn write(&self, name: &str, data: &[u8]) -> Option<SocketWriteResult>;
+    /// `/sockopen -t name` — upgrades an existing plain TCP socket in place.
+    fn starttls(&self, name: &str) -> Option<i32>;
+    /// Reads and consumes data queued for a connected socket. `None` means no
+    /// synchronous backend is installed; `Some(Ok(default()))` means no data yet.
+    fn read(&self, name: &str, options: SocketReadOptions)
+        -> Option<Result<SocketReadResult, i32>>;
     /// Whether a socket matching `name` (possibly a wildcard) exists.
     fn exists(&self, name: &str) -> bool;
+    /// Socket names matching `pattern`, in stable enumeration order. Used by
+    /// mIRC's `$sock(pattern,0)` count and `$sock(pattern,N)` lookup forms.
+    fn matching_names(&self, pattern: &str) -> Vec<String>;
     /// `$sock(name).property` value (empty for unknown name/property).
     fn prop(&self, name: &str, property: &str) -> String;
     /// `/socklist` — formatted lines for sockets matching `filter`.
@@ -163,17 +522,38 @@ pub trait ScriptSockets: Send + Sync {
 /// A no-op socket backend (used in tests and before a real one is installed).
 pub struct NoSockets;
 impl ScriptSockets for NoSockets {
-    fn listen(&self, _: &str, _: u16) -> Option<u16> {
+    fn listen(&self, _: &str, _: &str, _: u16, _: bool, _: bool) -> Option<Result<u16, i32>> {
         None
     }
-    fn accept(&self, _: &str, _: &str) -> bool {
-        false
+    fn accept(&self, _: &str, _: &str, _: bool) -> Option<i32> {
+        None
     }
-    fn set_mark(&self, _: &str, _: &str) {}
-    fn rename(&self, _: &str, _: &str) {}
-    fn pause(&self, _: &str, _: bool) {}
+    fn close(&self, _: &str) -> Option<i32> {
+        None
+    }
+    fn set_mark(&self, _: &str, _: &str) -> Option<i32> {
+        None
+    }
+    fn rename(&self, _: &str, _: &str) -> Option<i32> {
+        None
+    }
+    fn pause(&self, _: &str, _: bool) -> Option<i32> {
+        None
+    }
+    fn write(&self, _: &str, _: &[u8]) -> Option<SocketWriteResult> {
+        None
+    }
+    fn starttls(&self, _: &str) -> Option<i32> {
+        None
+    }
+    fn read(&self, _: &str, _: SocketReadOptions) -> Option<Result<SocketReadResult, i32>> {
+        None
+    }
     fn exists(&self, _: &str) -> bool {
         false
+    }
+    fn matching_names(&self, _: &str) -> Vec<String> {
+        Vec::new()
     }
     fn prop(&self, _: &str, _: &str) -> String {
         String::new()
@@ -209,18 +589,111 @@ pub struct TimerInfo {
     pub reps: u32,
     /// Delay between fires, in seconds.
     pub delay: u64,
+    /// Wall-clock start, when one was supplied.
+    pub time: String,
+    /// `online` or `offline`.
+    pub timer_type: String,
+    /// Whole seconds until the next scheduled trigger.
+    pub secs: u64,
+    /// Whether `-m`/`-h` millisecond timing is in use.
+    pub mmt: bool,
+    /// Whether `-i` dynamic connection association is enabled.
+    pub anysc: bool,
+    /// mIRC-style numeric connection id assigned by the script engine.
+    pub cid: u32,
+    /// 0 = running, 1 = execution paused, 2 = countdown paused.
+    pub pause: u8,
 }
 
 /// Read-only access to the active timers, for `$timer(...)`. Implemented by a
 /// bridge that reads the Tauri-managed `TimerManager`.
 pub trait ScriptTimers: Send + Sync {
     fn snapshot(&self) -> Vec<TimerInfo>;
+
+    fn last(&self) -> String {
+        String::new()
+    }
 }
 
 /// A no-op timers backend (tests / before a real one is installed).
 pub struct NoTimers;
 impl ScriptTimers for NoTimers {
     fn snapshot(&self) -> Vec<TimerInfo> {
+        Vec::new()
+    }
+}
+
+/// A queued `/play` item exposed to `$play(...)`.
+#[derive(Clone, Default)]
+pub struct PlayInfo {
+    pub target: String,
+    pub play_type: String,
+    pub filename: String,
+    pub topic: String,
+    pub pos: usize,
+    pub lines: usize,
+    pub delay: u64,
+    pub status: String,
+}
+
+/// Read-only access to the application-wide play queue for `$play(...)`.
+pub trait ScriptPlay: Send + Sync {
+    fn snapshot(&self) -> Vec<PlayInfo>;
+}
+
+/// A no-op play backend used by tests and before application setup completes.
+pub struct NoPlay;
+impl ScriptPlay for NoPlay {
+    fn snapshot(&self) -> Vec<PlayInfo> {
+        Vec::new()
+    }
+}
+
+/// One DCC chat/send/get item exposed to `$chat`/`$send`/`$get`.
+#[derive(Clone, Default)]
+pub struct DccInfo {
+    pub kind: String,
+    pub nick: String,
+    pub filename: String,
+    pub path: String,
+    pub ip: String,
+    pub status: String,
+    pub transferred: u64,
+    pub size: u64,
+    pub resume: u64,
+    pub last_ack: u64,
+    pub secs: u64,
+}
+
+pub trait ScriptDcc: Send + Sync {
+    fn snapshot(&self, server_id: &str) -> Vec<DccInfo>;
+}
+
+pub struct NoDcc;
+impl ScriptDcc for NoDcc {
+    fn snapshot(&self, _: &str) -> Vec<DccInfo> {
+        Vec::new()
+    }
+}
+
+/// One native script browser exposed to `$webview(...)`.
+#[derive(Clone, Default)]
+pub struct WebviewInfo {
+    pub name: String,
+    pub profile: String,
+    pub status: String,
+    pub url: String,
+}
+
+/// Read-only view of native script browser windows.
+pub trait ScriptWebviews: Send + Sync {
+    fn snapshot(&self, server_id: &str) -> Vec<WebviewInfo>;
+}
+
+/// No-op browser backend used by tests and before application setup completes.
+pub struct NoWebviews;
+impl ScriptWebviews for NoWebviews {
+    fn snapshot(&self, _: &str) -> Vec<WebviewInfo> {
         Vec::new()
     }
 }
@@ -275,9 +748,21 @@ pub struct Runtime<'a> {
     /// (empty when unknown — mIRC's `$active` may be `$null` too).
     pub active: String,
     pub vars: &'a mut HashMap<String, String>,
+    /// Routine-local `/var` frames. The last frame is the current alias/event
+    /// routine; nested aliases push their own frame so locals shadow, rather
+    /// than overwrite, the caller's locals and engine-global `/set` values.
+    pub(crate) local_scopes: Vec<HashMap<String, String>>,
     pub hashes: &'a mut HashMap<String, HashMap<String, String>>,
+    /// `-uN` metadata, kept separate so the existing variable/hash storage and
+    /// all ordinary lookups remain lightweight and backwards-compatible.
+    pub(crate) var_expiry: &'a mut HashMap<String, TimedExpiry>,
+    pub(crate) hash_expiry: &'a mut HashMap<(String, String), TimedExpiry>,
     pub event: EventVars,
     pub actions: Vec<Action>,
+    /// Commands created by a `$read(...,p)`/`$readini(...,p)` pipe. They run
+    /// after the command containing the identifier, preserving left-to-right
+    /// mIRC command-separator order.
+    pub(crate) pending_pipe_commands: Vec<String>,
     pub halted: bool,
     pub steps: u32,
     pub depth: u32,
@@ -298,6 +783,12 @@ pub struct Runtime<'a> {
     pub sockets: std::sync::Arc<dyn ScriptSockets>,
     /// Read-only view of active timers, for `$timer(...)`.
     pub timers: std::sync::Arc<dyn ScriptTimers>,
+    /// Read-only view of the application-wide `/play` queue.
+    pub play: std::sync::Arc<dyn ScriptPlay>,
+    /// Read-only DCC manager view for `$chat`/`$send`/`$get`.
+    pub dcc: std::sync::Arc<dyn ScriptDcc>,
+    /// Read-only view of native script browser windows for `$webview(...)`.
+    pub webviews: std::sync::Arc<dyn ScriptWebviews>,
     /// Backend for `$input` prompts.
     pub input: std::sync::Arc<dyn ScriptInput>,
     /// Open file handles for `/fopen`/`/fwrite`/`$fread`/`$fopen(...)`.
@@ -318,12 +809,20 @@ pub struct Runtime<'a> {
 
 impl<'a> Runtime<'a> {
     pub fn run(&mut self, body: &[Stmt]) {
+        self.purge_expired();
+        // Top-level aliases/events enter through `run()` directly. Nested alias
+        // calls install their own frame in `call_alias()` before coming here.
+        let owns_local_scope = self.depth == 0 && self.local_scopes.is_empty();
+        if owns_local_scope {
+            self.local_scopes.push(HashMap::new());
+        }
         self.depth += 1;
         if self.depth > 64 {
             self.halted = true;
         }
         let mut i = 0;
         while i < body.len() {
+            self.refresh_nicklist_state();
             if self.halted || self.steps > STEP_LIMIT {
                 break;
             }
@@ -341,8 +840,12 @@ impl<'a> Runtime<'a> {
                 }
             }
             self.steps += 1;
+            let stmt_line = body[i].source_line();
+            if stmt_line != 0 {
+                self.event.script_line = stmt_line;
+            }
             match &body[i] {
-                Stmt::Command { name, args } if name.eq_ignore_ascii_case("goto") => {
+                Stmt::Command { name, args, .. } if name.eq_ignore_ascii_case("goto") => {
                     self.goto = Some(self.expand(args));
                     // The loop top resolves it (jump here or bubble up).
                 }
@@ -364,14 +867,175 @@ impl<'a> Runtime<'a> {
             }
         }
         self.depth -= 1;
+        if owns_local_scope {
+            self.local_scopes.pop();
+        }
+        if self.depth == 0 {
+            self.finish_timed_values();
+        }
+    }
+
+    /// Returns the visible value for a user variable: the innermost routine
+    /// local wins, followed by an engine-global `/set` value.
+    pub(crate) fn var_value(&self, name: &str) -> Option<&String> {
+        self.local_scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name))
+            .or_else(|| self.vars.get(name))
+    }
+
+    fn set_local_var(&mut self, name: String, value: String) {
+        // `/var` normally runs inside a top-level or nested routine. Keeping a
+        // fallback frame makes direct evaluator use behave locally as well.
+        if self.local_scopes.is_empty() {
+            self.local_scopes.push(HashMap::new());
+        }
+        self.local_scopes.last_mut().unwrap().insert(name, value);
+    }
+
+    /// Assigns the nearest visible local, or the global variable when no local
+    /// declaration exists. Used by mutating commands such as `/inc` and
+    /// `/sockread`; `/set` deliberately continues to write the global map.
+    pub(super) fn set_visible_var(&mut self, name: String, value: String) -> bool {
+        if let Some(scope) = self
+            .local_scopes
+            .iter_mut()
+            .rev()
+            .find(|s| s.contains_key(&name))
+        {
+            scope.insert(name, value);
+            true
+        } else {
+            self.vars.insert(name, value);
+            false
+        }
+    }
+
+    pub(crate) fn visible_vars(&self) -> Vec<(String, String, bool)> {
+        let mut visible: HashMap<String, (String, bool)> = self
+            .vars
+            .iter()
+            .filter(|(name, _)| !name.contains('\u{0}'))
+            .map(|(name, value)| (name.clone(), (value.clone(), false)))
+            .collect();
+        for scope in &self.local_scopes {
+            for (name, value) in scope {
+                visible.insert(name.clone(), (value.clone(), true));
+            }
+        }
+        visible
+            .into_iter()
+            .map(|(name, (value, local))| (name, value, local))
+            .collect()
+    }
+
+    /// Lazily removes elapsed `-uN` values. Runs are synchronous, so checking
+    /// at execution/expansion boundaries gives scripts mIRC-visible expiry
+    /// without one background task per value.
+    pub(crate) fn purge_expired(&mut self) {
+        let now = std::time::Instant::now();
+        let expired_vars: Vec<String> = self
+            .var_expiry
+            .iter()
+            .filter(|(_, expiry)| expiry.expired(now))
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in expired_vars {
+            self.var_expiry.remove(&name);
+            self.vars.remove(&name);
+        }
+
+        let expired_items: Vec<(String, String)> = self
+            .hash_expiry
+            .iter()
+            .filter(|(_, expiry)| expiry.expired(now))
+            .map(|(key, _)| key.clone())
+            .collect();
+        for (table, item) in expired_items {
+            self.hash_expiry.remove(&(table.clone(), item.clone()));
+            if let Some(hash) = self.hashes.get_mut(&table) {
+                hash.remove(&item);
+            }
+        }
+    }
+
+    /// Switches a departure event from mIRC's intentionally delayed roster/IAL
+    /// view to the post-event snapshot after any handler calls `/updatenl`.
+    pub(crate) fn refresh_nicklist_state(&mut self) {
+        let updated = self
+            .state
+            .pending_nicklist_update
+            .as_ref()
+            .filter(|pending| pending.is_active())
+            .map(|pending| pending.updated.clone());
+        if let Some(updated) = updated {
+            self.state = updated;
+        }
+    }
+
+    /// Runs one `$hfind(..., command)` callback with the matched item exposed as
+    /// `$1-`. `/halt` stops the search without leaking a halted state into the
+    /// surrounding alias/event.
+    pub(super) fn run_hfind_callback(&mut self, command: &str, item: &str) -> bool {
+        let saved_params = std::mem::replace(&mut self.event.params, vec![item.to_string()]);
+        let saved_halted = self.halted;
+        self.halted = false;
+        let command = self.expand(command);
+        let body = super::parser::parse_body(command.trim());
+        self.run(&body);
+        let stopped = self.halted;
+        self.halted = saved_halted;
+        self.event.params = saved_params;
+        stopped
+    }
+
+    fn cmd_updatenl(&mut self) {
+        if let Some(pending) = &self.state.pending_nicklist_update {
+            pending.activate();
+            let updated = pending.updated.clone();
+            self.state = updated;
+        }
+    }
+
+    fn finish_timed_values(&mut self) {
+        let vars: Vec<String> = self
+            .var_expiry
+            .iter()
+            .filter(|(_, expiry)| matches!(expiry, TimedExpiry::EndOfRun))
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in vars {
+            self.var_expiry.remove(&name);
+            self.vars.remove(&name);
+        }
+
+        let items: Vec<(String, String)> = self
+            .hash_expiry
+            .iter()
+            .filter(|(_, expiry)| matches!(expiry, TimedExpiry::EndOfRun))
+            .map(|(key, _)| key.clone())
+            .collect();
+        for (table, item) in items {
+            self.hash_expiry.remove(&(table.clone(), item.clone()));
+            if let Some(hash) = self.hashes.get_mut(&table) {
+                hash.remove(&item);
+            }
+        }
+        // Binary variables are scoped to one outer script execution in mIRC.
+        self.bins.clear();
     }
 
     fn exec(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Command { name, args } => self.dispatch(name, args),
+            Stmt::Command { name, args, .. } => {
+                self.dispatch(name, args);
+                self.run_pending_pipe_commands();
+            }
             Stmt::If {
                 branches,
                 else_body,
+                ..
             } => {
                 for (cond, body) in branches {
                     if self.eval_cond(cond) {
@@ -385,7 +1049,7 @@ impl<'a> Runtime<'a> {
                     self.run(&body);
                 }
             }
-            Stmt::While { cond, body } => {
+            Stmt::While { cond, body, .. } => {
                 while !self.halted
                     && self.goto.is_none()
                     && self.eval_cond(cond)
@@ -405,13 +1069,57 @@ impl<'a> Runtime<'a> {
                     }
                 }
             }
-            Stmt::Label(_) => {} // a jump target; no-op when reached normally
+            Stmt::Label { .. } => {} // a jump target; no-op when reached normally
+        }
+    }
+
+    fn run_pending_pipe_commands(&mut self) {
+        while !self.halted && !self.pending_pipe_commands.is_empty() {
+            let pending = std::mem::take(&mut self.pending_pipe_commands);
+            for command in pending {
+                if self.halted {
+                    break;
+                }
+                let body = super::parser::parse_body(command.trim());
+                self.run(&body);
+            }
         }
     }
 
     // ---- command dispatch ----
 
     fn dispatch(&mut self, name: &str, raw_args: &str) {
+        // mIRC permits assignment as a statement (`%name = value`) without a
+        // `/set` command. The parser deliberately leaves this as a command
+        // whose name starts with `%`; only claim it when an equals sign is
+        // actually present so malformed/unknown commands retain their normal
+        // fallback behaviour. Like an unswitched `/set`, an existing local is
+        // updated before falling back to a global variable.
+        if name.starts_with('%') {
+            // Include the command-name token so evaluation brackets can build
+            // a dynamic target (`%base [ $+ suffix ] = value`) without
+            // dereferencing the completed variable name before assignment.
+            let assignment = self
+                .expand_evaluation_brackets(split_top_level(&format!("{name} {raw_args}")))
+                .join(" ");
+            let (target, tail) = assignment
+                .split_once(char::is_whitespace)
+                .unwrap_or((assignment.as_str(), ""));
+            let key = target.strip_prefix('%').unwrap_or("");
+            if let Some(value) = tail
+                .trim_start()
+                .strip_prefix('=')
+                .filter(|_| !key.is_empty())
+            {
+                let mut value = self.expand(value.trim_start());
+                value = try_var_math(&value).unwrap_or(value);
+                let is_local = self.set_visible_var(key.to_string(), value);
+                if !is_local {
+                    update_timed_expiry(self.var_expiry, key.to_string(), "");
+                }
+                return;
+            }
+        }
         let lname = name.to_ascii_lowercase();
         // mIRC's silent prefix: `.command` runs the command but suppresses its
         // output. We don't echo command output anyway, so just drop a leading
@@ -420,6 +1128,30 @@ impl<'a> Runtime<'a> {
         // `$false` inside a called alias.
         let silent = lname.starts_with('.');
         let lname = lname.strip_prefix('.').unwrap_or(lname.as_str());
+        // User aliases override built-in commands in mIRC. A leading `!`
+        // explicitly bypasses the alias and invokes the built-in/server command.
+        // Resolve this before the built-in match so aliases named join/msg/mode
+        // behave like aliases with otherwise-unknown names.
+        let bypass_alias = lname.starts_with('!');
+        let lname = lname.strip_prefix('!').unwrap_or(lname);
+        if !bypass_alias {
+            if let Some((body, source, source_line)) = self
+                .script
+                .find_active_alias_from(lname, self.vars, &self.event.script_source)
+                .map(|alias| (alias.body.clone(), alias.source.clone(), alias.source_line))
+            {
+                let params = split_params(&self.expand(raw_args));
+                let saved = self.caller;
+                let saved_show = self.show;
+                self.caller = "command";
+                self.show = !silent;
+                let ret = self.call_alias_in_source(&body, params, &source, source_line);
+                self.vars.insert(RESULT_KEY.to_string(), ret);
+                self.caller = saved;
+                self.show = saved_show;
+                return;
+            }
+        }
         match lname {
             "echo" => self.cmd_echo(raw_args),
             "say" => {
@@ -438,22 +1170,25 @@ impl<'a> Runtime<'a> {
             "notice" => {
                 let (target, text) = self.split_target(raw_args);
                 if !target.is_empty() {
-                    self.actions.push(Action::Send(format!("NOTICE {target} :{text}")));
+                    self.actions
+                        .push(Action::Send(format!("NOTICE {target} :{text}")));
                 }
             }
             "me" => {
                 let text = self.expand(raw_args);
                 let target = self.reply_target();
                 if !target.is_empty() {
-                    self.actions
-                        .push(Action::Send(format!("PRIVMSG {target} :\u{1}ACTION {text}\u{1}")));
+                    self.actions.push(Action::Send(format!(
+                        "PRIVMSG {target} :\u{1}ACTION {text}\u{1}"
+                    )));
                 }
             }
             "describe" => {
                 let (target, text) = self.split_target(raw_args);
                 if !target.is_empty() {
-                    self.actions
-                        .push(Action::Send(format!("PRIVMSG {target} :\u{1}ACTION {text}\u{1}")));
+                    self.actions.push(Action::Send(format!(
+                        "PRIVMSG {target} :\u{1}ACTION {text}\u{1}"
+                    )));
                 }
             }
             "join" | "j" => {
@@ -464,7 +1199,11 @@ impl<'a> Runtime<'a> {
             }
             "part" => {
                 let ch = self.expand(raw_args);
-                let ch = if ch.is_empty() { self.event.chan.clone() } else { ch };
+                let ch = if ch.is_empty() {
+                    self.event.chan.clone()
+                } else {
+                    ch
+                };
                 if !ch.is_empty() {
                     self.actions.push(Action::Send(format!("PART {ch}")));
                 }
@@ -481,7 +1220,8 @@ impl<'a> Runtime<'a> {
             }
             "topic" => {
                 let (target, text) = self.split_target(raw_args);
-                self.actions.push(Action::Send(format!("TOPIC {target} :{text}")));
+                self.actions
+                    .push(Action::Send(format!("TOPIC {target} :{text}")));
             }
             "kick" => {
                 // /kick <#channel> <nick> [reason]
@@ -500,13 +1240,18 @@ impl<'a> Runtime<'a> {
                 let s = self.expand(raw_args);
                 let mut it = s.split_whitespace();
                 if let (Some(nick), Some(chan)) = (it.next(), it.next()) {
-                    self.actions.push(Action::Send(format!("INVITE {nick} {chan}")));
+                    self.actions
+                        .push(Action::Send(format!("INVITE {nick} {chan}")));
                 }
             }
             "hop" => {
                 // /hop [#channel] — cycle the channel (part then rejoin).
                 let ch = self.expand(raw_args);
-                let ch = if ch.is_empty() { self.event.chan.clone() } else { ch };
+                let ch = if ch.is_empty() {
+                    self.event.chan.clone()
+                } else {
+                    ch
+                };
                 if !ch.is_empty() {
                     self.actions.push(Action::Send(format!("PART {ch}")));
                     self.actions.push(Action::Send(format!("JOIN {ch}")));
@@ -537,13 +1282,15 @@ impl<'a> Runtime<'a> {
                 // /omsg <#channel> <message> — message to channel ops (@#chan).
                 let (chan, text) = self.split_target(raw_args);
                 if chan.starts_with('#') && !text.is_empty() {
-                    self.actions.push(Action::Send(format!("PRIVMSG @{chan} :{text}")));
+                    self.actions
+                        .push(Action::Send(format!("PRIVMSG @{chan} :{text}")));
                 }
             }
             "onotice" => {
                 let (chan, text) = self.split_target(raw_args);
                 if chan.starts_with('#') && !text.is_empty() {
-                    self.actions.push(Action::Send(format!("NOTICE @{chan} :{text}")));
+                    self.actions
+                        .push(Action::Send(format!("NOTICE @{chan} :{text}")));
                 }
             }
             "ctcp" => {
@@ -589,7 +1336,8 @@ impl<'a> Runtime<'a> {
                         Some(t) => format!("{} {}", ctcp.to_ascii_uppercase(), t),
                         None => ctcp.to_ascii_uppercase(),
                     };
-                    self.actions.push(Action::Send(format!("NOTICE {nick} :\u{1}{body}\u{1}")));
+                    self.actions
+                        .push(Action::Send(format!("NOTICE {nick} :\u{1}{body}\u{1}")));
                 }
             }
             "nickserv" | "ns" => self.send_service("NickServ", raw_args),
@@ -614,7 +1362,11 @@ impl<'a> Runtime<'a> {
             "unsetall" => {
                 // Remove all user %variables; engine-internal reserved keys (group
                 // state, etc.) are NUL-prefixed and kept.
+                for scope in &mut self.local_scopes {
+                    scope.clear();
+                }
                 self.vars.retain(|k, _| k.starts_with('\u{0}'));
+                self.var_expiry.retain(|k, _| k.starts_with('\u{0}'));
             }
             "anick" => self.set_identity("anick", raw_args),
             "mnick" => self.set_identity("mnick", raw_args),
@@ -623,6 +1375,10 @@ impl<'a> Runtime<'a> {
                 // No-op: jIRC writes INI/JSON to disk immediately (no cache).
             }
             "reload" => self.actions.push(Action::ReloadScripts),
+            "dcc" => {
+                let args = self.expand(raw_args);
+                self.actions.push(Action::Dcc { args });
+            }
             // /scon N command  — run `command` on the Nth connection.
             // /scid cid command — run `command` on the connection with that cid.
             // The number is evaluated now; the command runs in the target's context.
@@ -645,7 +1401,10 @@ impl<'a> Runtime<'a> {
                         .map(|(_, s)| s.clone())
                 };
                 if let (Some(server_id), false) = (target, rest.is_empty()) {
-                    self.actions.push(Action::RunOn { server_id, command: rest.to_string() });
+                    self.actions.push(Action::RunOn {
+                        server_id,
+                        command: rest.to_string(),
+                    });
                 }
             }
             "signal" => {
@@ -692,6 +1451,7 @@ impl<'a> Runtime<'a> {
                 }
                 self.actions.push(Action::Autojoin { skip, delay_secs });
             }
+            "parseline" => self.cmd_parseline(raw_args),
             "alias" => {
                 // `/alias <name> <command>` adds/replaces; `/alias <name>` (no
                 // command) removes. Single-line only. The command is stored
@@ -709,6 +1469,7 @@ impl<'a> Runtime<'a> {
             "inc" => self.cmd_incdec(raw_args, 1),
             "dec" => self.cmd_incdec(raw_args, -1),
             "write" => self.cmd_write(raw_args),
+            "filter" => self.cmd_filter(raw_args),
             "writeini" => self.cmd_writeini(raw_args),
             "remini" => self.cmd_remini(raw_args),
             "fopen" => self.cmd_fopen(raw_args),
@@ -723,6 +1484,7 @@ impl<'a> Runtime<'a> {
             "bread" => self.cmd_bread(raw_args),
             "bwrite" => self.cmd_bwrite(raw_args),
             "window" => self.cmd_window(raw_args),
+            "webview" => self.cmd_webview(raw_args),
             "aline" => self.cmd_window_line(raw_args, "add"),
             "rline" => self.cmd_window_line(raw_args, "replace"),
             "iline" => self.cmd_window_line(raw_args, "insert"),
@@ -760,7 +1522,11 @@ impl<'a> Runtime<'a> {
                 let s = self.expand(raw_args);
                 let mut rest = s.trim();
                 while rest.starts_with('-') {
-                    rest = rest.split_once(char::is_whitespace).map(|(_, r)| r).unwrap_or("").trim();
+                    rest = rest
+                        .split_once(char::is_whitespace)
+                        .map(|(_, r)| r)
+                        .unwrap_or("")
+                        .trim();
                 }
                 if let Some((src, dst)) = rest.split_once(char::is_whitespace) {
                     let _ = std::fs::copy(
@@ -771,39 +1537,80 @@ impl<'a> Runtime<'a> {
             }
             "server" => self.cmd_server(raw_args),
             "sockopen" => self.cmd_sockopen(raw_args),
+            "sockudp" => self.cmd_sockudp(raw_args),
             "sockwrite" => self.cmd_sockwrite(raw_args),
             "sockclose" => {
+                self.event.sock_error = 0;
                 let name = self.expand(raw_args.trim());
-                if !name.is_empty() {
+                if name.is_empty() {
+                    self.event.sock_error = WSA_INVALID_ARGUMENT;
+                } else if let Some(error) = self.sockets.close(&name) {
+                    self.event.sock_error = error;
+                } else {
                     self.actions.push(Action::SockClose { name });
                 }
             }
             "socklisten" => self.cmd_socklisten(raw_args),
             "sockaccept" => {
-                let name = self.expand(raw_args.trim());
-                if !name.is_empty() {
+                self.event.sock_error = 0;
+                let expanded = self.expand(raw_args);
+                let mut toks = expanded.split_whitespace().peekable();
+                let mut nodelay = false;
+                while toks.peek().is_some_and(|token| token.starts_with('-')) {
+                    let switches = toks.next().unwrap().trim_start_matches('-');
+                    if switches.chars().any(|flag| flag != 'n') {
+                        self.event.sock_error = WSA_INVALID_ARGUMENT;
+                        return;
+                    }
+                    nodelay |= switches.contains('n');
+                }
+                if let Some(name) = toks.next() {
                     // $sockname (the listener) identifies whose pending connection.
                     let listener = self.event.chan.clone();
-                    self.sockets.accept(&name, &listener);
+                    if let Some(error) = self.sockets.accept(name, &listener, nodelay) {
+                        self.event.sock_error = error;
+                    }
+                } else {
+                    self.event.sock_error = WSA_INVALID_ARGUMENT;
                 }
             }
             "sockmark" => self.cmd_sockmark(raw_args),
             "socklist" => self.cmd_socklist(raw_args),
             "sockrename" => {
+                self.event.sock_error = 0;
                 let expanded = self.expand(raw_args);
                 let mut toks = expanded.split_whitespace();
                 if let (Some(name), Some(newname)) = (toks.next(), toks.next()) {
-                    self.sockets.rename(name, newname);
+                    if let Some(error) = self.sockets.rename(name, newname) {
+                        self.event.sock_error = error;
+                    } else {
+                        self.actions.push(Action::SockRename {
+                            name: name.to_string(),
+                            newname: newname.to_string(),
+                        });
+                    }
+                } else {
+                    self.event.sock_error = WSA_INVALID_ARGUMENT;
                 }
             }
             "sockpause" => {
+                self.event.sock_error = 0;
                 let expanded = self.expand(raw_args);
                 let resume = expanded
                     .split_whitespace()
                     .take_while(|t| t.starts_with('-'))
                     .any(|t| t.contains('r'));
                 if let Some(name) = expanded.split_whitespace().find(|t| !t.starts_with('-')) {
-                    self.sockets.pause(name, resume);
+                    if let Some(error) = self.sockets.pause(name, resume) {
+                        self.event.sock_error = error;
+                    } else {
+                        self.actions.push(Action::SockPause {
+                            name: name.to_string(),
+                            resume,
+                        });
+                    }
+                } else {
+                    self.event.sock_error = WSA_INVALID_ARGUMENT;
                 }
             }
             "sockread" => self.cmd_sockread(raw_args),
@@ -846,78 +1653,252 @@ impl<'a> Runtime<'a> {
             "ban" => self.cmd_ban(raw_args, true),
             "unban" => self.cmd_ban(raw_args, false),
             "query" => self.cmd_query(raw_args),
+            "play" => self.cmd_play(raw_args),
             "timers" => self.cmd_timers(raw_args),
             s if s.starts_with("timer") => {
                 let name = s.strip_prefix("timer").unwrap_or("").to_string();
                 self.cmd_timer(&name, raw_args);
             }
-            "halt" | "haltdef" => {
+            "halt" => {
                 self.halted = true;
+            }
+            // `/haltdef` suppresses mIRC's default event display without
+            // stopping the remainder of this handler.
+            "haltdef" => {
+                self.event.default_halted = true;
             }
             "return" | "returnex" => {
-                // jIRC's return preserves spaces (mIRC's return strips leading/
-                // trailing/repeated spaces — a common footgun); returnex, which in
-                // mIRC preserves them, is therefore a synonym here.
-                self.ret = Some(self.expand(raw_args));
+                let value = self.expand(raw_args);
+                // Ordinary /return passes through mIRC's command-token
+                // whitespace normalization. /returnex is the intentionally
+                // space-preserving variant used by custom identifiers and
+                // $regsubex replacement aliases.
+                self.ret = Some(if lname == "return" {
+                    // mIRC normalizes the ordinary space byte (0x20), not
+                    // arbitrary control characters. Binary-building aliases
+                    // legitimately return values such as $chr(11).
+                    value
+                        .split(' ')
+                        .filter(|part| !part.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                } else {
+                    value
+                });
                 self.halted = true;
             }
-            // Client-side commands we don't (yet) implement but which must NOT be
-            // sent to the server as raw IRC (that produces "421 Unknown command").
-            "ialfill" => {
-                // /ialfill [network] <#channel> — populate the IAL by WHOing the
-                // channel; each WHO reply records that member's address.
-                let s = self.expand(raw_args);
-                if let Some(chan) = s.split_whitespace().rev().find(|t| t.starts_with('#')) {
-                    self.actions.push(Action::Send(format!("WHO {chan}")));
-                }
-            }
+            "ial" => self.cmd_ial(raw_args),
+            "ialclear" => self.cmd_ialclear(raw_args),
+            "ialfill" => self.cmd_ialfill(raw_args),
+            "ialmark" => self.cmd_ialmark(raw_args),
+            "updatenl" => self.cmd_updatenl(),
             // We evaluate any parameters (for identifier side effects) and stop.
             // `/run` is deliberately a no-op — jIRC never launches programs.
-            // `/ial`/`/ialclear`/`/ialmark` are recognised here so they aren't sent
-            // to the server as raw commands; mutating the live IAL needs a
-            // connection-control channel that isn't built yet.
-            "clearall" | "close" | "sline" | "cline" | "fline" | "renwin"
-            | "titlebar" | "editbox" | "linesep"
-            | "background" | "color" | "font" | "flash" | "beep" | "ebeeps" | "speak" | "splay"
-            | "play" | "sound" | "run" | "url" | "dns" | "debug" | "log" | "logview"
-            | "timestamp" | "donotdisturb" | "toolbar" | "menubar" | "switchbar" | "treebar"
-            | "mdi" | "save" | "loadbuf"
-            | "savebuf" | "filter" | "showmirc" | "maximize" | "minimize"
-            | "ial" | "ialclear" | "ialmark"
-            | "creq" | "sreq" | "clipboard" | "resetidle" => {
+            "clearall" | "close" | "sline" | "cline" | "fline" | "renwin" | "titlebar"
+            | "editbox" | "linesep" | "background" | "color" | "font" | "flash" | "beep"
+            | "ebeeps" | "speak" | "splay" | "sound" | "run" | "url" | "dns" | "debug" | "log"
+            | "logview" | "timestamp" | "donotdisturb" | "toolbar" | "menubar" | "switchbar"
+            | "treebar" | "mdi" | "save" | "loadbuf" | "savebuf" | "showmirc" | "maximize"
+            | "minimize" | "creq" | "sreq" | "clipboard" | "resetidle" => {
                 let _ = self.expand(raw_args);
             }
             _ => {
-                // A user-defined alias? (skipped when its `#group` is disabled)
-                if let Some(alias) = self.script.find_active_alias(&lname, self.vars) {
-                    let body = alias.body.clone();
-                    let params = split_params(&self.expand(raw_args));
-                    // Invoked via the command syntax (/alias) — flag for $caller,
-                    // pass $show (`.alias` -> $false), record the return for $result.
-                    let saved = self.caller;
-                    let saved_show = self.show;
-                    self.caller = "command";
-                    self.show = !silent;
-                    let ret = self.call_alias(&body, params);
-                    self.vars.insert(RESULT_KEY.to_string(), ret);
-                    self.caller = saved;
-                    self.show = saved_show;
+                // Unknown client command: pass it to the IRC server. When `!`
+                // bypassed an alias, send the command without the prefix.
+                let args = self.expand(raw_args);
+                let line = if args.is_empty() {
+                    lname.to_ascii_uppercase()
                 } else {
-                    // Fall back to a raw IRC command.
-                    let args = self.expand(raw_args);
-                    let line = if args.is_empty() {
-                        name.to_ascii_uppercase()
-                    } else {
-                        format!("{} {}", name.to_ascii_uppercase(), args)
-                    };
-                    self.actions.push(Action::Send(line));
-                }
+                    format!("{} {}", lname.to_ascii_uppercase(), args)
+                };
+                self.actions.push(Action::Send(line));
             }
         }
     }
 
+    /// `/ial [on|off]` — per-connection and reset to on by each new session.
+    fn cmd_ial(&mut self, raw: &str) {
+        match self.expand(raw).trim().to_ascii_lowercase().as_str() {
+            "on" => self.actions.push(Action::Send("\u{0}IAL ON".into())),
+            "off" => self.actions.push(Action::Send("\u{0}IAL OFF".into())),
+            _ => {}
+        }
+    }
+
+    /// `/ialclear [nick]` — clear all entries or one nickname locally.
+    fn cmd_ialclear(&mut self, raw: &str) {
+        let nick = self.expand(raw);
+        let nick = nick.split_whitespace().next().unwrap_or("");
+        let control = if nick.is_empty() {
+            "\u{0}IAL CLEAR".to_string()
+        } else {
+            format!("\u{0}IAL CLEAR {nick}")
+        };
+        self.actions.push(Action::Send(control));
+    }
+
+    /// `/ialfill [-f] #channel` — avoid an unnecessary WHO when every roster
+    /// nick already has an address, unless forced. WHOX supplies account/away/
+    /// gecos fields when the server advertises its ISUPPORT token.
+    fn cmd_ialfill(&mut self, raw: &str) {
+        if !self.state.ial_enabled {
+            return;
+        }
+        let expanded = self.expand(raw);
+        let force = expanded
+            .split_whitespace()
+            .any(|token| token.starts_with('-') && token[1..].contains('f'));
+        let channel = expanded
+            .split_whitespace()
+            .rev()
+            .find_map(|token| {
+                self.state
+                    .isupport
+                    .channel_target(token)
+                    .map(str::to_string)
+            })
+            .or_else(|| {
+                self.state
+                    .isupport
+                    .channel_target(&self.active)
+                    .map(str::to_string)
+            });
+        let Some(channel) = channel else {
+            return;
+        };
+        let complete = self
+            .state
+            .channels
+            .iter()
+            .find(|view| self.state.isupport.names_equal(&view.name, &channel))
+            .is_some_and(|view| {
+                !view.nicks.is_empty()
+                    && view.nicks.iter().all(|nick| {
+                        self.state
+                            .ial
+                            .iter()
+                            .any(|(known, _)| self.state.isupport.names_equal(known, nick))
+                    })
+            });
+        if complete && !force {
+            return;
+        }
+        let line = if self.state.isupport.whox {
+            format!("WHO {channel} %acdfhlnrstu,995")
+        } else {
+            format!("WHO {channel}")
+        };
+        self.actions.push(Action::Send(line));
+    }
+
+    /// `/ialmark -nrw <nick> [name] [text]`. Marks are applied by the live
+    /// connection so all later scripts/timers see the updated snapshot.
+    fn cmd_ialmark(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        let mut tokens = expanded.split_whitespace();
+        let first = tokens.next().unwrap_or("");
+        let (flags, nick) = if first.starts_with('-') {
+            (&first[1..], tokens.next().unwrap_or(""))
+        } else {
+            ("", first)
+        };
+        if nick.is_empty() {
+            return;
+        }
+        let named = flags.contains('n');
+        let name = if named {
+            tokens.next().unwrap_or("default")
+        } else {
+            "default"
+        };
+        let text = tokens.collect::<Vec<_>>().join(" ");
+        let remove = flags.contains('r');
+        let wildcard = remove && named && flags.contains('w');
+        self.actions.push(Action::Send(format!(
+            "\u{0}IAL MARK\t{}\t{}\t{nick}\t{name}\t{text}",
+            u8::from(remove),
+            u8::from(wildcard)
+        )));
+    }
+
     fn send_privmsg(&mut self, target: &str, text: &str) {
-        self.actions.push(Action::Send(format!("PRIVMSG {target} :{text}")));
+        self.actions
+            .push(Action::Send(format!("PRIVMSG {target} :{text}")));
+    }
+
+    /// `/parseline -iotbqpnuN <text|&binvar>` replacement/queue operation.
+    /// Text is converted to wire bytes here because the conversion depends on
+    /// direction: incoming UTF text represents undecoded bytes, while outgoing
+    /// UTF text is encoded for the server. Binary variables are always exact.
+    fn cmd_parseline(&mut self, raw: &str) {
+        let raw = raw.trim();
+        let (switches, value) = raw.split_once(char::is_whitespace).unwrap_or((raw, ""));
+        if !switches.starts_with('-') || value.trim().is_empty() {
+            return;
+        }
+
+        let mut direction = "";
+        let mut binary = false;
+        let mut has_type = false;
+        let mut queue = false;
+        let mut trigger = false;
+        let mut append_crlf = false;
+        let mut utf8 = true;
+        let chars: Vec<char> = switches.trim_start_matches('-').chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            match chars[i] {
+                'i' => direction = "in",
+                'o' => direction = "out",
+                't' => {
+                    binary = false;
+                    has_type = true;
+                }
+                'b' => {
+                    binary = true;
+                    has_type = true;
+                }
+                'q' => queue = true,
+                'p' => trigger = true,
+                'n' => append_crlf = true,
+                'u' => {
+                    if let Some(next) = chars.get(i + 1) {
+                        if *next == '0' || *next == '1' {
+                            utf8 = *next == '1';
+                            i += 1;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        if direction.is_empty() || !has_type || (trigger && !queue) {
+            return;
+        }
+
+        let bytes = if binary {
+            let name = self.expand(value.trim());
+            let Some(bytes) = self.bins.get(&name).cloned() else {
+                return;
+            };
+            bytes
+        } else {
+            let text = self.expand(value.trim());
+            if (direction == "in" && utf8) || (direction == "out" && !utf8) {
+                byte_string_bytes(&text)
+            } else {
+                text.into_bytes()
+            }
+        };
+        self.actions.push(Action::ParseLine {
+            direction: direction.to_string(),
+            bytes,
+            queue,
+            trigger,
+            append_crlf,
+            utf8,
+        });
     }
 
     /// `/nickserv`, `/chanserv`, `/memoserv` (and `/ns`, `/cs`, `/ms`) — send a
@@ -925,7 +1906,8 @@ impl<'a> Runtime<'a> {
     fn send_service(&mut self, service: &str, raw: &str) {
         let msg = self.expand(raw);
         if !msg.is_empty() {
-            self.actions.push(Action::Send(format!("PRIVMSG {service} :{msg}")));
+            self.actions
+                .push(Action::Send(format!("PRIVMSG {service} :{msg}")));
         }
     }
 
@@ -933,16 +1915,42 @@ impl<'a> Runtime<'a> {
     /// flag, and the return value from the caller. Returns the `/return` value
     /// (empty if none). A bare `/halt` still propagates to stop the caller.
     pub fn call_alias(&mut self, body: &[Stmt], params: Vec<String>) -> String {
+        let source = self.event.script_source.clone();
+        let source_line = self.event.script_line;
+        self.call_alias_in_source(body, params, &source, source_line)
+    }
+
+    /// Calls an alias while switching the current script-file identity for the
+    /// duration of its frame. This is what makes `alias -l` visible only to
+    /// commands executing from the defining file.
+    pub fn call_alias_in_source(
+        &mut self,
+        body: &[Stmt],
+        params: Vec<String>,
+        source: &str,
+        source_line: usize,
+    ) -> String {
         let saved_params = std::mem::replace(&mut self.event.params, params);
+        let saved_source = std::mem::replace(&mut self.event.script_source, source.to_string());
+        let saved_line = std::mem::replace(&mut self.event.script_line, source_line);
         let saved_halted = std::mem::replace(&mut self.halted, false);
         let saved_ret = self.ret.take();
         let saved_goto = self.goto.take(); // goto is routine-local
+                                           // A pipe produced while expanding the alias invocation belongs after
+                                           // the whole alias command, not after the alias body's first statement.
+        let saved_pipe_commands = std::mem::take(&mut self.pending_pipe_commands);
+        self.local_scopes.push(HashMap::new());
         self.run(body);
+        self.local_scopes.pop();
+        self.pending_pipe_commands.clear();
+        self.pending_pipe_commands = saved_pipe_commands;
         self.goto = saved_goto;
         let returned = self.ret.is_some();
         let result = self.ret.take().unwrap_or_default();
         let halted_in_alias = self.halted;
         self.event.params = saved_params;
+        self.event.script_source = saved_source;
+        self.event.script_line = saved_line;
         self.ret = saved_ret;
         // Restore the caller's halt state, but let a non-return /halt bubble up.
         self.halted = saved_halted || (halted_in_alias && !returned);
@@ -1057,13 +2065,25 @@ impl<'a> Runtime<'a> {
     /// `/set [-switches] %var value` and `/var [-switches] %var = value`.
     /// `is_var` selects mIRC's `/var` form: `=` assignment and comma-separated
     /// declarations (`/var %a = 1, %b, %c = $me`). `/set` takes the rest of the
-    /// line as the value verbatim (no `=`, no comma splitting). Timing switches
-    /// like `-u30`/`-z` are accepted but not timed; the value is still set.
+    /// line as the value verbatim (no `=`, no comma splitting). `-uN` removes
+    /// the value after N seconds (`-u0`: when the outer script run finishes),
+    /// and `-k` preserves an existing lifetime.
     fn cmd_set(&mut self, raw: &str, is_var: bool) {
         let (flags, rest) = split_switches(raw);
+        // Pre-evaluate square-bracket groups before separating the target name
+        // from its value. This preserves the completed `%name` as a literal
+        // assignment target instead of dereferencing it, and implements the
+        // documented `/set %base [ $+ suffix ] value` form.
+        let rest = self
+            .expand_evaluation_brackets(split_top_level(rest))
+            .join(" ");
+        let rest = rest.as_str();
+        let flags_lower = flags.to_ascii_lowercase();
         // mIRC applies one math operation by default (`var %a 1 + 2` -> 3);
         // -n and -p suppress it (keep the value literal).
-        let no_math = flags.contains('n') || flags.contains('p');
+        let no_math = flags_lower.contains('n') || flags_lower.contains('p');
+        let force_global = flags_lower.contains('g');
+        let force_local = !force_global && flags_lower.contains('l');
         if is_var {
             for decl in split_top_commas(rest) {
                 let decl = decl.trim();
@@ -1072,8 +2092,9 @@ impl<'a> Runtime<'a> {
                 }
                 // The name runs to the first space or '='; then an optional '='
                 // assignment (mIRC's `=` is optional and stripped, unlike /set).
-                let name_end =
-                    decl.find(|c: char| c.is_whitespace() || c == '=').unwrap_or(decl.len());
+                let name_end = decl
+                    .find(|c: char| c.is_whitespace() || c == '=')
+                    .unwrap_or(decl.len());
                 let key = decl[..name_end].trim_start_matches('%').trim().to_string();
                 if key.is_empty() {
                     continue;
@@ -1084,7 +2105,15 @@ impl<'a> Runtime<'a> {
                 if !no_math {
                     value = try_var_math(&value).unwrap_or(value);
                 }
-                self.vars.insert(key, value);
+                if force_global {
+                    update_timed_expiry(self.var_expiry, key.clone(), flags);
+                    self.vars.insert(key, value);
+                } else {
+                    // `/var` is routine-local by default (and with `-l`). Its
+                    // frame disappears when this alias returns independently
+                    // of the persistent global store.
+                    self.set_local_var(key, value);
+                }
             }
         } else if let Some((name, value)) = rest.split_once(char::is_whitespace) {
             let key = name.trim_start_matches('%').to_string();
@@ -1092,9 +2121,34 @@ impl<'a> Runtime<'a> {
             if !no_math {
                 value = try_var_math(&value).unwrap_or(value);
             }
-            self.vars.insert(key, value);
+            let is_local = if force_global {
+                self.vars.insert(key.clone(), value);
+                false
+            } else if force_local {
+                self.set_local_var(key.clone(), value);
+                true
+            } else {
+                // An existing routine-local variable takes precedence over a
+                // same-named global unless `-g` explicitly overrides it.
+                self.set_visible_var(key.clone(), value)
+            };
+            if !is_local {
+                update_timed_expiry(self.var_expiry, key, flags);
+            }
         } else if !rest.is_empty() {
-            self.vars.insert(rest.trim_start_matches('%').to_string(), String::new());
+            let key = rest.trim_start_matches('%').to_string();
+            let is_local = if force_global {
+                self.vars.insert(key.clone(), String::new());
+                false
+            } else if force_local {
+                self.set_local_var(key.clone(), String::new());
+                true
+            } else {
+                self.set_visible_var(key.clone(), String::new())
+            };
+            if !is_local {
+                update_timed_expiry(self.var_expiry, key, flags);
+            }
         }
     }
 
@@ -1132,10 +2186,19 @@ impl<'a> Runtime<'a> {
         if levels.is_empty() || nick.is_empty() {
             return;
         }
-        let who = nick.to_lowercase();
-        let address = match self.state.ial.iter().find(|(n, _)| *n == who) {
+        let who = self.state.isupport.casefold(&nick);
+        let address = match self
+            .state
+            .ial
+            .iter()
+            .find(|(n, _)| self.state.isupport.names_equal(n, &who))
+        {
             Some((_, full)) => {
-                let t: u32 = if typ.is_empty() { 6 } else { typ.parse().unwrap_or(6) };
+                let t: u32 = if typ.is_empty() {
+                    6
+                } else {
+                    typ.parse().unwrap_or(6)
+                };
                 crate::script::ident::mask_address(full, t)
             }
             None => nick.clone(),
@@ -1221,19 +2284,46 @@ impl<'a> Runtime<'a> {
                 continue;
             }
             if pat.contains('*') || pat.contains('?') {
-                let keys: Vec<String> =
-                    self.vars.keys().filter(|k| wildcard_match(pat, k)).cloned().collect();
+                // Without an explicit -g/-l switch, mIRC resolves variables in
+                // the same local-first order as reads. Remove matches from the
+                // nearest local frame that has any; hidden globals stay intact.
+                if let Some(scope) = self
+                    .local_scopes
+                    .iter_mut()
+                    .rev()
+                    .find(|scope| scope.keys().any(|k| wildcard_match(pat, k)))
+                {
+                    scope.retain(|k, _| !wildcard_match(pat, k));
+                    continue;
+                }
+                let keys: Vec<String> = self
+                    .vars
+                    .keys()
+                    .filter(|k| wildcard_match(pat, k))
+                    .cloned()
+                    .collect();
                 for k in keys {
                     self.vars.remove(&k);
+                    self.var_expiry.remove(&k);
                 }
             } else {
+                if let Some(scope) = self
+                    .local_scopes
+                    .iter_mut()
+                    .rev()
+                    .find(|scope| scope.contains_key(pat))
+                {
+                    scope.remove(pat);
+                    continue;
+                }
                 self.vars.remove(pat);
+                self.var_expiry.remove(pat);
             }
         }
     }
 
     fn cmd_incdec(&mut self, raw: &str, sign: i64) {
-        let (_flags, rest) = split_switches(raw);
+        let (flags, rest) = split_switches(raw);
         let mut it = rest.split_whitespace();
         let Some(name) = it.next() else { return };
         let key = name.trim_start_matches('%').to_string();
@@ -1242,38 +2332,348 @@ impl<'a> Runtime<'a> {
             .map(|s| self.expand(s))
             .and_then(|s| s.trim().parse().ok())
             .unwrap_or(1);
-        let cur: i64 = self.vars.get(&key).and_then(|v| v.parse().ok()).unwrap_or(0);
-        self.vars.insert(key, (cur + sign * by).to_string());
+        let cur: i64 = self
+            .var_value(&key)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let is_local = self.set_visible_var(key.clone(), (cur + sign * by).to_string());
+        if !is_local {
+            update_timed_expiry(self.var_expiry, key, flags);
+        }
     }
 
-    /// `/write [-c] <file> [text]` — appends `text` as a new line in `file`
-    /// (sandboxed to the data dir). `-c` clears/creates the file first.
+    /// `/write [-cidnalNsNwNrNmN] <file> [text]` — mIRC-compatible line
+    /// insert/replace/delete/search operations, sandboxed to the script data
+    /// directory. Text files are written with CRLF separators like mIRC.
     fn cmd_write(&mut self, raw: &str) {
-        let mut rest = raw.trim();
-        let mut clear = false;
-        while rest.starts_with('-') {
-            let (sw, more) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
-            if sw.contains('c') {
-                clear = true;
-            }
-            rest = more.trim();
+        let expanded = self.expand(raw);
+        let mut rest = expanded.trim_start();
+        let mut switches = String::new();
+        if let Some(body) = rest.strip_prefix('-') {
+            let end = body.find(char::is_whitespace).unwrap_or(body.len());
+            switches = body[..end].to_string();
+            rest = body[end..].trim_start();
         }
-        let (file, text) = match rest.split_once(char::is_whitespace) {
-            Some((f, t)) => (self.expand(f), self.expand(t.trim())),
-            None => (self.expand(rest), String::new()),
+        let control_switches = write_control_switches(&switches);
+        let Some((file, text)) = take_file_arg(rest) else {
+            return;
         };
         if file.is_empty() {
             return;
         }
         let path = sandbox_path(&self.data_dir, &file);
-        if clear {
-            let _ = std::fs::write(&path, "");
-        }
-        if !text.is_empty() {
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-                let _ = writeln!(f, "{text}");
+        let mut content = if control_switches.contains('c') {
+            String::new()
+        } else {
+            std::fs::read_to_string(&path).unwrap_or_default()
+        };
+        let had_final_newline = content.ends_with('\n') || content.ends_with('\r');
+        let mut lines: Vec<String> = content
+            .lines()
+            .map(|line| line.trim_end_matches('\r').to_string())
+            .collect();
+
+        let mut line_number =
+            write_numeric_switch(control_switches, 'l').map(|n| n.max(1) as usize);
+        let search = write_search_switch(&switches);
+        if line_number.is_none() {
+            if let Some((mode, pattern)) = search.as_ref() {
+                line_number = lines
+                    .iter()
+                    .position(|line| match mode {
+                        's' => line
+                            .get(..pattern.len())
+                            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(pattern)),
+                        'w' => wildcard_match(pattern, line),
+                        'W' => wildcard_match(line, pattern),
+                        'r' => ident::mirc_regex_is_match(line, pattern),
+                        'R' => ident::mirc_regex_is_match(pattern, line),
+                        _ => false,
+                    })
+                    .map(|index| index + 1);
             }
+        }
+
+        let writes_line = !control_switches.contains('d');
+        if control_switches.contains('d') {
+            let index = line_number.unwrap_or(lines.len());
+            if index > 0 && index <= lines.len() {
+                lines.remove(index - 1);
+            }
+        } else if control_switches.contains('i') {
+            let index = line_number.unwrap_or(lines.len() + 1).max(1);
+            lines.insert((index - 1).min(lines.len()), text.to_string());
+        } else if control_switches.contains('a') && line_number.is_some() {
+            let index = line_number.unwrap();
+            if let Some(line) = index.checked_sub(1).and_then(|i| lines.get_mut(i)) {
+                line.push_str(text);
+            }
+        } else if let Some(index) = line_number {
+            if index <= lines.len() {
+                lines[index - 1] = text.to_string();
+            } else {
+                lines.resize(index - 1, String::new());
+                lines.push(text.to_string());
+            }
+        } else {
+            lines.push(text.to_string());
+        }
+
+        content = lines.join("\r\n");
+        let no_final_newline = control_switches.contains('n')
+            || write_numeric_switch(control_switches, 'm') == Some(2);
+        let force_separator = write_numeric_switch(control_switches, 'm') == Some(1);
+        let add_final_newline = if writes_line {
+            content.is_empty()
+                || force_separator
+                || had_final_newline
+                || !control_switches.contains('a')
+        } else {
+            had_final_newline && !content.is_empty()
+        };
+        if !no_final_newline && add_final_newline {
+            content.push_str("\r\n");
+        }
+        let _ = std::fs::write(&path, content);
+    }
+
+    /// `/filter` over sandboxed files and custom `@windows`. This implements
+    /// the compatibility-critical file/window, wildcard/regex/exclude/range,
+    /// line-number, clear, sort, and alias-output forms. Dialog/listbox-only
+    /// switches are accepted but have no source in the reduced jIRC UI model.
+    fn cmd_filter(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        let mut rest = expanded.trim_start();
+        let mut switches = String::new();
+        if let Some(body) = rest.strip_prefix('-') {
+            let end = body.find(char::is_whitespace).unwrap_or(body.len());
+            switches = body[..end].to_string();
+            rest = body[end..].trim_start();
+        }
+
+        let mut range = None;
+        if switches.contains('r') {
+            if let Some((token, more)) = take_file_arg(rest) {
+                if let Some((from, to)) = token.split_once('-') {
+                    if let (Ok(from), Ok(to)) = (from.parse::<usize>(), to.parse::<usize>()) {
+                        range = Some((from.max(1), to.max(from.max(1))));
+                        rest = more;
+                    }
+                }
+            }
+        }
+
+        // `-t` column sorting consumes `column separator` before the endpoints.
+        let mut column_sort = None;
+        if switches.contains('t') {
+            if let Some((column, more)) = take_file_arg(rest) {
+                if let Some((separator, tail)) = take_file_arg(more) {
+                    column_sort = Some((
+                        column.parse::<usize>().unwrap_or(1).max(1),
+                        separator
+                            .parse::<u32>()
+                            .ok()
+                            .and_then(char::from_u32)
+                            .unwrap_or(' '),
+                    ));
+                    rest = tail;
+                }
+            }
+        }
+
+        let Some((input, more)) = take_file_arg(rest) else {
+            return;
+        };
+        let Some((output, more)) = take_file_arg(more) else {
+            return;
+        };
+        let (sort_alias, match_text) = if switches.contains('a') {
+            let Some((alias, tail)) = take_file_arg(more) else {
+                return;
+            };
+            (Some(alias), tail.to_string())
+        } else {
+            (None, more.to_string())
+        };
+        let match_text = match_text.trim();
+
+        let type_marks: Vec<char> = switches
+            .chars()
+            .filter(|c| matches!(c, 'f' | 'w'))
+            .collect();
+        let input_is_window = type_marks
+            .first()
+            .map_or_else(|| input.starts_with('@'), |kind| *kind == 'w');
+        let output_is_window = type_marks
+            .get(1)
+            .map_or_else(|| output.starts_with('@'), |kind| *kind == 'w');
+        let input_lines: Vec<String> = if input_is_window {
+            self.windows
+                .get(&input)
+                .map(|window| window.lines.clone())
+                .unwrap_or_default()
+        } else {
+            std::fs::read_to_string(sandbox_path(&self.data_dir, &input))
+                .unwrap_or_default()
+                .lines()
+                .map(|line| line.trim_end_matches('\r').to_string())
+                .collect()
+        };
+
+        let (from, to) = range.unwrap_or((1, input_lines.len()));
+        let regex = switches.contains('g');
+        let exclude = switches.contains('x');
+        let strip = switches.contains('b');
+        let number = switches.contains('n');
+        let mut selected = Vec::new();
+        for (index, original) in input_lines.iter().enumerate() {
+            let n = index + 1;
+            if n < from || n > to {
+                continue;
+            }
+            let candidate = if strip {
+                ident::strip_codes_opts(original, "")
+            } else {
+                original.clone()
+            };
+            let matched = if regex {
+                ident::mirc_regex_is_match(&candidate, match_text)
+            } else {
+                wildcard_match(match_text, &candidate)
+            };
+            if matched != exclude {
+                selected.push(if number {
+                    format!("{n} {original}")
+                } else {
+                    original.clone()
+                });
+            }
+        }
+
+        if column_sort.is_some() || switches.contains('u') || switches.contains('e') {
+            let descending = switches.contains('e');
+            let numeric = switches.contains('u');
+            let (column, separator) = column_sort.unwrap_or((1, ' '));
+            selected.sort_by(|left, right| {
+                let key = |line: &str| -> String {
+                    line.split(separator)
+                        .filter(|value| !value.is_empty())
+                        .nth(column - 1)
+                        .unwrap_or("")
+                        .to_string()
+                };
+                let order = if numeric {
+                    key(left)
+                        .trim()
+                        .parse::<f64>()
+                        .unwrap_or(0.0)
+                        .partial_cmp(&key(right).trim().parse::<f64>().unwrap_or(0.0))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                } else {
+                    key(left)
+                        .to_ascii_lowercase()
+                        .cmp(&key(right).to_ascii_lowercase())
+                };
+                if descending {
+                    order.reverse()
+                } else {
+                    order
+                }
+            });
+        }
+
+        // Alias comparison sorting is inherently script-driven. Use stable
+        // insertion sort so the alias sees deterministic `$1`/`$2` pairs.
+        if let Some(alias) = sort_alias {
+            let definition = self
+                .script
+                .find_active_alias_from(&alias, self.vars, &self.event.script_source)
+                .cloned();
+            let Some(definition) = definition else {
+                self.vars.insert(FILTERED_KEY.to_string(), "0".to_string());
+                return;
+            };
+            let mut sorted: Vec<String> = Vec::with_capacity(selected.len());
+            for line in selected {
+                let mut at = sorted.len();
+                while at > 0 {
+                    let cmp = self
+                        .call_alias_in_source(
+                            &definition.body,
+                            vec![line.clone(), sorted[at - 1].clone()],
+                            &definition.source,
+                            definition.source_line,
+                        )
+                        .parse::<i64>()
+                        .unwrap_or(0);
+                    if cmp >= 0 {
+                        break;
+                    }
+                    at -= 1;
+                }
+                sorted.insert(at, line);
+            }
+            selected = sorted;
+        }
+
+        self.vars
+            .insert(FILTERED_KEY.to_string(), selected.len().to_string());
+        if switches.contains('k') {
+            for line in selected {
+                self.dispatch(&output, &line);
+                if self.halted {
+                    break;
+                }
+            }
+            return;
+        }
+        if output_is_window {
+            if !self.windows.exists(&output) {
+                self.windows
+                    .open(&output, super::window::WindowKind::Listbox, &output);
+                self.actions.push(Action::WindowOpen {
+                    name: output.clone(),
+                    kind: "listbox".to_string(),
+                    title: output.clone(),
+                });
+            }
+            if switches.contains('c') {
+                self.windows.clear(&output);
+                self.actions.push(Action::WindowLine {
+                    name: output.clone(),
+                    op: "clear".to_string(),
+                    n: 0,
+                    text: String::new(),
+                });
+            }
+            for line in selected {
+                self.windows.aline(&output, &line);
+                self.actions.push(Action::WindowLine {
+                    name: output.clone(),
+                    op: "add".to_string(),
+                    n: 0,
+                    text: line,
+                });
+            }
+        } else {
+            let path = sandbox_path(&self.data_dir, &output);
+            let mut prior = if switches.contains('c') {
+                String::new()
+            } else {
+                std::fs::read_to_string(&path).unwrap_or_default()
+            };
+            if !prior.is_empty()
+                && !prior.ends_with('\r')
+                && !prior.ends_with('\n')
+                && !selected.is_empty()
+            {
+                prior.push_str("\r\n");
+            }
+            prior.push_str(&selected.join("\r\n"));
+            if !selected.is_empty() {
+                prior.push_str("\r\n");
+            }
+            let _ = std::fs::write(path, prior);
         }
     }
 
@@ -1282,7 +2682,11 @@ impl<'a> Runtime<'a> {
         let expanded = self.expand(raw);
         let mut rest = expanded.trim();
         while rest.starts_with('-') {
-            rest = rest.split_once(char::is_whitespace).map(|(_, r)| r).unwrap_or("").trim();
+            rest = rest
+                .split_once(char::is_whitespace)
+                .map(|(_, r)| r)
+                .unwrap_or("")
+                .trim();
         }
         let mut parts = rest.splitn(4, char::is_whitespace);
         if let (Some(file), Some(section), Some(item), Some(value)) =
@@ -1312,7 +2716,9 @@ impl<'a> Runtime<'a> {
         let mut rest = expanded.trim();
         let (mut create_new, mut overwrite) = (false, false);
         while let Some(stripped) = rest.strip_prefix('-') {
-            let (sw, more) = stripped.split_once(char::is_whitespace).unwrap_or((stripped, ""));
+            let (sw, more) = stripped
+                .split_once(char::is_whitespace)
+                .unwrap_or((stripped, ""));
             if sw.contains('n') {
                 create_new = true;
             }
@@ -1333,19 +2739,28 @@ impl<'a> Runtime<'a> {
     fn cmd_fwrite(&mut self, raw: &str) {
         let expanded = self.expand(raw);
         let mut rest = expanded.trim();
-        let mut newline = false;
+        let (mut binary, mut newline) = (false, false);
         while let Some(stripped) = rest.strip_prefix('-') {
-            let (sw, more) = stripped.split_once(char::is_whitespace).unwrap_or((stripped, ""));
+            let (sw, more) = stripped
+                .split_once(char::is_whitespace)
+                .unwrap_or((stripped, ""));
             if sw.contains('n') {
                 newline = true;
             }
-            // -b (binary variable) is accepted but treated as text.
+            if sw.contains('b') {
+                binary = true;
+            }
             rest = more.trim();
         }
         let mut parts = rest.splitn(2, char::is_whitespace);
         if let Some(name) = parts.next() {
-            let text = parts.next().unwrap_or("");
-            self.files.write(name, text.as_bytes(), newline);
+            let value = parts.next().unwrap_or("").trim();
+            let data = if binary {
+                self.bins.get(value).cloned().unwrap_or_default()
+            } else {
+                value.as_bytes().to_vec()
+            };
+            self.files.write(name, &data, newline);
         }
     }
 
@@ -1365,7 +2780,9 @@ impl<'a> Runtime<'a> {
         let mut rest = expanded.trim();
         let mut sw = "";
         if let Some(stripped) = rest.strip_prefix('-') {
-            let (flags, more) = stripped.split_once(char::is_whitespace).unwrap_or((stripped, ""));
+            let (flags, more) = stripped
+                .split_once(char::is_whitespace)
+                .unwrap_or((stripped, ""));
             sw = flags;
             rest = more.trim();
         }
@@ -1397,7 +2814,9 @@ impl<'a> Runtime<'a> {
         let mut rest = expanded.trim();
         let (mut text, mut zero) = (false, false);
         while let Some(stripped) = rest.strip_prefix('-') {
-            let (sw, more) = stripped.split_once(char::is_whitespace).unwrap_or((stripped, ""));
+            let (sw, more) = stripped
+                .split_once(char::is_whitespace)
+                .unwrap_or((stripped, ""));
             if sw.contains('t') {
                 text = true;
             }
@@ -1448,7 +2867,13 @@ impl<'a> Runtime<'a> {
         let slice: Vec<u8> = self
             .bins
             .get(src)
-            .map(|b| b.iter().skip(s.saturating_sub(1)).take(m).copied().collect())
+            .map(|b| {
+                b.iter()
+                    .skip(s.saturating_sub(1))
+                    .take(m)
+                    .copied()
+                    .collect()
+            })
             .unwrap_or_default();
         self.bins.set(dest, n, &slice, false);
     }
@@ -1459,13 +2884,21 @@ impl<'a> Runtime<'a> {
         let expanded = self.expand(raw);
         let mut parts = expanded.split_whitespace();
         let Some(name) = parts.next() else { return };
-        let nums: Vec<u8> = parts.filter_map(|t| t.parse::<u16>().ok()).map(|n| n as u8).collect();
-        let pairs: Vec<(u8, u8)> =
-            nums.chunks(2).filter(|c| c.len() == 2).map(|c| (c[0], c[1])).collect();
+        let nums: Vec<u8> = parts
+            .filter_map(|t| t.parse::<u16>().ok())
+            .map(|n| n as u8)
+            .collect();
+        let pairs: Vec<(u8, u8)> = nums
+            .chunks(2)
+            .filter(|c| c.len() == 2)
+            .map(|c| (c[0], c[1]))
+            .collect();
         if pairs.is_empty() {
             return;
         }
-        let Some(mut bytes) = self.bins.get(name).cloned() else { return };
+        let Some(mut bytes) = self.bins.get(name).cloned() else {
+            return;
+        };
         for b in bytes.iter_mut() {
             for (old, new) in &pairs {
                 if *b == *old {
@@ -1481,55 +2914,85 @@ impl<'a> Runtime<'a> {
     fn cmd_btrunc(&mut self, raw: &str) {
         let expanded = self.expand(raw);
         let mut parts = expanded.splitn(2, char::is_whitespace);
-        let (Some(file), Some(len)) = (parts.next(), parts.next()) else { return };
+        let (Some(file), Some(len)) = (parts.next(), parts.next()) else {
+            return;
+        };
         let path = sandbox_path(&self.data_dir, file.trim());
         let len: u64 = len.trim().parse().unwrap_or(0);
-        if let Ok(f) = std::fs::OpenOptions::new().write(true).create(true).open(&path) {
+        if let Ok(f) = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(&path)
+        {
             let _ = f.set_len(len);
         }
     }
 
-    /// `/bread <file> <S> <N> <&binvar>` — read N bytes from `file` at position S
-    /// (1-based) into &binvar, replacing it.
+    /// `/bread [-ta] <file> <S> <N> <&binvar>` — file offsets are zero-based.
     fn cmd_bread(&mut self, raw: &str) {
         let expanded = self.expand(raw);
-        let p: Vec<&str> = expanded.split_whitespace().collect();
+        let mut rest = expanded.trim();
+        while let Some(stripped) = rest.strip_prefix('-') {
+            let (_, more) = stripped
+                .split_once(char::is_whitespace)
+                .unwrap_or((stripped, ""));
+            rest = more.trim(); // -t/-a are accepted; byte-count behavior stays exact.
+        }
+        let p: Vec<&str> = rest.split_whitespace().collect();
         if p.len() < 4 {
             return;
         }
         let path = sandbox_path(&self.data_dir, p[0]);
-        let s: usize = p[1].trim().parse().unwrap_or(1);
+        let s: usize = p[1].trim().parse().unwrap_or(0);
         let n: usize = p[2].trim().parse().unwrap_or(0);
         let name = p[3];
         if let Ok(data) = std::fs::read(&path) {
-            let slice: Vec<u8> = data.iter().skip(s.saturating_sub(1)).take(n).copied().collect();
+            let slice: Vec<u8> = data.iter().skip(s).take(n).copied().collect();
             self.bins.unset(name);
             self.bins.set(name, 1, &slice, false);
         }
     }
 
-    /// `/bwrite <file> <S> <N> <text|%var|&binvar>` — write N bytes (N<0 = all) of
-    /// the data to `file` at position S (1-based), extending the file if needed.
+    /// `/bwrite [-tac] <file> <S> [N] <text|%var|&binvar>` — zero-based S;
+    /// S=-1 appends, N omitted/-1 writes all, and -c truncates after the data.
     fn cmd_bwrite(&mut self, raw: &str) {
         let expanded = self.expand(raw);
-        let p: Vec<&str> = expanded.splitn(4, char::is_whitespace).collect();
-        if p.len() < 4 {
-            return;
+        let mut rest = expanded.trim();
+        let (mut text, mut chop) = (false, false);
+        while let Some(stripped) = rest.strip_prefix('-') {
+            let (flags, more) = stripped
+                .split_once(char::is_whitespace)
+                .unwrap_or((stripped, ""));
+            text |= flags.contains('t');
+            chop |= flags.contains('c');
+            rest = more.trim(); // -a is accepted; Rust strings are already UTF-8.
         }
-        let path = sandbox_path(&self.data_dir, p[0]);
-        let s: usize = p[1].trim().parse().unwrap_or(1);
-        let n: i64 = p[2].trim().parse().unwrap_or(-1);
-        let data_arg = p[3];
-        // A known &binvar contributes its bytes; otherwise the literal text.
-        let data: Vec<u8> = if data_arg.starts_with('&') && self.bins.get(data_arg).is_some() {
-            self.bins.get(data_arg).cloned().unwrap_or_default()
-        } else {
-            data_arg.as_bytes().to_vec()
+        let mut head = rest.splitn(3, char::is_whitespace);
+        let (Some(file), Some(offset), Some(tail)) = (head.next(), head.next(), head.next()) else {
+            return;
         };
-        let to_write: Vec<u8> =
-            if n < 0 { data } else { data.into_iter().take(n as usize).collect() };
+        let path = sandbox_path(&self.data_dir, file);
+        let s: i64 = offset.trim().parse().unwrap_or(0);
+        let (n, data_arg) = match tail.split_once(char::is_whitespace) {
+            Some((candidate, data)) if candidate.parse::<i64>().is_ok() => {
+                (candidate.parse::<i64>().unwrap(), data.trim())
+            }
+            _ => (-1, tail.trim()),
+        };
+        // A known &binvar contributes its bytes; otherwise the literal text.
+        let data: Vec<u8> =
+            if !text && data_arg.starts_with('&') && self.bins.get(data_arg).is_some() {
+                self.bins.get(data_arg).cloned().unwrap_or_default()
+            } else {
+                data_arg.as_bytes().to_vec()
+            };
+        let to_write: Vec<u8> = if n < 0 {
+            data
+        } else {
+            data.into_iter().take(n as usize).collect()
+        };
         let mut content = std::fs::read(&path).unwrap_or_default();
-        let start = s.saturating_sub(1);
+        let start = if s < 0 { content.len() } else { s as usize };
         if content.len() < start {
             content.resize(start, 0);
         }
@@ -1540,6 +3003,9 @@ impl<'a> Runtime<'a> {
             } else {
                 content.push(*b);
             }
+        }
+        if chop {
+            content.truncate(start + to_write.len());
         }
         let _ = std::fs::write(&path, &content);
     }
@@ -1553,7 +3019,9 @@ impl<'a> Runtime<'a> {
         let mut close = false;
         let mut kind = WindowKind::Listbox;
         while let Some(stripped) = rest.strip_prefix('-') {
-            let (sw, more) = stripped.split_once(char::is_whitespace).unwrap_or((stripped, ""));
+            let (sw, more) = stripped
+                .split_once(char::is_whitespace)
+                .unwrap_or((stripped, ""));
             if sw.contains('c') {
                 close = true;
             }
@@ -1572,7 +3040,9 @@ impl<'a> Runtime<'a> {
         }
         if close {
             self.windows.close(name);
-            self.actions.push(Action::WindowClose { name: name.to_string() });
+            self.actions.push(Action::WindowClose {
+                name: name.to_string(),
+            });
         } else {
             self.windows.open(name, kind, name);
             self.actions.push(Action::WindowOpen {
@@ -1583,13 +3053,88 @@ impl<'a> Runtime<'a> {
         }
     }
 
+    /// Native browser windows (jIRC extension):
+    /// `/webview -o <name> <profile> <width> <height> <url> [title]`
+    /// `/webview -n <name> <url>` (navigate), `-k <name> <url>` (cookies),
+    /// `-f <name>` (focus), and `-c <name>` (close).
+    fn cmd_webview(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        let mut head = expanded.trim().splitn(2, char::is_whitespace);
+        let switch = head.next().unwrap_or("").to_ascii_lowercase();
+        let rest = head.next().unwrap_or("").trim();
+        let clean = |value: &str| value.trim().trim_matches('"').to_string();
+        match switch.as_str() {
+            "-o" => {
+                let mut parts = rest.splitn(6, char::is_whitespace);
+                let (Some(name), Some(profile), Some(width), Some(height), Some(url)) = (
+                    parts.next(),
+                    parts.next(),
+                    parts.next(),
+                    parts.next(),
+                    parts.next(),
+                ) else {
+                    return;
+                };
+                let width = width.parse::<u32>().unwrap_or(980);
+                let height = height.parse::<u32>().unwrap_or(720);
+                let name = clean(name);
+                let profile = clean(profile);
+                let url = clean(url);
+                if name.is_empty() || profile.is_empty() || url.is_empty() {
+                    return;
+                }
+                let title = parts
+                    .next()
+                    .map(clean)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| name.clone());
+                self.actions.push(Action::WebviewOpen {
+                    name,
+                    profile,
+                    width,
+                    height,
+                    url,
+                    title,
+                });
+            }
+            "-n" | "-k" => {
+                let mut parts = rest.splitn(2, char::is_whitespace);
+                let name = clean(parts.next().unwrap_or(""));
+                let url = clean(parts.next().unwrap_or(""));
+                if name.is_empty() || url.is_empty() {
+                    return;
+                }
+                if switch == "-n" {
+                    self.actions.push(Action::WebviewNavigate { name, url });
+                } else {
+                    self.actions.push(Action::WebviewCookies { name, url });
+                }
+            }
+            "-f" | "-c" => {
+                let name = clean(rest.split_whitespace().next().unwrap_or(""));
+                if name.is_empty() {
+                    return;
+                }
+                if switch == "-f" {
+                    self.actions.push(Action::WebviewFocus { name });
+                } else {
+                    self.actions.push(Action::WebviewClose { name });
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// `/aline @w text`, `/rline @w N text`, `/iline @w N text`, `/dline @w N`.
     fn cmd_window_line(&mut self, raw: &str, op: &str) {
         let expanded = self.expand(raw);
         let mut rest = expanded.trim();
         // Skip a leading switch (e.g. `/aline -p @w text` colour switch).
         if rest.starts_with('-') {
-            rest = rest.split_once(char::is_whitespace).map(|(_, r)| r.trim()).unwrap_or("");
+            rest = rest
+                .split_once(char::is_whitespace)
+                .map(|(_, r)| r.trim())
+                .unwrap_or("");
         }
         let mut parts = rest.splitn(2, char::is_whitespace);
         let Some(name) = parts.next() else {
@@ -1646,112 +3191,425 @@ impl<'a> Runtime<'a> {
         }
     }
 
-    /// `/sockopen [-e] <name> <host> <port>` — open a TCP socket; `-e` uses TLS.
+    /// `/sockopen [-deswap64nt] [bindip] <name> <host> <port>`.
     fn cmd_sockopen(&mut self, raw: &str) {
+        self.event.sock_error = 0;
         let expanded = self.expand(raw);
-        let tls = expanded
-            .split_whitespace()
-            .take_while(|t| t.starts_with('-'))
-            .any(|t| t.contains('e'));
-        let mut toks = expanded.split_whitespace().filter(|t| !t.starts_with('-'));
+        let mut toks = expanded.split_whitespace().peekable();
+        let mut flags = String::new();
+        while toks.peek().is_some_and(|token| token.starts_with('-')) {
+            flags.push_str(toks.next().unwrap().trim_start_matches('-'));
+        }
+        if flags.chars().any(|flag| !"deswap64nt".contains(flag))
+            || (flags.contains('4') && flags.contains('6'))
+        {
+            self.event.sock_error = WSA_INVALID_ARGUMENT;
+            return;
+        }
+        let tls = flags.contains('e');
+        let accept_invalid = flags.contains('a') || flags.contains('s');
+        let certificate_flags = flags.chars().any(|flag| "swap".contains(flag));
+        if (flags.contains('t') && flags.chars().any(|flag| flag != 't'))
+            || (certificate_flags && !tls)
+        {
+            self.event.sock_error = WSA_INVALID_ARGUMENT;
+            return;
+        }
+        let nodelay = flags.contains('n');
+        let ip_version = if flags.contains('6') {
+            6
+        } else if flags.contains('4') {
+            4
+        } else {
+            0
+        };
+        let bind_ip = if flags.contains('d') {
+            let Some(bind_ip) = toks.next() else {
+                self.event.sock_error = WSA_INVALID_ARGUMENT;
+                return;
+            };
+            bind_ip.to_string()
+        } else {
+            String::new()
+        };
+        if flags.contains('t') {
+            if let Some(name) = toks.next() {
+                if let Some(error) = self.sockets.starttls(name) {
+                    self.event.sock_error = error;
+                    if error != 0 {
+                        self.actions.push(Action::SockError {
+                            kind: "SOCKOPEN".to_string(),
+                            name: name.to_string(),
+                            error,
+                        });
+                    }
+                }
+            } else {
+                self.event.sock_error = WSA_INVALID_ARGUMENT;
+            }
+            return;
+        }
         if let (Some(name), Some(host), Some(port)) = (toks.next(), toks.next(), toks.next()) {
             if let Ok(port) = port.parse::<u16>() {
+                let reservation_id =
+                    match self.sockets.reserve_open(name, host, port, tls, &bind_ip) {
+                        Some(Ok(id)) => id,
+                        Some(Err(error)) => {
+                            self.event.sock_error = error;
+                            self.actions.push(Action::SockError {
+                                kind: "SOCKOPEN".to_string(),
+                                name: name.to_string(),
+                                error,
+                            });
+                            return;
+                        }
+                        None => 0,
+                    };
                 self.actions.push(Action::SockOpen {
                     name: name.to_string(),
                     host: host.to_string(),
                     port,
                     tls,
+                    accept_invalid,
+                    bind_ip,
+                    nodelay,
+                    ip_version,
+                    reservation_id,
                 });
+            } else {
+                self.event.sock_error = WSA_INVALID_ARGUMENT;
             }
+        } else {
+            self.event.sock_error = WSA_INVALID_ARGUMENT;
         }
     }
 
-    /// `/sockwrite [-n] <name> <text>` — send to a socket; `-n` appends CRLF.
-    fn cmd_sockwrite(&mut self, raw: &str) {
-        let mut rest = raw.trim();
-        let mut newline = false;
+    /// `/sockudp [-bntkdu] [bindip] <name> [local-port] <ip> <port>
+    /// [numbytes] [data]`.
+    fn cmd_sockudp(&mut self, raw: &str) {
+        self.event.sock_error = 0;
+        let expanded = self.expand(raw);
+        let mut rest = expanded.trim();
+        let mut flags = String::new();
         while rest.starts_with('-') {
             let (sw, more) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
-            if sw.contains('n') {
-                newline = true;
-            }
+            flags.push_str(sw.trim_start_matches('-'));
             rest = more.trim();
         }
-        let (name_tok, data_tok) = match rest.split_once(char::is_whitespace) {
+        if flags.chars().any(|flag| !"bntkdu".contains(flag)) {
+            self.event.sock_error = WSA_INVALID_ARGUMENT;
+            return;
+        }
+        let mut toks: Vec<&str> = rest.split_whitespace().collect();
+        let bind_ip = if flags.contains('d') {
+            if toks.is_empty() {
+                self.event.sock_error = WSA_INVALID_ARGUMENT;
+                return;
+            }
+            toks.remove(0).to_string()
+        } else {
+            String::new()
+        };
+        if toks.len() < 3 {
+            self.event.sock_error = WSA_INVALID_ARGUMENT;
+            return;
+        }
+        let name = toks.remove(0).to_string();
+        if name.is_empty() {
+            self.event.sock_error = WSA_INVALID_ARGUMENT;
+            return;
+        }
+        let Some(ip_pos) = toks
+            .iter()
+            .position(|t| t.parse::<std::net::IpAddr>().is_ok())
+        else {
+            self.event.sock_error = WSA_INVALID_ARGUMENT;
+            return;
+        };
+        let local_port = if ip_pos == 1 {
+            let Ok(port) = toks.remove(0).parse::<u16>() else {
+                self.event.sock_error = WSA_INVALID_ARGUMENT;
+                return;
+            };
+            port
+        } else if ip_pos == 0 {
+            0
+        } else {
+            self.event.sock_error = WSA_INVALID_ARGUMENT;
+            return;
+        };
+        let dest_ip = toks.remove(0).to_string();
+        let Some(dest_port) = toks.first().copied() else {
+            self.event.sock_error = WSA_INVALID_ARGUMENT;
+            return;
+        };
+        let Ok(dest_port) = dest_port.parse::<u16>() else {
+            self.event.sock_error = WSA_INVALID_ARGUMENT;
+            return;
+        };
+        toks.remove(0);
+        let max_bytes = if flags.contains('b') {
+            if toks.is_empty() {
+                self.event.sock_error = WSA_INVALID_ARGUMENT;
+                return;
+            }
+            let Ok(count) = toks.remove(0).parse::<usize>() else {
+                self.event.sock_error = WSA_INVALID_ARGUMENT;
+                return;
+            };
+            Some(count)
+        } else {
+            None
+        };
+        let data_raw = toks.join(" ");
+        let is_binvar = !flags.contains('t')
+            && data_raw.starts_with('&')
+            && !data_raw.contains(char::is_whitespace);
+        if !flags.contains('t')
+            && data_raw.starts_with('&')
+            && data_raw.contains(char::is_whitespace)
+        {
+            self.event.sock_error = WSA_INVALID_ARGUMENT;
+            return;
+        }
+        let mut data = if is_binvar {
+            self.bins.get(&data_raw).cloned().unwrap_or_default()
+        } else {
+            data_raw.into_bytes()
+        };
+        if let Some(max) = max_bytes {
+            data.truncate(max);
+        }
+        if flags.contains('n') && !is_binvar && !data.ends_with(b"\r\n") {
+            data.extend_from_slice(b"\r\n");
+        }
+        let reservation_id = match self
+            .sockets
+            .reserve_udp(&name, &bind_ip, local_port, &dest_ip, dest_port)
+        {
+            Some(Ok(id)) => id,
+            Some(Err(error)) => {
+                self.event.sock_error = error;
+                self.actions.push(Action::SockError {
+                    kind: "SOCKWRITE".to_string(),
+                    name,
+                    error,
+                });
+                return;
+            }
+            None => 0,
+        };
+        self.actions.push(Action::SockUdp {
+            name,
+            bind_ip,
+            local_port,
+            dest_ip,
+            dest_port,
+            data,
+            keep: flags.contains('k'),
+            dual_stack: flags.contains('u'),
+            reservation_id,
+        });
+    }
+
+    /// `/sockwrite [-tnba] <name> [numbytes] <text|%var|&binvar>`.
+    fn cmd_sockwrite(&mut self, raw: &str) {
+        self.event.sock_error = 0;
+        let expanded = self.expand(raw);
+        let mut rest = expanded.trim();
+        let mut flags = String::new();
+        while rest.starts_with('-') {
+            let (sw, more) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+            flags.push_str(sw.trim_start_matches('-'));
+            rest = more.trim();
+        }
+        if flags.chars().any(|flag| !"tnba".contains(flag)) {
+            self.event.sock_error = WSA_INVALID_ARGUMENT;
+            return;
+        }
+        let (name_tok, mut data_tok) = match rest.split_once(char::is_whitespace) {
             Some((n, t)) => (n, t.trim()),
             None => (rest, ""),
         };
-        let name = self.expand(name_tok);
+        let name = name_tok.to_string();
         if name.is_empty() {
+            self.event.sock_error = WSA_INVALID_ARGUMENT;
             return;
         }
-        // `/sockwrite name &binvar` sends the binary variable's bytes verbatim —
-        // binary protocols build their packet in a &binvar (e.g. a crypto auth
-        // response). Anything else is text, expanded as usual.
-        let mut data = match data_tok.strip_prefix('&') {
-            Some(bin) if !bin.is_empty() && !bin.contains(char::is_whitespace) => {
-                self.bins.get(data_tok).cloned().unwrap_or_default()
+        let max_bytes = if flags.contains('b') {
+            match data_tok.split_once(char::is_whitespace) {
+                Some((count, data)) => {
+                    data_tok = data.trim();
+                    let Ok(count) = count.parse::<usize>() else {
+                        self.event.sock_error = WSA_INVALID_ARGUMENT;
+                        return;
+                    };
+                    Some(count)
+                }
+                None => {
+                    self.event.sock_error = WSA_INVALID_ARGUMENT;
+                    return;
+                }
             }
-            _ => self.expand(data_tok).into_bytes(),
+        } else {
+            None
         };
-        if newline {
+        let is_binvar = !flags.contains('t')
+            && data_tok.starts_with('&')
+            && !data_tok.contains(char::is_whitespace);
+        if !flags.contains('t')
+            && data_tok.starts_with('&')
+            && data_tok.contains(char::is_whitespace)
+        {
+            self.event.sock_error = WSA_INVALID_ARGUMENT;
+            return;
+        }
+        let mut data = if is_binvar {
+            self.bins.get(data_tok).cloned().unwrap_or_default()
+        } else {
+            let text = data_tok.to_string();
+            if flags.contains('a') && text.chars().all(|c| (c as u32) <= 255) {
+                text.chars().map(|c| c as u8).collect()
+            } else {
+                text.into_bytes()
+            }
+        };
+        if let Some(max) = max_bytes {
+            data.truncate(max);
+        }
+        if flags.contains('n') && !is_binvar && !data.ends_with(b"\r\n") {
             data.extend_from_slice(b"\r\n");
         }
-        self.actions.push(Action::SockWrite { name, data });
+        if let Some(result) = self.sockets.write(&name, &data) {
+            self.event.sock_error = result.error;
+            let mut failures = result.failures;
+            if result.error != 0 && failures.is_empty() {
+                failures.push((name.clone(), result.error));
+            }
+            for (failed_name, error) in failures {
+                if error != 0 {
+                    self.actions.push(Action::SockError {
+                        kind: "SOCKWRITE".to_string(),
+                        name: failed_name,
+                        error,
+                    });
+                }
+            }
+        } else {
+            self.actions.push(Action::SockWrite { name, data });
+        }
     }
 
     /// `/socklisten [-options] <name> [port]` — bind a listening socket. With no
     /// (or 0) port the OS assigns one, readable via `$sock(name).port`.
     /// `/server [-m|-mn…] <host> <port> [password]` — connect the native IRC
-    /// client to a server (or a local bridge). mIRC switches (`-m` new window,
-    /// etc.) are accepted and ignored; the frontend opens the window + connects.
+    /// client to a server (or a local bridge). `-m` requests a new window; other
+    /// mIRC switches are accepted and ignored.
     fn cmd_server(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        let new_window = expanded
+            .split_whitespace()
+            .take_while(|t| t.starts_with('-'))
+            .any(|t| t[1..].contains('m'));
         let mut toks = expanded.split_whitespace().filter(|t| !t.starts_with('-'));
         let Some(host) = toks.next().map(|s| s.to_string()) else {
             return;
         };
-        let port = toks.next().and_then(|p| p.parse::<u16>().ok()).unwrap_or(6667);
+        let port = toks
+            .next()
+            .and_then(|p| p.parse::<u16>().ok())
+            .unwrap_or(6667);
         let pass = toks.collect::<Vec<_>>().join(" ");
-        self.actions.push(Action::Server { host, port, pass });
+        self.actions.push(Action::Server {
+            host,
+            port,
+            pass,
+            new_window,
+        });
     }
 
     fn cmd_socklisten(&mut self, raw: &str) {
+        self.event.sock_error = 0;
         let expanded = self.expand(raw);
-        // mIRC syntax: /socklisten [-d] [bindip] <name> [port]. The `-d` switch
-        // means an explicit bind-IP token (e.g. 127.0.0.1) precedes <name>; skip
-        // it so the socket is registered under <name> and not the IP. Without -d
-        // the first non-switch token is <name>.
-        let has_bindip = expanded
-            .split_whitespace()
-            .any(|t| t.starts_with('-') && t.contains('d'));
-        let mut toks = expanded.split_whitespace().filter(|t| !t.starts_with('-'));
-        if has_bindip {
-            toks.next(); // the bind IP — jIRC binds the loopback/all interfaces itself
+        // mIRC syntax: /socklisten [-dnpu] [bindip] <name> [port]. `-p` is
+        // accepted for compatibility; jIRC does not create UPnP mappings.
+        let mut toks = expanded.split_whitespace().peekable();
+        let mut flags = String::new();
+        while toks.peek().is_some_and(|token| token.starts_with('-')) {
+            flags.push_str(toks.next().unwrap().trim_start_matches('-'));
         }
-        if let Some(name) = toks.next() {
-            let name = name.to_string();
-            let port = toks.next().and_then(|p| p.parse::<u16>().ok()).unwrap_or(0);
-            // Bind now (so $sock(name).port is readable inline); the accept loop
-            // is started at apply-time with the owning connection's context.
-            self.sockets.listen(&name, port);
-            self.actions.push(Action::SockListen { name });
+        if flags.chars().any(|flag| !"dnpu".contains(flag)) {
+            self.event.sock_error = WSA_INVALID_ARGUMENT;
+            return;
+        }
+        let bind_ip = if flags.contains('d') {
+            let Some(bind_ip) = toks.next() else {
+                self.event.sock_error = WSA_INVALID_ARGUMENT;
+                return;
+            };
+            bind_ip
+        } else {
+            ""
+        };
+        let Some(name) = toks.next() else {
+            self.event.sock_error = WSA_INVALID_ARGUMENT;
+            return;
+        };
+        let port = match toks.next() {
+            Some(port) => match port.parse::<u16>() {
+                Ok(port) => port,
+                Err(_) => {
+                    self.event.sock_error = WSA_INVALID_ARGUMENT;
+                    return;
+                }
+            },
+            None => 0,
+        };
+        let name = name.to_string();
+        // Bind now (so $sock(name).port is readable inline); the accept loop is
+        // started at apply-time with the owning connection's context.
+        match self.sockets.listen_reserved(
+            bind_ip,
+            &name,
+            port,
+            flags.contains('n'),
+            flags.contains('u'),
+        ) {
+            Some(Ok((_, listener_id))) => {
+                self.actions.push(Action::SockListen { name, listener_id })
+            }
+            None => self.actions.push(Action::SockListen {
+                name,
+                listener_id: 0,
+            }),
+            Some(Err(error)) => self.event.sock_error = error,
         }
     }
 
     /// `/sockmark <name> [text]` — set (or clear) a socket's mark, read back via
     /// `$sock(name).mark`.
     fn cmd_sockmark(&mut self, raw: &str) {
+        self.event.sock_error = 0;
         let expanded = self.expand(raw);
         let trimmed = expanded.trim();
-        let (name, mark) = trimmed.split_once(char::is_whitespace).unwrap_or((trimmed, ""));
-        if !name.is_empty() {
-            self.sockets.set_mark(name, mark.trim());
+        let (name, mark) = trimmed
+            .split_once(char::is_whitespace)
+            .unwrap_or((trimmed, ""));
+        if name.is_empty() {
+            self.event.sock_error = WSA_INVALID_ARGUMENT;
+        } else if let Some(error) = self.sockets.set_mark(name, mark.trim()) {
+            self.event.sock_error = error;
+        } else {
+            self.actions.push(Action::SockMark {
+                name: name.to_string(),
+                mark: mark.trim().to_string(),
+            });
         }
     }
 
     /// `/socklist [-tul] [name]` — echoes the list of open sockets.
     fn cmd_socklist(&mut self, raw: &str) {
+        self.event.sock_error = 0;
         let filter = self.expand(raw);
         let target = self.reply_target();
         let lines = self.sockets.list(filter.trim());
@@ -1760,45 +3618,106 @@ impl<'a> Runtime<'a> {
             text: format!("Sock List - {} socket(s)", lines.len()),
         });
         for line in lines {
-            self.actions.push(Action::Echo { target: target.clone(), text: line });
+            self.actions.push(Action::Echo {
+                target: target.clone(),
+                text: line,
+            });
         }
     }
 
-    /// `/sockread <%var>` — inside `on SOCKREAD`, copies the current line into
-    /// `%var` and sets `$sockbr`. A second call in the same event reads empty
-    /// (so `while ($sockbr)` loops terminate).
+    /// `/sockread [-fn] [numbytes] <%var|&binvar>` — consumes the socket's
+    /// receive queue and updates `$sockbr`.
     fn cmd_sockread(&mut self, raw: &str) {
-        // sockread [-fn] [numbytes] <%var|&binvar>. The target is the last
-        // non-switch, non-numeric token. A leading `&` reads the line's bytes
-        // verbatim into a binary variable (binary protocols — no UTF-8 round-trip);
-        // a `%var` reads the decoded text line as before. Switches / numbytes are
-        // accepted; the whole line is delivered (line-oriented read model).
-        let mut target = "";
-        for tok in raw.split_whitespace() {
-            if tok.starts_with('-') || tok.parse::<u32>().is_ok() {
-                continue;
-            }
-            target = tok;
-        }
-        if target.is_empty() {
+        self.event.sock_error = 0;
+        self.vars.insert(SOCK_BR_KEY.to_string(), "0".to_string());
+        let mut force = false;
+        let mut line_switch = false;
+        let mut num_bytes = None;
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        let Some(target) = tokens.last().copied() else {
+            self.event.sock_error = WSA_INVALID_ARGUMENT;
+            return;
+        };
+        if !target.starts_with('%') && !target.starts_with('&') {
+            self.event.sock_error = WSA_INVALID_ARGUMENT;
             return;
         }
-        if target.starts_with('&') {
-            let bytes = std::mem::take(&mut self.event.sock_bytes);
-            let br = bytes.len();
+        let option_tokens: Vec<String> = tokens[..tokens.len() - 1]
+            .iter()
+            .flat_map(|token| {
+                self.expand(token)
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        for tok in option_tokens {
+            if let Some(switches) = tok.strip_prefix('-') {
+                if switches.chars().any(|flag| !"fn".contains(flag)) {
+                    self.event.sock_error = WSA_INVALID_ARGUMENT;
+                    return;
+                }
+                force |= switches.contains('f');
+                line_switch |= switches.contains('n');
+                continue;
+            }
+            // Expand only the byte-count argument. Expanding the destination
+            // would replace `%var` with its value instead of assigning to it.
+            let Ok(n) = tok.parse::<usize>() else {
+                self.event.sock_error = WSA_INVALID_ARGUMENT;
+                return;
+            };
+            num_bytes = Some(n);
+        }
+        let binary = target.starts_with('&');
+        let options = SocketReadOptions {
+            binary,
+            force,
+            line: !binary || line_switch,
+            max_bytes: num_bytes.unwrap_or(4096),
+        };
+        let result = match self.sockets.read(&self.event.chan, options) {
+            Some(Ok(result)) => result,
+            Some(Err(error)) => {
+                self.event.sock_error = error;
+                return;
+            }
+            None => {
+                // Unit-test/no-backend events carry one legacy inline line. Treat it
+                // as one read, and clear both representations so a following text
+                // read cannot consume the same bytes after a binary read (or vice versa).
+                let data = if self.event.sock_bytes.is_empty() {
+                    self.event.text.as_bytes().to_vec()
+                } else {
+                    std::mem::take(&mut self.event.sock_bytes)
+                };
+                self.event.text.clear();
+                self.event.sock_bytes.clear();
+                SocketReadResult {
+                    bytes_read: data.len(),
+                    data,
+                }
+            }
+        };
+        if binary {
             self.bins.unset(target);
-            self.bins.set(target, 1, &bytes, false);
-            self.vars.insert(SOCK_BR_KEY.to_string(), br.to_string());
+            self.bins.set(target, 1, &result.data, false);
         } else {
             let var = target.trim_start_matches('%').to_string();
             if var.is_empty() {
                 return;
             }
-            let line = std::mem::take(&mut self.event.text);
-            let br = line.len();
-            self.vars.insert(var, line);
-            self.vars.insert(SOCK_BR_KEY.to_string(), br.to_string());
+            let line = match String::from_utf8(result.data) {
+                Ok(text) => text,
+                Err(e) => e.into_bytes().into_iter().map(|b| b as char).collect(),
+            };
+            let is_local = self.set_visible_var(var.clone(), line);
+            if !is_local {
+                self.var_expiry.remove(&var);
+            }
         }
+        self.vars
+            .insert(SOCK_BR_KEY.to_string(), result.bytes_read.to_string());
     }
 
     /// `/dialog [-c] <name>` — open (or, with `-c`, close) a custom dialog.
@@ -1809,7 +3728,9 @@ impl<'a> Runtime<'a> {
             return;
         };
         if close {
-            self.actions.push(Action::DialogClose { name: name.to_string() });
+            self.actions.push(Action::DialogClose {
+                name: name.to_string(),
+            });
         } else if let Some(d) = self.script.find_dialog(name) {
             self.actions.push(Action::DialogOpen {
                 name: d.name.clone(),
@@ -1847,33 +3768,127 @@ impl<'a> Runtime<'a> {
         });
     }
 
-    /// `/hsave <table> <file>` — write a hash table to a sandboxed file.
+    /// `/hsave -s[bBniau] <table> <file> [section]` — save a hash table using
+    /// mIRC's text, INI, 16-bit-index (`-b`), or 32-bit-index (`-B`) format.
     fn cmd_hsave(&mut self, raw: &str) {
-        let expanded = self.expand(raw);
-        let mut toks = expanded.split_whitespace();
-        if let (Some(table), Some(file)) = (toks.next(), toks.next()) {
-            let mut out = String::new();
-            if let Some(h) = self.hashes.get(table) {
-                for (item, value) in h {
-                    out.push_str(&format!("{item} {value}\n"));
-                }
+        let (flags, rest) = split_switches(raw);
+        let expanded = self.expand(rest);
+        let Some((table, rest)) = take_file_arg(&expanded) else {
+            return;
+        };
+        let Some(table) = super::hash::table_key(self.hashes, &table) else {
+            return;
+        };
+        let Some((file, rest)) = take_file_arg(rest) else {
+            return;
+        };
+        let Some(h) = self.hashes.get(&table) else {
+            return;
+        };
+        let include_unset = flags.contains('u');
+        let entries: Vec<(String, String)> = h
+            .iter()
+            .filter(|(item, _)| {
+                include_unset
+                    || !self
+                        .hash_expiry
+                        .contains_key(&(table.clone(), (*item).clone()))
+            })
+            .map(|(item, value)| (item.clone(), value.clone()))
+            .collect();
+        let format = hash_text_format(flags);
+        let section = take_file_arg(rest)
+            .map(|(section, _)| section)
+            .filter(|section| !section.is_empty())
+            .unwrap_or_else(|| table.clone());
+        let binary_format = if flags.contains('i') {
+            None
+        } else if flags.contains('B') {
+            Some(super::hash::BinaryFormat::U32)
+        } else if flags.contains('b') {
+            Some(super::hash::BinaryFormat::U16)
+        } else {
+            None
+        };
+        let Some(bytes) = binary_format
+            .map(|binary| super::hash::save_binary(&entries, binary, flags.contains('n')))
+            .unwrap_or_else(|| Some(super::hash::save(&entries, format, &section)))
+        else {
+            return;
+        };
+        let path = sandbox_path(&self.data_dir, &file);
+        if flags.contains('a') {
+            use std::io::Write;
+            if let Ok(mut output) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                let _ = output.write_all(&bytes);
             }
-            let _ = std::fs::write(sandbox_path(&self.data_dir, file), out);
+        } else {
+            let _ = std::fs::write(path, bytes);
         }
     }
 
-    /// `/hload <table> <file>` — load a hash table from a sandboxed file.
+    /// `/hload -s[mN bBni] <table> <file> [section]` — load a table saved by
+    /// `/hsave`. `-mN` creates a missing table and retains its slot count.
     fn cmd_hload(&mut self, raw: &str) {
-        let expanded = self.expand(raw);
-        let mut toks = expanded.split_whitespace();
-        if let (Some(table), Some(file)) = (toks.next(), toks.next()) {
-            if let Ok(content) = std::fs::read_to_string(sandbox_path(&self.data_dir, file)) {
-                let h = self.hashes.entry(table.to_string()).or_default();
-                for line in content.lines() {
-                    if let Some((item, value)) = line.split_once(' ') {
-                        h.insert(item.to_string(), value.to_string());
-                    }
-                }
+        let (flags, rest) = split_switches(raw);
+        let expanded = self.expand(rest);
+        let Some((table, rest)) = take_file_arg(&expanded) else {
+            return;
+        };
+        let Some((file, rest)) = take_file_arg(rest) else {
+            return;
+        };
+        let table = super::hash::table_key(self.hashes, &table).unwrap_or(table);
+        if !self.hashes.contains_key(&table) {
+            if flags.contains('m') || flags.contains('M') {
+                self.hashes.insert(table.clone(), HashMap::new());
+                super::hash::set_slots(
+                    self.hashes,
+                    &table,
+                    write_numeric_switch(flags, 'm').unwrap_or(100) as usize,
+                );
+            } else {
+                return;
+            }
+        }
+        let format = hash_text_format(flags);
+        let section = take_file_arg(rest)
+            .map(|(section, _)| section)
+            .filter(|section| !section.is_empty())
+            .unwrap_or_else(|| table.clone());
+        if let Ok(content) = std::fs::read(sandbox_path(&self.data_dir, &file)) {
+            let loaded = if flags.contains('i') {
+                super::hash::load(&content, format, &section)
+            } else if flags.contains('B') {
+                super::hash::load_binary(
+                    &content,
+                    super::hash::BinaryFormat::U32,
+                    flags.contains('n'),
+                )
+            } else if flags.contains('b') {
+                super::hash::load_binary(
+                    &content,
+                    super::hash::BinaryFormat::U16,
+                    flags.contains('n'),
+                )
+            } else {
+                super::hash::load(&content, format, &section)
+            };
+            for (item, value) in loaded {
+                let item = self
+                    .hashes
+                    .get(&table)
+                    .and_then(|hash| super::hash::item_key(hash, &item))
+                    .unwrap_or(item);
+                self.hash_expiry.remove(&(table.clone(), item.clone()));
+                self.hashes
+                    .get_mut(&table)
+                    .expect("table checked above")
+                    .insert(item, value);
             }
         }
     }
@@ -1882,9 +3897,16 @@ impl<'a> Runtime<'a> {
     /// sizing hint in mIRC; ignored here.
     fn cmd_hmake(&mut self, raw: &str) {
         let (_flags, rest) = split_switches(raw);
-        if let Some(table) = rest.split_whitespace().next() {
-            let table = self.expand(table);
-            self.hashes.entry(table).or_default();
+        let expanded = self.expand(rest);
+        let mut args = expanded.split_whitespace();
+        if let Some(table) = args.next() {
+            let table = table.to_string();
+            let slots = args.next().and_then(|n| n.parse().ok()).unwrap_or(100);
+            if super::hash::table_key(self.hashes, &table).is_some() {
+                return;
+            }
+            self.hashes.entry(table.clone()).or_default();
+            super::hash::set_slots(self.hashes, &table, slots);
         }
     }
 
@@ -1895,17 +3917,20 @@ impl<'a> Runtime<'a> {
         if let Some(table) = rest.split_whitespace().next() {
             let table = self.expand(table);
             if wild {
-                let keys: Vec<String> = self
-                    .hashes
-                    .keys()
-                    .filter(|k| wildcard_match(&table, k))
-                    .cloned()
+                let keys: Vec<String> = super::hash::table_names(self.hashes)
+                    .into_iter()
+                    .filter(|name| wildcard_match(&table, name))
                     .collect();
                 for k in keys {
                     self.hashes.remove(&k);
+                    super::hash::remove_slots(self.hashes, &k);
+                    self.hash_expiry.retain(|(table, _), _| table != &k);
                 }
             } else {
+                let table = super::hash::table_key(self.hashes, &table).unwrap_or(table);
                 self.hashes.remove(&table);
+                super::hash::remove_slots(self.hashes, &table);
+                self.hash_expiry.retain(|(name, _), _| name != &table);
             }
         }
     }
@@ -1915,9 +3940,11 @@ impl<'a> Runtime<'a> {
         let (_flags, rest) = split_switches(raw);
         if let Some(table) = rest.split_whitespace().next() {
             let table = self.expand(table);
+            let table = super::hash::table_key(self.hashes, &table).unwrap_or(table);
             if let Some(h) = self.hashes.get_mut(&table) {
                 h.clear();
             }
+            self.hash_expiry.retain(|(name, _), _| name != &table);
         }
     }
 
@@ -1925,14 +3952,56 @@ impl<'a> Runtime<'a> {
     /// if it doesn't exist; we always create-on-demand). Table and item names
     /// are expanded so variable keys match what `$hget` reads back.
     fn cmd_hadd(&mut self, raw: &str) {
-        let (_flags, rest) = split_switches(raw);
-        let mut it = rest.splitn(3, char::is_whitespace);
+        let (flags, rest) = split_switches(raw);
+        // Expand before splitting: in mIRC, the spaced `$+` operator can form an
+        // argument (for example `hadd h state. $+ %sock ready`). Splitting the raw
+        // text first incorrectly stores `state.` as the item and the joined item
+        // suffix as part of the value.
+        let expanded = self.expand(rest);
+        let mut it = expanded.splitn(3, char::is_whitespace);
         let (table, item, value) = (it.next(), it.next(), it.next());
         if let (Some(table), Some(item)) = (table, item) {
-            let table = self.expand(table.trim());
-            let item = self.expand(item.trim());
-            let value = self.expand(value.unwrap_or("").trim());
-            self.hashes.entry(table).or_default().insert(item, value);
+            let requested_table = table.trim().to_string();
+            let table =
+                super::hash::table_key(self.hashes, &requested_table).unwrap_or(requested_table);
+            let item = self
+                .hashes
+                .get(&table)
+                .and_then(|hash| super::hash::item_key(hash, item.trim()))
+                .unwrap_or_else(|| item.trim().to_string());
+            update_timed_expiry(self.hash_expiry, (table.clone(), item.clone()), flags);
+            let value = value.unwrap_or("").trim();
+            let stored = if flags.contains('b') {
+                let mut bytes = self.bins.get(value).cloned().unwrap_or_default();
+                if flags.contains('c') {
+                    if let Some(end) = bytes.iter().position(|byte| *byte == 0) {
+                        bytes.truncate(end);
+                    }
+                    String::from_utf8(bytes).unwrap_or_else(|error| {
+                        error
+                            .into_bytes()
+                            .into_iter()
+                            .map(|byte| byte as char)
+                            .collect()
+                    })
+                } else {
+                    super::hash::binary_value(&bytes)
+                }
+            } else {
+                value.to_string()
+            };
+            let is_new = !self.hashes.contains_key(&table);
+            self.hashes
+                .entry(table.clone())
+                .or_default()
+                .insert(item, stored);
+            if is_new {
+                super::hash::set_slots(
+                    self.hashes,
+                    &table,
+                    write_numeric_switch(flags, 'm').unwrap_or(100) as usize,
+                );
+            }
         }
     }
 
@@ -1940,19 +4009,28 @@ impl<'a> Runtime<'a> {
     fn cmd_hdel(&mut self, raw: &str) {
         let (flags, rest) = split_switches(raw);
         let wild = flags.contains('w');
-        let mut it = rest.split_whitespace();
+        let expanded = self.expand(rest);
+        let mut it = expanded.split_whitespace();
         if let (Some(table), Some(item)) = (it.next(), it.next()) {
-            let table = self.expand(table);
-            let item = self.expand(item);
+            let Some(table) = super::hash::table_key(self.hashes, table) else {
+                return;
+            };
             if let Some(h) = self.hashes.get_mut(&table) {
                 if wild {
-                    let keys: Vec<String> =
-                        h.keys().filter(|k| wildcard_match(&item, k)).cloned().collect();
+                    let keys: Vec<String> = h
+                        .keys()
+                        .filter(|k| wildcard_match(item, k))
+                        .cloned()
+                        .collect();
                     for k in keys {
                         h.remove(&k);
+                        self.hash_expiry.remove(&(table.clone(), k));
                     }
                 } else {
-                    h.remove(&item);
+                    if let Some(item) = super::hash::item_key(h, item) {
+                        h.remove(&item);
+                        self.hash_expiry.remove(&(table, item));
+                    }
                 }
             }
         }
@@ -1961,19 +4039,31 @@ impl<'a> Runtime<'a> {
     /// `/hinc|/hdec [-switches] <table> <item> [n]` — add/subtract `n` (default
     /// 1) to a numeric hash item, creating the table/item if needed.
     fn cmd_hincdec(&mut self, raw: &str, sign: i64) {
-        let (_flags, rest) = split_switches(raw);
-        let mut it = rest.splitn(3, char::is_whitespace);
+        let (flags, rest) = split_switches(raw);
+        let expanded = self.expand(rest);
+        let mut it = expanded.splitn(3, char::is_whitespace);
         if let (Some(table), Some(item)) = (it.next(), it.next()) {
-            let table = self.expand(table.trim());
-            let item = self.expand(item.trim());
             let by: i64 = it
                 .next()
-                .map(|s| self.expand(s.trim()))
+                .map(str::trim)
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(1);
-            let h = self.hashes.entry(table).or_default();
+            let requested_table = table.trim().to_string();
+            let table =
+                super::hash::table_key(self.hashes, &requested_table).unwrap_or(requested_table);
+            let item = self
+                .hashes
+                .get(&table)
+                .and_then(|hash| super::hash::item_key(hash, item.trim()))
+                .unwrap_or_else(|| item.trim().to_string());
+            update_timed_expiry(self.hash_expiry, (table.clone(), item.clone()), flags);
+            let is_new = !self.hashes.contains_key(&table);
+            let h = self.hashes.entry(table.clone()).or_default();
             let cur: i64 = h.get(&item).and_then(|v| v.parse().ok()).unwrap_or(0);
             h.insert(item, (cur + sign * by).to_string());
+            if is_new {
+                super::hash::set_slots(self.hashes, &table, 100);
+            }
         }
     }
 
@@ -1984,7 +4074,13 @@ impl<'a> Runtime<'a> {
         let Some((c, rest)) = raw.split_once(char::is_whitespace) else {
             return;
         };
-        let sep = self.expand(c).trim().parse::<u32>().ok().and_then(char::from_u32).unwrap_or(' ');
+        let sep = self
+            .expand(c)
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .and_then(char::from_u32)
+            .unwrap_or(' ');
         let text = self.expand(rest.trim());
         self.event.params = if sep == ' ' {
             text.split_whitespace().map(String::from).collect()
@@ -2030,8 +4126,15 @@ impl<'a> Runtime<'a> {
             return;
         }
         // Optional leading channel; otherwise the current event channel.
-        let (chan, idx) = if super::is_channel(&toks[0]) {
-            (toks[0].clone(), 1)
+        let (chan, idx) = if let Some(bare) = self.state.isupport.channel_target(&toks[0]) {
+            let display = self
+                .state
+                .channels
+                .iter()
+                .find(|channel| self.state.isupport.names_equal(&channel.name, bare))
+                .map(|channel| channel.name.clone())
+                .unwrap_or_else(|| bare.to_string());
+            (display, 1)
         } else {
             (self.event.chan.clone(), 0)
         };
@@ -2044,94 +4147,228 @@ impl<'a> Runtime<'a> {
             target.clone()
         } else {
             let kind: u32 = toks.get(idx + 1).and_then(|s| s.parse().ok()).unwrap_or(2);
-            let who = target.to_lowercase();
-            match self.state.ial.iter().find(|(n, _)| *n == who) {
+            let who = self.state.isupport.casefold(target);
+            match self
+                .state
+                .ial
+                .iter()
+                .find(|(n, _)| self.state.isupport.names_equal(n, &who))
+            {
                 Some((_, full)) => ident::mask_address(full, kind),
                 None => format!("{target}!*@*"),
             }
         };
         let sign = if add { '+' } else { '-' };
-        self.actions.push(Action::Send(format!("MODE {chan} {sign}b {mask}")));
+        self.actions
+            .push(Action::Send(format!("MODE {chan} {sign}b {mask}")));
     }
 
-    /// `/timer[name] <reps> <interval-secs> <command>` — schedules a command.
-    /// `reps` of 0 means repeat (capped); the command is evaluated when it fires.
-    /// `/timer[name] off` stops the timer (empty name stops all).
+    /// mIRC `/timer[name] [-cdeomhipPrzN] [time] <reps> <interval> <command>`.
+    /// The command is evaluated once now; `$!ident` and `$unsafe()` deliberately
+    /// survive for the evaluation performed each time the timer fires.
     fn cmd_timer(&mut self, name: &str, raw: &str) {
         let raw = raw.trim();
-        if raw.eq_ignore_ascii_case("off") {
-            self.actions.push(Action::TimerStop {
-                name: if name.is_empty() { "*".to_string() } else { name.to_string() },
+        if raw.is_empty() {
+            self.actions.push(Action::TimerList {
+                target: self.reply_target(),
+                name: if name.is_empty() { "*" } else { name }.to_string(),
             });
             return;
         }
-        let mut parts = raw.splitn(3, char::is_whitespace);
-        let reps_tok = parts.next().unwrap_or("");
-        let interval_tok = parts.next().unwrap_or("");
-        let command = parts.next().unwrap_or("").trim().to_string();
-        if command.is_empty() {
+
+        let mut tokens: Vec<&str> = raw.split_whitespace().collect();
+        let mut idx = 0;
+        let mut millis = false;
+        let mut offline = false;
+        let mut catch_up = false;
+        let mut ordered = false;
+        let mut high_resolution = false;
+        let mut dynamic = false;
+        let mut execute = false;
+        let mut pause = None;
+        let mut resume = false;
+        while idx < tokens.len() {
+            let switch = self.expand(tokens[idx]);
+            if !switch.starts_with('-') || switch.len() == 1 {
+                break;
+            }
+            for ch in switch[1..].chars() {
+                match ch {
+                    'c' => catch_up = true,
+                    'd' => ordered = true,
+                    'e' => execute = true,
+                    'o' => offline = true,
+                    'm' => millis = true,
+                    'h' => {
+                        millis = true;
+                        high_resolution = true;
+                    }
+                    'i' => dynamic = true,
+                    'p' => pause = Some(false),
+                    'P' => pause = Some(true),
+                    'r' => resume = true,
+                    // -zN resets mIRC's Online Timer dialog, not a script timer.
+                    'z' | '0' | '1' | '2' => {}
+                    _ => {}
+                }
+            }
+            idx += 1;
+        }
+
+        let pattern = if name.is_empty() { "*" } else { name };
+        if execute {
+            self.actions.push(Action::TimerExecute {
+                name: pattern.to_string(),
+            });
             return;
         }
-        let reps: u32 = self.expand(reps_tok).trim().parse().unwrap_or(1);
-        let reps = if reps == 0 { 1000 } else { reps.min(100_000) };
-        let secs: f64 = self.expand(interval_tok).trim().parse().unwrap_or(0.0);
-        let interval_ms = (secs * 1000.0).max(0.0) as u64;
+        if let Some(countdown) = pause {
+            self.actions.push(Action::TimerPause {
+                name: pattern.to_string(),
+                countdown,
+            });
+            return;
+        }
+        if resume {
+            self.actions.push(Action::TimerResume {
+                name: pattern.to_string(),
+            });
+            return;
+        }
+
+        if tokens
+            .get(idx)
+            .is_some_and(|v| v.eq_ignore_ascii_case("off"))
+        {
+            self.actions.push(Action::TimerStop {
+                name: pattern.to_string(),
+            });
+            return;
+        }
+
+        let mut start_at = None;
+        if let Some(candidate) = tokens.get(idx) {
+            let candidate = self.expand(candidate);
+            if super::timer::is_wall_clock_spec(&candidate) {
+                start_at = Some(candidate);
+                idx += 1;
+            }
+        }
+        if tokens.len().saturating_sub(idx) < 3 {
+            return;
+        }
+        let Ok(reps) = self.expand(tokens[idx]).trim().parse::<u32>() else {
+            return;
+        };
+        let Ok(interval) = self.expand(tokens[idx + 1]).trim().parse::<f64>() else {
+            return;
+        };
+        if !interval.is_finite() || interval < 0.0 {
+            return;
+        }
+        let interval_ms = if millis {
+            interval as u64
+        } else {
+            (interval * 1000.0) as u64
+        };
+        tokens.drain(..idx + 2);
+        let command = self.expand_deferred(&tokens.join(" "));
+        if command.trim().is_empty() {
+            return;
+        }
+        let timer_name = if name.is_empty() {
+            let mut used: Vec<String> = self
+                .timers
+                .snapshot()
+                .into_iter()
+                .map(|timer| timer.name)
+                .collect();
+            used.extend(self.actions.iter().filter_map(|action| match action {
+                Action::Timer { name, .. } => Some(name.clone()),
+                _ => None,
+            }));
+            (1_u64..)
+                .map(|n| n.to_string())
+                .find(|candidate| !used.iter().any(|n| n.eq_ignore_ascii_case(candidate)))
+                .unwrap()
+        } else {
+            name.to_string()
+        };
+        self.vars.insert(LTIMER_KEY.to_string(), timer_name.clone());
         self.actions.push(Action::Timer {
-            name: name.to_string(),
+            name: timer_name,
             reps,
             interval_ms,
+            start_at,
             command,
             target: self.reply_target(),
+            offline,
+            catch_up,
+            ordered,
+            milliseconds: millis,
+            high_resolution,
+            dynamic,
+            source: self.event.script_source.clone(),
         });
     }
 
     /// `/timers` lists active timers; `/timers off` stops them all.
     fn cmd_timers(&mut self, raw: &str) {
         if raw.trim().eq_ignore_ascii_case("off") {
-            self.actions.push(Action::TimerStop { name: "*".to_string() });
+            self.actions.push(Action::TimerStop {
+                name: "*".to_string(),
+            });
         } else {
-            self.actions.push(Action::TimerList { target: self.reply_target() });
+            self.actions.push(Action::TimerList {
+                target: self.reply_target(),
+                name: "*".to_string(),
+            });
         }
+    }
+
+    fn cmd_play(&mut self, raw: &str) {
+        let args = self.expand(raw);
+        // mIRC's -q/-m limits apply to requests made through remote events,
+        // not commands typed by the local user or fired by a timer.
+        let remote = !self.event.event.is_empty()
+            && !self.event.nick.is_empty()
+            && !self.event.nick.eq_ignore_ascii_case(self.my_nick);
+        self.actions.push(Action::Play {
+            args,
+            current_target: self.reply_target(),
+            remote,
+            source: self.event.script_source.clone(),
+        });
     }
 
     // ---- expansion ----
 
     /// Expands `%vars`, `$identifiers`, params, and the `$+` join operator.
     pub fn expand(&mut self, text: &str) -> String {
+        let expanded = self.expand_inner(text);
+        let mut segments = split_command_pipes(&expanded).into_iter();
+        let first = decode_delayed(&segments.next().unwrap_or_default());
+        self.pending_pipe_commands
+            .extend(segments.map(|command| decode_delayed(&command)));
+        first
+    }
+
+    /// Expands a command that will itself be evaluated later (notably a timer).
+    /// `$unsafe()` data remains encoded through the deferred parser and is
+    /// decoded by the later normal expansion.
+    pub fn expand_deferred(&mut self, text: &str) -> String {
+        self.expand_inner(text)
+    }
+
+    fn expand_inner(&mut self, text: &str) -> String {
         let mut parts: Vec<String> = Vec::new();
         let mut join_next = false;
         // Split on spaces, but keep `$ident(a b c)` whole (spaces inside the
         // parentheses are part of the identifier's arguments).
-        let tokens = split_top_level(text);
+        let tokens = self.expand_evaluation_brackets(split_top_level(text));
         let mut i = 0;
         while i < tokens.len() {
             let tok = &tokens[i];
-            // Dynamic-variable evaluation brackets: `PREV [ $+ [ INNER ] ]` yields
-            // the value of the identifier/variable named by the *literal* PREV token
-            // concatenated with the *evaluated* INNER — e.g. `%color. [ $+ [ $nick ] ]`
-            // reads `%color.<nick>`. Only this specific shape is treated as an eval
-            // bracket; every other `[ ]` stays literal (matching jIRC's history and
-            // keeping the common `[ $+ x $+ ]` display idiom working).
-            if tok == "["
-                && !join_next
-                && i > 0
-                && !tokens[i - 1].is_empty()
-                && (i < 2 || tokens[i - 2] != "$+")
-                && tokens.get(i + 1).map(String::as_str) == Some("$+")
-                && tokens.get(i + 2).map(String::as_str) == Some("[")
-            {
-                if let Some((lo, hi, outer)) = dynvar_span(&tokens, i) {
-                    let inner_val = self.expand(&tokens[lo..hi].join(" "));
-                    let prev_literal = tokens[i - 1].clone();
-                    // PREV was already evaluated into `parts`; drop it and rebuild
-                    // from its literal name plus the inner value.
-                    parts.pop();
-                    let val = self.eval_token(&format!("{prev_literal}{inner_val}"));
-                    parts.push(val);
-                    i = outer + 1;
-                    continue;
-                }
-            }
             if tok == "$+" {
                 join_next = true;
                 i += 1;
@@ -2153,8 +4390,68 @@ impl<'a> Runtime<'a> {
         parts.join(" ")
     }
 
+    /// Pre-evaluates mIRC `[ ... ]` groups from the innermost group outward.
+    /// A leading/trailing `$+` crosses the bracket boundary, which is how
+    /// `% [ $+ [ $1 ] ]` constructs and then dereferences a dynamic variable.
+    /// The symmetric `[ $+ value $+ ]` form is deliberately *not* an evaluation
+    /// group: it is mIRC's common way to render literal square brackets, and is
+    /// handled by the ordinary `$+` token pass below.
+    fn expand_evaluation_brackets(&mut self, mut tokens: Vec<String>) -> Vec<String> {
+        // Each replacement removes at least one evaluation-bracket pair. The
+        // cap is defensive against values that themselves expand to bracket
+        // syntax; real scripts cannot usefully nest anywhere near this depth.
+        for _ in 0..64 {
+            let Some(span) = evaluation_bracket_span(&tokens) else {
+                break;
+            };
+            let mut inner = tokens[span.open + 1..span.close].to_vec();
+
+            // Strip only the boundary-crossing join operators. Empty tokens
+            // represent repeated source spaces, so locate the first/last
+            // non-empty token rather than assuming adjacency.
+            if span.join_left {
+                if let Some(index) = inner.iter().position(|token| !token.is_empty()) {
+                    inner.remove(index);
+                }
+            }
+            if span.join_right {
+                if let Some(index) = inner.iter().rposition(|token| !token.is_empty()) {
+                    inner.remove(index);
+                }
+            }
+
+            let mut value = self.expand_inner(&inner.join(" "));
+            let mut replace_start = span.open;
+            let mut replace_end = span.close;
+
+            if span.join_left {
+                if let Some(previous) = (0..span.open)
+                    .rev()
+                    .find(|index| !tokens[*index].is_empty())
+                {
+                    value.insert_str(0, &tokens[previous]);
+                    replace_start = previous;
+                }
+            }
+            if span.join_right {
+                if let Some(next) =
+                    (span.close + 1..tokens.len()).find(|index| !tokens[*index].is_empty())
+                {
+                    value.push_str(&tokens[next]);
+                    replace_end = next;
+                }
+            }
+
+            tokens.splice(replace_start..=replace_end, [value]);
+        }
+        tokens
+    }
+
     /// Expands identifiers/vars within a single (space-free) token.
     fn eval_token(&mut self, tok: &str) -> String {
+        // `$input` and other synchronous identifiers can keep a run open long
+        // enough for timed values to expire between tokens.
+        self.purge_expired();
         // A lone `#` is the current channel (mIRC); `#name` stays a literal channel.
         if tok == "#" {
             return self.event.chan.clone();
@@ -2168,7 +4465,7 @@ impl<'a> Runtime<'a> {
                     i += 1;
                     let name = read_var_name(&chars, &mut i);
                     if !name.is_empty() {
-                        out.push_str(self.vars.get(&name).map(|s| s.as_str()).unwrap_or(""));
+                        out.push_str(self.var_value(&name).map(|s| s.as_str()).unwrap_or(""));
                     } else {
                         out.push('%');
                     }
@@ -2257,11 +4554,61 @@ impl<'a> Runtime<'a> {
                 return "$".to_string();
             }
         }
-        // $regsubex evaluates its subtext once per match, so its args must NOT be
-        // pre-expanded here — hand the raw args to a dedicated handler.
+        // `$eval(text,N)` must receive its first argument before the generic
+        // argument pre-expansion below: N=0 returns the literal text, N=1
+        // evaluates it once, and so on. `$(...)` reaches the same path.
+        if name.eq_ignore_ascii_case("eval") && chars.get(*i) == Some(&'(') {
+            let inner = read_balanced(chars, i);
+            let raw_args = split_args(&inner);
+            let mut value = raw_args.first().cloned().unwrap_or_default();
+            let count = self
+                .expand(raw_args.get(1).map(String::as_str).unwrap_or("1"))
+                .trim()
+                .parse::<usize>()
+                .unwrap_or(1);
+            for _ in 0..count {
+                value = self.expand(&value);
+            }
+            return value;
+        }
+        // `$unsafe(text)` evaluates its argument now but protects anything that
+        // could be evaluated or parsed as a command for exactly one deferred
+        // evaluation level. Normal (non-deferred) command expansion decodes the
+        // markers immediately, so they never leak into displayed/sent text.
+        if name.eq_ignore_ascii_case("unsafe") && chars.get(*i) == Some(&'(') {
+            let inner = read_balanced(chars, i);
+            let raw = split_args(&inner).first().cloned().unwrap_or_default();
+            return encode_delayed(&self.expand(&raw));
+        }
+        // `$regsub` must retain the literal output `%var`/`&binvar` name, and
+        // `$regsubex` evaluates its subtext once per match. Neither can use the
+        // generic eager argument-expansion path.
+        if name.eq_ignore_ascii_case("regsub") && chars.get(*i) == Some(&'(') {
+            let inner = read_balanced(chars, i);
+            return ident::eval_regsub(self, &split_args(&inner));
+        }
         if name.eq_ignore_ascii_case("regsubex") && chars.get(*i) == Some(&'(') {
             let inner = read_balanced(chars, i);
             return ident::eval_regsubex(self, &split_args(&inner));
+        }
+        // `$hfind(..., command)` exposes each match as `$1-` while executing
+        // the command. Keep the final argument raw so the caller's current
+        // parameters do not consume `$1-` before the search starts.
+        if name.eq_ignore_ascii_case("hfind") && chars.get(*i) == Some(&'(') {
+            let inner = read_balanced(chars, i);
+            let prop = if chars.get(*i) == Some(&'.') {
+                let mut j = *i + 1;
+                let property = read_name(chars, &mut j);
+                if property.is_empty() {
+                    String::new()
+                } else {
+                    *i = j;
+                    property
+                }
+            } else {
+                String::new()
+            };
+            return ident::eval_hfind(self, &split_args(&inner), &prop);
         }
         // $iif must evaluate lazily: expand the condition, set $v1/$v2, then expand
         // only the taken branch — so `$iif(x,$v1,y)` sees $v1 (and skips the other
@@ -2292,7 +4639,10 @@ impl<'a> Runtime<'a> {
         let (args, had_parens) = if chars.get(*i) == Some(&'(') {
             let inner = read_balanced(chars, i);
             (
-                split_args(&inner).into_iter().map(|a| self.expand(&a)).collect::<Vec<_>>(),
+                split_args(&inner)
+                    .into_iter()
+                    .map(|a| self.expand(&a))
+                    .collect::<Vec<_>>(),
                 true,
             )
         } else {
@@ -2398,7 +4748,11 @@ impl<'a> Runtime<'a> {
                 return v;
             }
         }
-        let msg = if message.is_empty() { "Enter reply:".to_string() } else { message };
+        let msg = if message.is_empty() {
+            "Enter reply:".to_string()
+        } else {
+            message
+        };
         let answer = self.input.prompt(&msg, "", "").unwrap_or_default();
         self.vars.insert(LASTINPUT_KEY.to_string(), answer.clone());
         if yes_no {
@@ -2441,17 +4795,30 @@ impl<'a> Runtime<'a> {
 fn split_v(cond: &str) -> (String, String) {
     let c = cond.trim();
     let toks: Vec<&str> = c.split_whitespace().collect();
+    // Identifier/variable expansion can turn either operand into several words.
+    // Equality operators remain unambiguous standalone tokens in the middle:
+    // `$gettok(...) != 71 75 ...` must expose the full values as $v1/$v2.
+    if let Some(i) = toks.iter().position(|tok| is_eq_op(tok)) {
+        return (toks[..i].join(" "), toks[i + 1..].join(" "));
+    }
     match toks.as_slice() {
         [] => (String::new(), String::new()),
         [one] => match split_spaceless_op(one) {
             Some((a, _, b)) => (a.to_string(), b.to_string()),
+            None if is_supported_operator(one) => (String::new(), String::new()),
             None => (one.to_string(), String::new()),
         },
+        // The left operand expanded to `$null`, so the operator is first.
+        [op, rest @ ..] if is_supported_operator(op) => (String::new(), rest.join(" ")),
         // `a <binary-op> b…` — symbolic (==, <, …) or a binary word operator.
         [a, op, rest @ ..] if is_cmp_op(op) || is_binary_word_op(op) => {
             (a.to_string(), rest.join(" "))
         }
-        // A multi-word value, or a unary test (`%x isnum`): whole value is $v1.
+        // A required RHS expanded to `$null`.
+        [a, op] if is_required_rhs_word_op(op) => (a.to_string(), String::new()),
+        // Unary tests still expose the tested value as $v1, not the expression.
+        [a, op] if is_unary_word_op(op) => (a.to_string(), String::new()),
+        // A multi-word value: the whole value is $v1.
         _ => (c.to_string(), String::new()),
     }
 }
@@ -2459,7 +4826,95 @@ fn split_v(cond: &str) -> (String, String) {
 /// The comparison operators that take a right-hand operand and aren't symbolic
 /// (so aren't covered by [`is_cmp_op`]). Used only for `$v1`/`$v2` splitting.
 fn is_binary_word_op(op: &str) -> bool {
-    matches!(op.to_ascii_lowercase().as_str(), "isin" | "isincs" | "iswm" | "iswmcs")
+    let (_, op) = split_operator_negation(op);
+    matches!(
+        op.to_ascii_lowercase().as_str(),
+        "isin"
+            | "isincs"
+            | "iswm"
+            | "iswmcs"
+            | "isnum"
+            | "isletter"
+            | "ison"
+            | "isop"
+            | "ishop"
+            | "isvoice"
+            | "isowner"
+            | "isadmin"
+            | "isreg"
+            | "isban"
+    )
+}
+
+/// Word tests that always take a right-hand string. If that value expands to
+/// `$null`, whitespace tokenisation leaves `value operator`; it is still a
+/// binary comparison against an empty string, not a unary test.
+fn is_required_rhs_word_op(op: &str) -> bool {
+    let (_, op) = split_operator_negation(op);
+    matches!(
+        op.to_ascii_lowercase().as_str(),
+        "isin" | "isincs" | "iswm" | "iswmcs"
+    )
+}
+
+fn is_unary_word_op(op: &str) -> bool {
+    let (_, op) = split_operator_negation(op);
+    matches!(
+        op.to_ascii_lowercase().as_str(),
+        "isnum" | "isletter" | "isalnum" | "isalpha" | "islower" | "isupper" | "ischan"
+    )
+}
+
+/// mIRC allows any operator to be negated by prefixing it with `!`. Keep `!=`
+/// as its normal not-equal operator (`=` alone is not a supported base), while
+/// forms such as `!isnum`, `!isop`, `!==`, and `!<` invert their positive test.
+fn split_operator_negation(op: &str) -> (bool, &str) {
+    match op.strip_prefix('!') {
+        Some(base) if is_supported_positive_operator(base) => (true, base),
+        _ => (false, op),
+    }
+}
+
+fn is_supported_operator(op: &str) -> bool {
+    is_supported_positive_operator(op)
+        || op
+            .strip_prefix('!')
+            .is_some_and(is_supported_positive_operator)
+}
+
+fn is_supported_positive_operator(op: &str) -> bool {
+    matches!(
+        op.to_ascii_lowercase().as_str(),
+        "==="
+            | "=="
+            | "!="
+            | "<="
+            | ">="
+            | "<"
+            | ">"
+            | "//"
+            | "\\\\"
+            | "&"
+            | "isin"
+            | "isincs"
+            | "iswm"
+            | "iswmcs"
+            | "isnum"
+            | "isletter"
+            | "isalnum"
+            | "isalpha"
+            | "islower"
+            | "isupper"
+            | "ison"
+            | "isop"
+            | "ishop"
+            | "isvoice"
+            | "isowner"
+            | "isadmin"
+            | "isreg"
+            | "ischan"
+            | "isban"
+    )
 }
 
 /// Reads consecutive ASCII digits as a number (0 if none / on overflow).
@@ -2531,6 +4986,105 @@ fn read_balanced(chars: &[char], i: &mut usize) -> String {
     out
 }
 
+fn encode_delayed(value: &str) -> String {
+    encode_envelope(DELAY_PREFIX, &value.replace(['\r', '\n'], " "))
+}
+
+pub(crate) fn decode_delayed(value: &str) -> String {
+    decode_envelopes(value)
+}
+
+/// Marks the pipes in a file-identifier result as command separators without
+/// making ordinary `|` characters structural. The envelope also keeps the
+/// result intact while it travels through surrounding identifier expansion.
+pub(super) fn encode_command_pipes(value: &str) -> String {
+    if value.contains('|') {
+        encode_envelope(PIPE_PREFIX, value)
+    } else {
+        value.to_string()
+    }
+}
+
+fn encode_envelope(prefix: &str, value: &str) -> String {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    format!(
+        "{prefix}{}{ENVELOPE_END}",
+        URL_SAFE_NO_PAD.encode(value.as_bytes())
+    )
+}
+
+fn decode_payload(encoded: &str) -> Option<String> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    let bytes = URL_SAFE_NO_PAD.decode(encoded).ok()?;
+    String::from_utf8(bytes).ok()
+}
+
+/// Decodes deferred `$unsafe` values for display/execution. Pipe envelopes are
+/// decoded here too so `$timer(name).com` shows the original command; normal
+/// execution extracts their separators first in [`split_command_pipes`].
+fn decode_envelopes(value: &str) -> String {
+    let mut out = String::new();
+    let mut rest = value;
+    while let Some((at, prefix)) = next_envelope(rest) {
+        out.push_str(&rest[..at]);
+        let after_prefix = &rest[at + prefix.len()..];
+        let Some(end) = after_prefix.find(ENVELOPE_END) else {
+            out.push_str(&rest[at..]);
+            return out;
+        };
+        match decode_payload(&after_prefix[..end]) {
+            Some(decoded) => out.push_str(&decoded),
+            None => out.push_str(&rest[at..at + prefix.len() + end + ENVELOPE_END.len_utf8()]),
+        }
+        rest = &after_prefix[end + ENVELOPE_END.len_utf8()..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn next_envelope(value: &str) -> Option<(usize, &'static str)> {
+    [DELAY_PREFIX, PIPE_PREFIX]
+        .into_iter()
+        .filter_map(|prefix| value.find(prefix).map(|at| (at, prefix)))
+        .min_by_key(|(at, _)| *at)
+}
+
+/// Expands only pipe envelopes into structural command segments. Literal pipes
+/// (including those returned without `p`) and `$unsafe` envelopes stay opaque.
+fn split_command_pipes(value: &str) -> Vec<String> {
+    let mut segments = vec![String::new()];
+    let mut rest = value;
+    while let Some(at) = rest.find(PIPE_PREFIX) {
+        segments.last_mut().unwrap().push_str(&rest[..at]);
+        let after_prefix = &rest[at + PIPE_PREFIX.len()..];
+        let Some(end) = after_prefix.find(ENVELOPE_END) else {
+            segments.last_mut().unwrap().push_str(&rest[at..]);
+            return segments;
+        };
+        let Some(decoded) = decode_payload(&after_prefix[..end]) else {
+            segments
+                .last_mut()
+                .unwrap()
+                .push_str(&rest[at..at + PIPE_PREFIX.len() + end + ENVELOPE_END.len_utf8()]);
+            rest = &after_prefix[end + ENVELOPE_END.len_utf8()..];
+            continue;
+        };
+        let mut pieces = decoded.split('|');
+        segments
+            .last_mut()
+            .unwrap()
+            .push_str(pieces.next().unwrap_or_default());
+        for piece in pieces {
+            let previous = segments.last_mut().unwrap();
+            previous.truncate(previous.trim_end().len());
+            segments.push(piece.trim_start().to_string());
+        }
+        rest = &after_prefix[end + ENVELOPE_END.len_utf8()..];
+    }
+    segments.last_mut().unwrap().push_str(rest);
+    segments
+}
+
 /// Splits identifier arguments on top-level commas. Each arg is trimmed (mIRC
 /// tolerates spaces around commas, and much of the engine relies on it), EXCEPT
 /// a whitespace-only arg is kept intact so a deliberate single space survives:
@@ -2574,6 +5128,22 @@ fn split_params(s: &str) -> Vec<String> {
     s.split_whitespace().map(|x| x.to_string()).collect()
 }
 
+/// Converts mIRC's byte-string representation (one character per byte) back
+/// to bytes. Characters outside Latin-1 cannot be represented one-to-one, so
+/// they retain their UTF-8 encoding instead of being truncated.
+pub(crate) fn byte_string_bytes(text: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(text.len());
+    for ch in text.chars() {
+        if (ch as u32) <= 0xff {
+            out.push(ch as u8);
+        } else {
+            let mut buf = [0; 4];
+            out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+        }
+    }
+    out
+}
+
 /// Splits on top-level commas (depth 0), keeping `$id(a,b)` argument commas
 /// intact. Used by `/var %a = 1, %b = $iif(x,y,z)`.
 fn split_top_commas(s: &str) -> Vec<String> {
@@ -2600,8 +5170,9 @@ fn split_top_commas(s: &str) -> Vec<String> {
 
 /// Finds the index of a `:label` within a body (case-insensitive).
 fn find_label(body: &[Stmt], name: &str) -> Option<usize> {
-    body.iter()
-        .position(|s| matches!(s, Stmt::Label(l) if l.eq_ignore_ascii_case(name)))
+    body.iter().position(
+        |s| matches!(s, Stmt::Label { name: label, .. } if label.eq_ignore_ascii_case(name)),
+    )
 }
 
 /// Resolves a script-supplied filename to a path inside the sandbox `dir`,
@@ -2615,30 +5186,47 @@ pub fn sandbox_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
 
 /// Splits text on spaces at parenthesis depth 0, so `$ident(a b c)` (whose
 /// arguments may contain spaces) stays a single token for expansion.
-/// For a dynamic-variable bracket at `outer` (`[` followed by `$+` then `[`),
-/// returns `(inner_content_lo, inner_content_hi, outer_close)` where the inner
-/// `[ … ]` content is `tokens[lo..hi]` and `outer_close` is the closing `]`.
-/// The inner close is matched with a depth counter (so a nested bracket inside
-/// the inner group is handled), and the very next token must be the outer `]`.
-fn dynvar_span(tokens: &[String], outer: usize) -> Option<(usize, usize, usize)> {
-    let inner_open = outer + 2;
-    let mut depth = 0i32;
-    let mut j = inner_open;
-    while j < tokens.len() {
-        match tokens[j].as_str() {
-            "[" => depth += 1,
+#[derive(Clone, Copy)]
+struct EvaluationBracketSpan {
+    open: usize,
+    close: usize,
+    join_left: bool,
+    join_right: bool,
+    depth: usize,
+}
+
+/// Finds the leftmost deepest evaluation-bracket pair. A pair whose first and
+/// last non-empty content tokens are both `$+` is a literal bracket wrapper,
+/// not an evaluation group (`[ $+ value $+ ]`).
+fn evaluation_bracket_span(tokens: &[String]) -> Option<EvaluationBracketSpan> {
+    let mut stack = Vec::new();
+    let mut spans = Vec::new();
+    for (index, token) in tokens.iter().enumerate() {
+        match token.as_str() {
+            "[" => stack.push(index),
             "]" => {
-                depth -= 1;
-                if depth == 0 {
-                    return (tokens.get(j + 1).map(String::as_str) == Some("]"))
-                        .then_some((inner_open + 1, j, j + 1));
+                let Some(open) = stack.pop() else { continue };
+                let content = &tokens[open + 1..index];
+                let first = content.iter().position(|token| !token.is_empty());
+                let last = content.iter().rposition(|token| !token.is_empty());
+                let join_left = first.is_some_and(|i| content[i] == "$+");
+                let join_right = last.is_some_and(|i| content[i] == "$+");
+                if !(join_left && join_right) {
+                    spans.push(EvaluationBracketSpan {
+                        open,
+                        close: index,
+                        join_left,
+                        join_right,
+                        depth: stack.len() + 1,
+                    });
                 }
             }
             _ => {}
         }
-        j += 1;
     }
-    None
+    spans
+        .into_iter()
+        .max_by(|a, b| a.depth.cmp(&b.depth).then_with(|| b.open.cmp(&a.open)))
 }
 
 fn split_top_level(text: &str) -> Vec<String> {
@@ -2659,7 +5247,10 @@ fn split_top_level(text: &str) -> Vec<String> {
             // literal, so `$+` and spaces around plain parens still work.
             '(' if !in_quote
                 && (depth > 0
-                    || cur.chars().last().is_some_and(|p| p.is_alphanumeric() || p == '_' || p == '+')) =>
+                    || cur
+                        .chars()
+                        .last()
+                        .is_some_and(|p| p.is_alphanumeric() || p == '_' || p == '+')) =>
             {
                 depth += 1;
                 cur.push(c);
@@ -2727,8 +5318,14 @@ fn eval_term_with(s: &str, leaf: &dyn Fn(&str) -> Option<bool>) -> bool {
     let s = s.trim();
     // Leading `!` negation: if (!%x), if (!$ident), if (!(a == b)).
     if let Some(rest) = s.strip_prefix('!') {
+        let first = s.split_whitespace().next().unwrap_or("");
+        let starts_with_negated_operator = split_operator_negation(first).0
+            || split_spaceless_op(first)
+                .is_some_and(|(left, op, _)| left.is_empty() && split_operator_negation(op).0);
         // Don't mistake the `!=` operator for a negation prefix.
-        if !rest.starts_with('=') {
+        // Also keep an infix operator whose left operand expanded to `$null`
+        // (`!isnum 2-20`, `!isop #c`, `!<5`) out of this value-negation path.
+        if !rest.starts_with('=') && !starts_with_negated_operator {
             let rest = rest.trim();
             // `!(expr)` or a multi-token expression negates the evaluated boolean.
             // A bare `!operand` negates the operand's *truthiness* — mIRC negates
@@ -2753,12 +5350,21 @@ fn eval_term_with(s: &str, leaf: &dyn Fn(&str) -> Option<bool>) -> bool {
         return b;
     }
     let toks: Vec<&str> = s.split_whitespace().collect();
+    // Expansion can produce multiword values on both sides of an equality
+    // operator. Locate the standalone operator rather than assuming it remains
+    // token two (the GKSSP challenge validator compares byte lists this way).
+    if toks.len() >= 3 {
+        if let Some(i) = toks.iter().position(|tok| is_eq_op(tok)) {
+            return compare(&toks[..i].join(" "), toks[i], &toks[i + 1..].join(" "));
+        }
+    }
     match toks.len() {
         0 => false,
         // A lone comparison operator means both operands expanded to empty
         // (`$null != $null`); compare empty-to-empty rather than reading the bare
         // operator as a truthy string.
-        1 if is_cmp_op(toks[0]) => compare("", toks[0], ""),
+        1 if is_cmp_op(toks[0]) || is_binary_test_op(toks[0]) => compare("", toks[0], ""),
+        1 if is_unary_word_op(toks[0]) => unary_op("", toks[0]),
         // A lone token may be a spaceless comparison (`5==X`); else it's truthy.
         1 => match split_spaceless_op(toks[0]) {
             Some((a, op, b)) => compare(a, op, b),
@@ -2770,8 +5376,10 @@ fn eval_term_with(s: &str, leaf: &dyn Fn(&str) -> Option<bool>) -> bool {
         // split_whitespace drops the empty side. Route a bare comparison
         // operator to `compare` with that empty operand instead of mistaking the
         // whole thing for a (truthy) unary expression.
-        2 if is_cmp_op(toks[1]) => compare(toks[0], toks[1], ""),
-        2 if is_cmp_op(toks[0]) => compare("", toks[0], toks[1]),
+        2 if is_cmp_op(toks[1]) || is_required_rhs_word_op(toks[1]) => {
+            compare(toks[0], toks[1], "")
+        }
+        2 if is_cmp_op(toks[0]) || is_binary_test_op(toks[0]) => compare("", toks[0], toks[1]),
         2 => unary_op(toks[0], toks[1]),
         // 3+ tokens are normally `a OP rest`. But when an operand expands to a
         // multi-word value, an equality test against `$null` (which becomes "")
@@ -2780,7 +5388,13 @@ fn eval_term_with(s: &str, leaf: &dyn Fn(&str) -> Option<bool>) -> bool {
         // `==`/`===`/`!=` as that emptiness test. (`<`/`>` stay positional — they
         // also occur as literal characters, e.g. a `>guest` nick prefix.)
         len if is_eq_op(toks[len - 1]) => compare(&toks[..len - 1].join(" "), toks[len - 1], ""),
-        _ => compare(toks[0], toks[1], &toks[2..].join(" ")),
+        _ if is_binary_test_op(toks[1]) => compare(toks[0], toks[1], &toks[2..].join(" ")),
+        // Expansion can turn a single operand into several words. Unless the
+        // second token is an actual mSL test operator, this is still one
+        // non-empty value (`if (%text)` / `$iif(%text,...)`), not a malformed
+        // comparison. Socket scripts commonly use this while accumulating a
+        // space-separated NAMES list.
+        _ => truthy(s),
     }
 }
 
@@ -2791,18 +5405,39 @@ fn eval_term_with(s: &str, leaf: &dyn Fn(&str) -> Option<bool>) -> bool {
 /// % halfop, + voice).
 fn state_op(state: &crate::irc::state::StateSnapshot, term: &str) -> Option<bool> {
     let toks: Vec<&str> = term.split_whitespace().collect();
-    if toks.len() < 2 {
+    let (a, raw_op, target_from) = if toks.get(1).is_some_and(|op| is_state_word_op(op)) {
+        (toks[0], toks[1], 2)
+    } else if toks.first().is_some_and(|op| is_state_word_op(op)) {
+        // The left operand expanded to `$null`, leaving the operator first.
+        ("", toks[0], 1)
+    } else {
         return None;
-    }
-    let a = toks[0];
-    let op = toks[1].to_ascii_lowercase();
-    let target = toks.get(2..).map(|r| r.join(" ")).unwrap_or_default();
-    // Is `nick` a member of `chan` holding `prefix` (None = any membership)?
-    let member_has = |chan: &str, nick: &str, prefix: Option<char>| -> bool {
-        match state.channels.iter().find(|c| c.name.eq_ignore_ascii_case(chan)) {
+    };
+    let raw_op = raw_op.to_ascii_lowercase();
+    let (negated, op) = split_operator_negation(&raw_op);
+    let target = toks
+        .get(target_from..)
+        .map(|r| r.join(" "))
+        .unwrap_or_default();
+    let find_channel = |name: &str| {
+        let bare = state.isupport.channel_target(name).unwrap_or(name);
+        state
+            .channels
+            .iter()
+            .find(|channel| state.isupport.names_equal(&channel.name, bare))
+    };
+    // Is `nick` a member of `chan` holding the prefix for `mode`? Resolve the
+    // actual character through ISUPPORT: IRC7 uses `.` for owner (`q`) rather
+    // than the common `~`. `None` means any membership.
+    let member_has = |chan: &str, nick: &str, mode: Option<char>| -> bool {
+        let wanted_prefix = mode.and_then(|m| state.isupport.prefix_for_mode(m));
+        if mode.is_some() && wanted_prefix.is_none() {
+            return false;
+        }
+        match find_channel(chan) {
             Some(c) => c.members.iter().any(|(n, pre)| {
-                n.eq_ignore_ascii_case(nick)
-                    && match prefix {
+                state.isupport.names_equal(n, nick)
+                    && match wanted_prefix {
                         Some(p) => pre.contains(p),
                         None => true,
                     }
@@ -2810,55 +5445,102 @@ fn state_op(state: &crate::irc::state::StateSnapshot, term: &str) -> Option<bool
             None => false,
         }
     };
-    match op.as_str() {
+    let result = match op {
         "ison" => Some(member_has(&target, a, None)),
-        "isop" => Some(member_has(&target, a, Some('@'))),
-        "ishop" => Some(member_has(&target, a, Some('%'))),
-        "isvoice" => Some(member_has(&target, a, Some('+'))),
-        "isowner" => Some(member_has(&target, a, Some('~'))),
-        "isadmin" => Some(member_has(&target, a, Some('&'))),
+        "isop" => Some(member_has(&target, a, Some('o'))),
+        "ishop" => Some(member_has(&target, a, Some('h'))),
+        "isvoice" => Some(member_has(&target, a, Some('v'))),
+        "isowner" => Some(member_has(&target, a, Some('q'))),
+        "isadmin" => Some(member_has(&target, a, Some('a'))),
         // `$nick isreg #chan` -> a member of the channel holding no prefix.
-        "isreg" => Some(
-            match state.channels.iter().find(|c| c.name.eq_ignore_ascii_case(&target)) {
-                Some(c) => c.members.iter().any(|(n, pre)| n.eq_ignore_ascii_case(a) && pre.is_empty()),
-                None => false,
-            },
-        ),
+        "isreg" => Some(match find_channel(&target) {
+            Some(c) => c
+                .members
+                .iter()
+                .any(|(n, pre)| state.isupport.names_equal(n, a) && pre.is_empty()),
+            None => false,
+        }),
         // `<mask> isban #chan` -> the value is covered by a +b ban there.
-        "isban" => Some(
-            match state.channels.iter().find(|c| c.name.eq_ignore_ascii_case(&target)) {
-                Some(c) => c.bans.iter().any(|b| b.eq_ignore_ascii_case(a) || wildcard_match(b, a)),
-                None => false,
-            },
-        ),
+        "isban" => Some(match find_channel(&target) {
+            Some(c) => c.bans.iter().any(|b| {
+                let pattern = fold_irc_mask(&state.isupport, b);
+                let value = fold_irc_mask(&state.isupport, a);
+                pattern == value || wildcard_match_cs(&pattern, &value)
+            }),
+            None => false,
+        }),
         // `#chan ischan` -> are we on that channel?
-        "ischan" => Some(state.channels.iter().any(|c| c.name.eq_ignore_ascii_case(a))),
+        "ischan" => Some(find_channel(a).is_some()),
         _ => None,
+    };
+    result.map(|value| if negated { !value } else { value })
+}
+
+fn fold_irc_mask(isupport: &crate::irc::state::Isupport, value: &str) -> String {
+    match value.split_once('!') {
+        Some((nick, rest)) => format!("{}!{}", isupport.casefold(nick), rest.to_ascii_lowercase()),
+        None => isupport.casefold(value),
     }
+}
+
+fn is_state_word_op(op: &str) -> bool {
+    let (_, op) = split_operator_negation(op);
+    matches!(
+        op.to_ascii_lowercase().as_str(),
+        "ison"
+            | "isop"
+            | "ishop"
+            | "isvoice"
+            | "isowner"
+            | "isadmin"
+            | "isreg"
+            | "ischan"
+            | "isban"
+    )
 }
 
 fn truthy(s: &str) -> bool {
     let s = s.trim();
-    !s.is_empty() && s != "0" && !s.eq_ignore_ascii_case("$false") && !s.eq_ignore_ascii_case("false")
+    !s.is_empty()
+        && s != "0"
+        && !s.eq_ignore_ascii_case("$false")
+        && !s.eq_ignore_ascii_case("false")
 }
 
 /// A `v1 op` test where `op` takes no right-hand operand: `isnum`, `isletter`,
 /// `isalnum`, `isalpha`, `islower`, `isupper`.
 fn unary_op(a: &str, op: &str) -> bool {
-    match op.to_ascii_lowercase().as_str() {
+    let lower = op.to_ascii_lowercase();
+    let (negated, op) = split_operator_negation(&lower);
+    let result = match op {
         "isnum" => !a.is_empty() && a.parse::<f64>().is_ok(),
         "isletter" | "isalpha" => !a.is_empty() && a.chars().all(|c| c.is_alphabetic()),
         "isalnum" => !a.is_empty() && a.chars().all(|c| c.is_alphanumeric()),
-        "islower" => !a.is_empty() && a.chars().any(|c| c.is_alphabetic()) && a.chars().all(|c| !c.is_uppercase()),
-        "isupper" => !a.is_empty() && a.chars().any(|c| c.is_alphabetic()) && a.chars().all(|c| !c.is_lowercase()),
+        "islower" => {
+            !a.is_empty()
+                && a.chars().any(|c| c.is_alphabetic())
+                && a.chars().all(|c| !c.is_uppercase())
+        }
+        "isupper" => {
+            !a.is_empty()
+                && a.chars().any(|c| c.is_alphabetic())
+                && a.chars().all(|c| !c.is_lowercase())
+        }
         // A bare two-token expression with an unknown operator: treat as truthy
         // of the whole (mIRC would generally see this as a non-empty string).
         _ => truthy(&format!("{a} {op}")),
+    };
+    if negated {
+        !result
+    } else {
+        result
     }
 }
 
 fn compare(a: &str, op: &str, b: &str) -> bool {
-    match op.to_ascii_lowercase().as_str() {
+    let lower = op.to_ascii_lowercase();
+    let (negated, op) = split_operator_negation(&lower);
+    let result = match op {
         "==" => a.eq_ignore_ascii_case(b),
         "===" => a == b,
         "!=" => !a.eq_ignore_ascii_case(b),
@@ -2911,13 +5593,41 @@ fn compare(a: &str, op: &str, b: &str) -> bool {
             _ => false,
         },
         _ => false,
+    };
+    if negated {
+        !result
+    } else {
+        result
     }
+}
+
+fn is_binary_test_op(op: &str) -> bool {
+    let (_, op) = split_operator_negation(op);
+    matches!(
+        op.to_ascii_lowercase().as_str(),
+        "==" | "==="
+            | "!="
+            | "isin"
+            | "isincs"
+            | "iswm"
+            | "iswmcs"
+            | "isnum"
+            | "isletter"
+            | "//"
+            | "\\\\"
+            | "&"
+            | "<"
+            | ">"
+            | "<="
+            | ">="
+    )
 }
 
 /// True for the exclusively-binary comparison operators (the same set
 /// `split_spaceless_op` recognises). Lets a collapsed comparison with an empty
 /// operand (`%x == $null`) be told apart from a unary `is*` test.
 fn is_cmp_op(op: &str) -> bool {
+    let (_, op) = split_operator_negation(op);
     matches!(op, "===" | "==" | "!=" | "<=" | ">=" | "<" | ">")
 }
 
@@ -2925,6 +5635,7 @@ fn is_cmp_op(op: &str) -> bool {
 /// expanded to a multi-word value — unlike `<`/`>`, which also occur as literal
 /// characters and so can't be assumed to be operators.
 fn is_eq_op(op: &str) -> bool {
+    let (_, op) = split_operator_negation(op);
     matches!(op, "==" | "===" | "!=")
 }
 
@@ -2932,11 +5643,14 @@ fn is_eq_op(op: &str) -> bool {
 /// so mSL's no-space conditions — `if ($2==X)` — compare correctly. Longer
 /// operators are tried first so `===`/`<=`/`>=` aren't mis-split.
 fn split_spaceless_op(s: &str) -> Option<(&str, &'static str, &str)> {
-    for op in ["===", "==", "!=", "<=", ">=", "<", ">"] {
+    for op in [
+        "!===", "!==", "!!=", "!<=", "!>=", "!//", "!\\\\", "!&", "!<", "!>", "===", "==", "!=",
+        "<=", ">=", "//", "\\\\", "&", "<", ">",
+    ] {
         if let Some(idx) = s.find(op) {
-            if idx > 0 {
-                return Some((&s[..idx], op, &s[idx + op.len()..]));
-            }
+            // `idx == 0` is meaningful when the left operand expanded to
+            // `$null` (for example `$null!==x` -> `!==x`).
+            return Some((&s[..idx], op, &s[idx + op.len()..]));
         }
     }
     None
@@ -3013,6 +5727,100 @@ fn split_switches(raw: &str) -> (&str, &str) {
     }
 }
 
+/// Numeric suffix attached to a `/write` switch (`-l5`, `-m2`).
+fn write_numeric_switch(switches: &str, wanted: char) -> Option<u32> {
+    let start = switches.find(wanted)? + wanted.len_utf8();
+    let digits: String = switches[start..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    (!digits.is_empty()).then(|| digits.parse().ok()).flatten()
+}
+
+/// `/write` embeds the search text in the switch token (`-dstest`). Characters
+/// after the first search-mode letter are data, not more switches.
+fn write_control_switches(switches: &str) -> &str {
+    let end = switches
+        .char_indices()
+        .find(|(_, ch)| matches!(ch, 's' | 'w' | 'W' | 'r' | 'R'))
+        .map(|(offset, ch)| offset + ch.len_utf8())
+        .unwrap_or(switches.len());
+    &switches[..end]
+}
+
+/// Search mode and its attached pattern from `/write -sText`, `-w*mask*`,
+/// `-r/regex/`, and their reverse-pattern uppercase variants.
+fn write_search_switch(switches: &str) -> Option<(char, String)> {
+    for (offset, ch) in switches.char_indices() {
+        if matches!(ch, 's' | 'w' | 'W' | 'r' | 'R') {
+            let pattern = switches[offset + ch.len_utf8()..].to_string();
+            if !pattern.is_empty() {
+                return Some((ch, pattern));
+            }
+        }
+    }
+    None
+}
+
+fn hash_text_format(flags: &str) -> super::hash::TextFormat {
+    if flags.contains('i') {
+        super::hash::TextFormat::Ini
+    } else if flags.contains('n') {
+        super::hash::TextFormat::DataOnly
+    } else {
+        super::hash::TextFormat::ItemsAndData
+    }
+}
+
+/// Takes one command argument, accepting mIRC's common quoted-filename form.
+fn take_file_arg(raw: &str) -> Option<(String, &str)> {
+    let raw = raw.trim_start();
+    if raw.is_empty() {
+        return None;
+    }
+    if let Some(quoted) = raw.strip_prefix('"') {
+        let end = quoted.find('"')?;
+        return Some((quoted[..end].to_string(), quoted[end + 1..].trim_start()));
+    }
+    let end = raw.find(char::is_whitespace).unwrap_or(raw.len());
+    Some((raw[..end].to_string(), raw[end..].trim_start()))
+}
+
+/// Extracts the decimal lifetime from a combined mIRC switch token such as
+/// `-snu30`. A bare `-u` has no lifetime and is therefore ignored.
+fn unset_seconds(flags: &str) -> Option<u64> {
+    let mut chars = flags.chars();
+    while let Some(ch) = chars.next() {
+        if ch != 'u' && ch != 'U' {
+            continue;
+        }
+        let digits: String = chars.by_ref().take_while(|c| c.is_ascii_digit()).collect();
+        return digits.parse::<u32>().ok().map(u64::from);
+    }
+    None
+}
+
+/// Applies mIRC's overwrite rule for timed values: an ordinary assignment
+/// cancels the old lifetime, `-uN` replaces it, and `-k` keeps an existing one.
+fn update_timed_expiry<K>(expiries: &mut HashMap<K, TimedExpiry>, key: K, flags: &str)
+where
+    K: std::hash::Hash + Eq,
+{
+    let keep = flags.chars().any(|c| c == 'k' || c == 'K');
+    if keep && expiries.contains_key(&key) {
+        return;
+    }
+    match unset_seconds(flags) {
+        Some(seconds) => {
+            expiries.insert(key, TimedExpiry::after(seconds));
+        }
+        None if !keep => {
+            expiries.remove(&key);
+        }
+        None => {}
+    }
+}
+
 /// Case-insensitive wildcard match supporting `*` and `?`.
 pub fn wildcard_match(pattern: &str, text: &str) -> bool {
     let p: Vec<char> = pattern.to_lowercase().chars().collect();
@@ -3066,6 +5874,86 @@ fn wm_at(p: &[char], t: &[char], prev_space: bool) -> bool {
 mod tests {
     use super::*;
 
+    fn run_ctx<'a>() -> crate::script::RunCtx<'a> {
+        crate::script::RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "irc.example.org",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(Default::default()),
+        }
+    }
+
+    #[test]
+    fn direct_assignment_and_set_scope_match_mirc() {
+        let engine = crate::script::ScriptEngine::new();
+        engine.load(
+            "alias mutate {\n\
+               set %same original-global\n\
+               var %same = original-local\n\
+               %same = direct-local\n\
+               set %same normal-local\n\
+               set -g %same forced-global\n\
+               set -l %only local-only\n\
+               var -g %fromvar = global-from-var\n\
+               %created = 2 + 3\n\
+               set %stem [ $+ .leaf ] via-bracket\n\
+               %stem [ $+ .other ] = 4 + 2\n\
+               msg #c inside=%same only=%only fromvar=%fromvar created=%created leaf=%stem.leaf other=%stem.other\n\
+             }\n\
+             alias report msg #c same=%same only=[ $+ %only $+ ] fromvar=%fromvar created=%created leaf=%stem.leaf other=%stem.other",
+        );
+
+        assert_eq!(
+            engine.run_alias(&run_ctx(), "#c", "mutate", ""),
+            vec![Action::Send(
+                "PRIVMSG #c :inside=normal-local only=local-only fromvar=global-from-var created=5 leaf=via-bracket other=6"
+                    .into()
+            )]
+        );
+        // Routine locals disappear; explicit/global assignments remain.
+        assert_eq!(
+            engine.run_alias(&run_ctx(), "#c", "report", ""),
+            vec![Action::Send(
+                "PRIVMSG #c :same=forced-global only=[] fromvar=global-from-var created=5 leaf=via-bracket other=6".into()
+            )]
+        );
+    }
+
+    #[test]
+    fn nested_evaluation_brackets_and_literal_wrappers_coexist() {
+        let engine = crate::script::ScriptEngine::new();
+        engine.load(
+            "alias t {\n\
+               set %y hello\n\
+               set -n %x % $+ y\n\
+               set %fruit apple\n\
+               var %key = fruit\n\
+               msg #c [ [ %x ] ] % [ $+ [ %key ] ] [ $+ keep $+ ] pre [ $+ $upper(mid) ] [ $upper(end) $+ ] post\n\
+             }",
+        );
+        assert_eq!(
+            engine.run_alias(&run_ctx(), "#c", "t", ""),
+            vec![Action::Send(
+                "PRIVMSG #c :hello apple [keep] preMID ENDpost".into()
+            )]
+        );
+    }
+
+    #[test]
+    fn return_normalizes_spaces_but_returnex_preserves_them() {
+        let engine = crate::script::ScriptEngine::new();
+        engine.load(
+            "alias ordinary { return $+(a,$chr(32),$chr(32),b,$chr(32)) }\n\
+             alias exact { returnex $+(a,$chr(32),$chr(32),b,$chr(32)) }\n\
+             alias t msg #c $+(<,$ordinary,>) $+(<,$exact,>)",
+        );
+        assert_eq!(
+            engine.run_alias(&run_ctx(), "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :<a b> <a  b >".into())]
+        );
+    }
+
     #[test]
     fn wildcard() {
         assert!(wildcard_match("!ping*", "!ping hello"));
@@ -3096,6 +5984,8 @@ mod tests {
         assert!(eval_bool("1 == 1 && 2 == 2"));
         assert!(eval_bool("1 == 2 || 3 == 3"));
         assert!(eval_bool("nonempty"));
+        assert!(eval_bool("a multi word value"));
+        assert!(eval_bool("+Sky +xpulse .Admin_Sky"));
         assert!(!eval_bool("0"));
     }
 
@@ -3104,11 +5994,44 @@ mod tests {
         // isnum, with and without a range
         assert!(eval_bool("5 isnum"));
         assert!(!eval_bool("abc isnum"));
+        assert!(!eval_bool("isalpha")); // empty LHS
+        assert!(eval_bool("!isalpha"));
         assert!(eval_bool("5 isnum 1-10"));
         assert!(!eval_bool("50 isnum 1-10"));
+        // mIRC permits `!` directly on any operator. This is distinct from a
+        // leading `!value` and is used by imported scripts such as i7.mrc.
+        assert!(!eval_bool("5 !isnum 2-20"));
+        assert!(eval_bool("25 !isnum 2-20"));
+        assert!(eval_bool("abc !isnum"));
+        assert!(!eval_bool("x !isin xyz"));
+        assert!(eval_bool("q !isin xyz"));
+        assert!(!eval_bool(". isin")); // RHS expanded to $null
+        assert!(eval_bool(". !isin"));
+        assert!(eval_bool("!isnum 2-20")); // LHS expanded to $null
+        assert!(!eval_bool("5 !< 10"));
+        assert!(eval_bool("15 !< 10"));
+        assert!(eval_bool("!<5"));
+        assert!(!eval_bool("same !== same"));
+        assert!(eval_bool("Same !=== same"));
+        assert!(eval_bool("!==x"));
+        assert!(eval_bool("!===x"));
+        assert!(eval_bool("x !=")); // ordinary != remains unambiguous
+        let challenge_header = "71 75 83 83 80 0 0 0";
+        assert!(!eval_bool(&format!(
+            "{challenge_header} != {challenge_header}"
+        )));
+        assert!(eval_bool(&format!(
+            "{challenge_header} == {challenge_header}"
+        )));
+        assert!(eval_bool("71 75 83 83 80 0 0 0 != 71 75 83 83 80 0 0 1"));
+        assert_eq!(
+            split_v(&format!("{challenge_header} != {challenge_header}")),
+            (challenge_header.into(), challenge_header.into())
+        );
         // letter / alnum classes
         assert!(eval_bool("abc isletter"));
         assert!(!eval_bool("ab2 isletter"));
+        assert!(eval_bool("ab2 !isalpha"));
         assert!(eval_bool("b isletter abc"));
         assert!(!eval_bool("z isletter abc"));
         assert!(eval_bool("abc123 isalnum"));
@@ -3116,6 +6039,8 @@ mod tests {
         assert!(eval_bool("abc islower"));
         assert!(eval_bool("ABC isupper"));
         assert!(!eval_bool("Abc islower"));
+        assert_eq!(split_v("!isnum 2-20"), (String::new(), "2-20".into()));
+        assert_eq!(split_v(". !isin"), (".".into(), String::new()));
         // case sensitivity
         assert!(eval_bool("ABC isincs xABCy"));
         assert!(!eval_bool("abc isincs xABCy"));
@@ -3140,7 +6065,10 @@ mod tests {
         // truthy unary expression.
         assert!(!eval_bool("abc =="), "nonempty == $null must be false");
         assert!(eval_bool("abc !="), "nonempty != $null must be true");
-        assert!(!eval_bool("abc <"), "nonempty < $null (empty !numeric) is false");
+        assert!(
+            !eval_bool("abc <"),
+            "nonempty < $null (empty !numeric) is false"
+        );
         // The operand that expanded to empty may be on the left, too.
         assert!(!eval_bool("== abc"));
         assert!(eval_bool("!= abc"));
@@ -3185,6 +6113,9 @@ mod tests {
     fn top_level_commas() {
         assert_eq!(split_top_commas("a, b, c"), vec!["a", " b", " c"]);
         // commas inside an identifier's args are not split points
-        assert_eq!(split_top_commas("%x = $iif(a,b,c)"), vec!["%x = $iif(a,b,c)"]);
+        assert_eq!(
+            split_top_commas("%x = $iif(a,b,c)"),
+            vec!["%x = $iif(a,b,c)"]
+        );
     }
 }

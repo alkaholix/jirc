@@ -121,7 +121,7 @@ pub fn ircx_claim_owner(
     let mask = snap
         .ial
         .iter()
-        .find(|(n, _)| n.eq_ignore_ascii_case(&snap.nick))
+        .find(|(n, _)| snap.isupport.names_equal(n, &snap.nick))
         .and_then(|(_, addr)| username_of(addr))
         .map(|u| format!("*!{u}@*"))
         .ok_or("don't know our own username yet — try once the channel's names are in")?;
@@ -169,7 +169,10 @@ pub fn ircx_owner_protect(
     }
     manager.send(&server_id, format!("MODE {nick} +h {}", stored.ownerkey))?;
     manager.send(&server_id, format!("ACCESS {channel} CLEAR OWNER"))?;
-    manager.send(&server_id, format!("KICK {channel} {offender} :owner protection"))?;
+    manager.send(
+        &server_id,
+        format!("KICK {channel} {offender} :owner protection"),
+    )?;
     Ok(())
 }
 
@@ -205,7 +208,15 @@ mod tests {
     fn store_round_trips() {
         let store = IrcxKeyStore::new();
         assert!(store.get("net", "%#c").is_none());
-        store.set("net", "%#c", ChannelKeys { ownerkey: "o".into(), hostkey: "h".into(), updated: 1 });
+        store.set(
+            "net",
+            "%#c",
+            ChannelKeys {
+                ownerkey: "o".into(),
+                hostkey: "h".into(),
+                updated: 1,
+            },
+        );
         let got = store.get("net", "%#c").unwrap();
         assert_eq!((got.ownerkey.as_str(), got.hostkey.as_str()), ("o", "h"));
     }

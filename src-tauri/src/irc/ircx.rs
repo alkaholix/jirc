@@ -152,7 +152,10 @@ mod tests {
             .collect();
         match numeric_event("s", 818, &args).unwrap() {
             UiEvent::IrcxProp {
-                object, name, value, ..
+                object,
+                name,
+                value,
+                ..
             } => {
                 assert_eq!(object, "#chan");
                 assert_eq!(name, "TOPIC");
@@ -173,10 +176,16 @@ mod tests {
 
     #[test]
     fn whisper_parsed() {
-        let args: Vec<String> = ["#chan", "me", "secret"].iter().map(|s| s.to_string()).collect();
+        let args: Vec<String> = ["#chan", "me", "secret"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         match raw_event("s", Some("bob".into()), "WHISPER", &args).unwrap() {
             UiEvent::Whisper {
-                from, channel, text, ..
+                from,
+                channel,
+                text,
+                ..
             } => {
                 assert_eq!(from.as_deref(), Some("bob"));
                 assert_eq!(channel, "#chan");

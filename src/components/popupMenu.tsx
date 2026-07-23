@@ -17,7 +17,7 @@ function LabelText({ text }: { text: string }) {
 /** A popup item with children — its flyout opens left when it would otherwise run
  *  off the right edge of the window. (Labels arrive already evaluated from the
  *  engine, so this is pure rendering.) */
-export function SubMenu({ item, onRun }: { item: PopupItem; onRun: (command: string) => void }) {
+export function SubMenu({ item, onRun }: { item: PopupItem; onRun: (item: PopupItem) => void }) {
   const subRef = useRef<HTMLDivElement>(null);
   const [flipLeft, setFlipLeft] = useState(false);
 
@@ -44,7 +44,7 @@ export function SubMenu({ item, onRun }: { item: PopupItem; onRun: (command: str
 /** Recursively renders script-defined popup items. `$style` from the engine
  *  surfaces as `checked` (a ✓) and `disabled` (greyed, non-selectable — which
  *  also blocks a submenu from opening, matching mIRC). */
-export function PopupItems({ items, onRun }: { items: PopupItem[]; onRun: (command: string) => void }) {
+export function PopupItems({ items, onRun }: { items: PopupItem[]; onRun: (item: PopupItem) => void }) {
   return (
     <>
       {items.map((item, i) => {
@@ -63,7 +63,7 @@ export function PopupItems({ items, onRun }: { items: PopupItem[]; onRun: (comma
           );
         if (item.children.length > 0) return <SubMenu key={i} item={item} onRun={onRun} />;
         return (
-          <button key={i} onClick={() => onRun(item.command)}>
+          <button key={i} onClick={() => onRun(item)}>
             {label}
           </button>
         );

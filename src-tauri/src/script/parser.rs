@@ -7,27 +7,70 @@
 
 use super::ast::{Alias, Dialog, DialogControl, Event, Popup, PopupItem, Script, Stmt};
 
+/// A physical newline consumed by `$&` continuation. It remains whitespace to
+/// the parser, but unlike a normal `\n` it does not terminate the statement.
+/// Counting it in `Cursor::line()` keeps `$scriptline` on physical file lines.
+const CONTINUATION_BREAK: char = '\u{2028}';
+
 const MATCHTEXT_EVENTS: &[&str] = &[
-    "TEXT", "ACTION", "NOTICE", "SNOTICE", "WALLOPS", "ERROR", "CTCP", "CTCPREPLY", "RAW",
+    "TEXT",
+    "ACTION",
+    "NOTICE",
+    "SNOTICE",
+    "WALLOPS",
+    "ERROR",
+    "CTCP",
+    "CTCPREPLY",
+    "RAW",
+    "PARSELINE",
+    "CHAT",
+    "FILESENT",
+    "FILERCVD",
+    "GETFAIL",
+    "SENDFAIL",
 ];
 
 /// Matchtext events with NO `*#?` target field — `on EVENT:<matchtext>:<cmd>`.
-const NO_TARGET_MATCHTEXT: &[&str] = &["RAW", "WALLOPS", "SNOTICE", "ERROR"];
+const NO_TARGET_MATCHTEXT: &[&str] = &[
+    "RAW",
+    "WALLOPS",
+    "SNOTICE",
+    "ERROR",
+    "CTCPREPLY",
+    "CHAT",
+    "FILESENT",
+    "FILERCVD",
+    "GETFAIL",
+    "SENDFAIL",
+];
 
 /// Events with neither a matchtext nor a target — `on EVENT:<cmd>`.
-const PLAIN_EVENTS: &[&str] =
-    &["CONNECT", "DISCONNECT", "CONNECTFAIL", "PING", "PONG", "NOTIFY", "UNOTIFY"];
+const PLAIN_EVENTS: &[&str] = &[
+    "CONNECT",
+    "DISCONNECT",
+    "CONNECTFAIL",
+    "PING",
+    "PONG",
+    "NOTIFY",
+    "UNOTIFY",
+];
 
 struct Cursor {
     chars: Vec<char>,
     pos: usize,
+    base_line: usize,
 }
 
 impl Cursor {
     fn new(s: &str) -> Self {
+        Self::new_at(s, 1)
+    }
+
+    fn new_at(s: &str, base_line: usize) -> Self {
         Cursor {
-            chars: s.chars().collect(),
+            chars: preprocess_source(s).chars().collect(),
             pos: 0,
+            base_line,
         }
     }
 
@@ -45,6 +88,14 @@ impl Cursor {
 
     fn eof(&self) -> bool {
         self.pos >= self.chars.len()
+    }
+
+    fn line(&self) -> usize {
+        self.base_line
+            + self.chars[..self.pos]
+                .iter()
+                .filter(|c| matches!(**c, '\n' | CONTINUATION_BREAK))
+                .count()
     }
 
     /// Skips spaces/tabs/newlines, statement separators (`|`), and `;` comments.
@@ -160,6 +211,88 @@ impl Cursor {
     }
 }
 
+/// Applies mIRC's source-level forms before structural parsing:
+///
+/// - `/* ... */` comments are ignored, including any braces, pipes, or commands
+///   inside them.
+/// - a physical line ending in the standalone `$&` identifier is continued on the following
+///   physical line. The indentation before the continuation text is source
+///   formatting, so the two pieces are joined with one token-separating space.
+///
+/// Block comments are removed before continuations are folded so a `$&` inside a
+/// comment cannot affect the surrounding script.
+fn preprocess_source(src: &str) -> String {
+    fold_line_continuations(&strip_block_comments(src))
+}
+
+fn strip_block_comments(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut chars = src.chars().peekable();
+    let mut in_comment = false;
+
+    while let Some(c) = chars.next() {
+        if in_comment {
+            if c == '*' && chars.peek() == Some(&'/') {
+                chars.next();
+                in_comment = false;
+            } else if c == '\n' {
+                // Keep physical line numbering intact for `$scriptline` while
+                // still discarding every executable character in the comment.
+                out.push('\n');
+            }
+            continue;
+        }
+        if c == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            in_comment = true;
+            continue;
+        }
+        out.push(c);
+    }
+
+    out
+}
+
+fn fold_line_continuations(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut continuing = false;
+
+    for physical in src.split_inclusive('\n') {
+        let has_newline = physical.ends_with('\n');
+        let line = physical.strip_suffix('\n').unwrap_or(physical);
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        let line = if continuing {
+            line.trim_start_matches([' ', '\t'])
+        } else {
+            line
+        };
+        let trimmed = line.trim_end_matches([' ', '\t']);
+        let marker = trimmed
+            .strip_suffix("$&")
+            .filter(|before| before.is_empty() || before.ends_with(char::is_whitespace));
+
+        if continuing && !line.is_empty() && !out.ends_with(char::is_whitespace) {
+            out.push(' ');
+        }
+
+        if let Some(before) = marker {
+            out.push_str(before.trim_end_matches([' ', '\t']));
+            if has_newline {
+                out.push(CONTINUATION_BREAK);
+            }
+            continuing = true;
+        } else {
+            out.push_str(line);
+            continuing = false;
+            if has_newline {
+                out.push('\n');
+            }
+        }
+    }
+
+    out
+}
+
 /// Parses full script text.
 pub fn parse(src: &str) -> Script {
     let mut script = Script::default();
@@ -172,6 +305,7 @@ pub fn parse(src: &str) -> Script {
         if cur.eof() {
             break;
         }
+        let source_line = cur.line();
         // `#name on|off|end` — a group marker (a range, not a braced block).
         if cur.peek() == Some('#') {
             cur.pos += 1;
@@ -202,16 +336,48 @@ pub fn parse(src: &str) -> Script {
                     }
                     cur.skip_inline_ws();
                 }
-                let name = cur.read_nonspace();
+                // mIRC accepts both `alias name ...` and `alias /name ...`.
+                // Store the callable name without the command prefix so
+                // function-key aliases such as `/F1`, `/sF2`, and `/cF3` are
+                // resolved the same way as ordinary aliases.
+                let name = cur.read_nonspace().trim_start_matches('/').to_string();
                 cur.skip_inline_ws();
                 if cur.peek() == Some('{') {
+                    let body_line = cur.line();
                     let body = cur.read_block();
                     script.aliases.push(Alias {
                         name,
-                        body: parse_stmts(&body),
+                        body: parse_stmts_at(&body, body_line),
                         local,
                         group: current_group.clone(),
+                        source: String::new(),
+                        source_line,
                     });
+                } else {
+                    // Remote scripts may define a single-line alias without a
+                    // brace block: `alias hello echo -a Hello`. Keep the whole
+                    // command tail as its body (including any `|` commands).
+                    // `read_statement_text()` stops at a pipe, so consume the
+                    // physical line here and let `parse_stmts()` split it.
+                    let mut command = String::new();
+                    while let Some(c) = cur.peek() {
+                        if c == '\n' {
+                            break;
+                        }
+                        command.push(c);
+                        cur.pos += 1;
+                    }
+                    let command = command.trim();
+                    if !name.is_empty() && !command.is_empty() {
+                        script.aliases.push(Alias {
+                            name,
+                            body: parse_stmts_at(command, source_line),
+                            local,
+                            group: current_group.clone(),
+                            source: String::new(),
+                            source_line,
+                        });
+                    }
                 }
             }
             "on" => {
@@ -231,14 +397,19 @@ pub fn parse(src: &str) -> Script {
                     cur.pos += 1;
                 }
                 if hit_brace {
+                    let body_line = cur.line();
                     let body = cur.read_block();
-                    if let Some(mut ev) = parse_event_header(&header, parse_stmts(&body)) {
+                    if let Some(mut ev) =
+                        parse_event_header(&header, parse_stmts_at(&body, body_line))
+                    {
                         ev.group = current_group.clone();
+                        ev.source_line = source_line;
                         script.events.push(ev);
                     }
-                } else if let Some(mut ev) = parse_braceless_event(&header) {
+                } else if let Some(mut ev) = parse_braceless_event(&header, source_line) {
                     // A one-liner: `on *:TEXT:!cmd:#:/msg $chan hi`.
                     ev.group = current_group.clone();
+                    ev.source_line = source_line;
                     script.events.push(ev);
                 } else {
                     // No command tail and no brace on this line: the body's `{`
@@ -253,12 +424,51 @@ pub fn parse(src: &str) -> Script {
                         cur.pos += 1;
                     }
                     if cur.peek() == Some('{') {
+                        let body_line = cur.line();
                         let body = cur.read_block();
-                        if let Some(mut ev) = parse_event_header(&header, parse_stmts(&body)) {
+                        if let Some(mut ev) =
+                            parse_event_header(&header, parse_stmts_at(&body, body_line))
+                        {
                             ev.group = current_group.clone();
+                            ev.source_line = source_line;
                             script.events.push(ev);
                         }
                     }
+                }
+            }
+            "raw" | "ctcp" => {
+                // Standard mIRC remote definitions:
+                //   raw <command>:<matchtext>:{ commands }
+                //   ctcp <level>:<matchtext>:<target>:{ commands }
+                // Their one-line forms use the final colon-delimited field as
+                // the command. Keep these as normal Event nodes so dispatch and
+                // access/group handling are shared with `on` events.
+                let mut header = String::new();
+                let mut hit_brace = false;
+                while let Some(c) = cur.peek() {
+                    if c == '{' {
+                        hit_brace = true;
+                        break;
+                    }
+                    if c == '\n' {
+                        break;
+                    }
+                    header.push(c);
+                    cur.pos += 1;
+                }
+                let body = hit_brace.then(|| {
+                    let body_line = cur.line();
+                    parse_stmts_at(&cur.read_block(), body_line)
+                });
+                let parsed = if word.eq_ignore_ascii_case("raw") {
+                    parse_raw_definition(&header, body, source_line)
+                } else {
+                    parse_ctcp_definition(&header, body, source_line)
+                };
+                if let Some(mut ev) = parsed {
+                    ev.group = current_group.clone();
+                    ev.source_line = source_line;
+                    script.events.push(ev);
                 }
             }
             "menu" => {
@@ -336,30 +546,55 @@ impl Cursor {
 
 fn parse_event_header(header: &str, body: Vec<Stmt>) -> Option<Event> {
     // header like " *:TEXT:*:#:"
-    let fields: Vec<&str> = header.trim().split(':').map(|f| f.trim()).collect();
-    if fields.len() < 2 {
-        return None;
-    }
-    let level = fields[0].to_string();
-    let kind = fields[1].to_ascii_uppercase();
-    let (pattern, target) = if MATCHTEXT_EVENTS.contains(&kind.as_str()) {
+    let (me_only, header) = strip_me_event_prefix(header);
+    let (base_level, tail) = header.split_once(':')?;
+    let level = if me_only {
+        format!("me:{}", base_level.trim())
+    } else {
+        base_level.trim().to_string()
+    };
+    let (kind, rest) = tail.split_once(':').unwrap_or((tail, ""));
+    let kind = kind.trim().to_ascii_uppercase();
+    let regex_match = base_level.contains('$');
+    let (pattern, selector, target) = if kind == "RAW" {
+        let selector = rest.split_once(':').map_or(rest, |(value, _)| value);
+        ("*".to_string(), selector.trim().to_string(), String::new())
+    } else if kind == "PARSELINE" {
+        // on *:PARSELINE:<in|out|*>:<matchtext>:{ ... }
+        // Keep the direction in `target` and the line matcher in `pattern`.
+        let (direction, match_rest) = rest.split_once(':').unwrap_or((rest, "*"));
+        let (pattern, _) = split_matchtext_field(match_rest, regex_match);
         (
-            fields.get(2).copied().unwrap_or("").to_string(),
-            fields.get(3).copied().unwrap_or("").to_string(),
+            pattern.trim().to_string(),
+            String::new(),
+            direction.trim().to_ascii_lowercase(),
+        )
+    } else if MATCHTEXT_EVENTS.contains(&kind.as_str()) {
+        let (pattern, tail) = split_matchtext_field(rest, regex_match);
+        let target = if NO_TARGET_MATCHTEXT.contains(&kind.as_str()) {
+            ""
+        } else {
+            tail.split_once(':').map_or(tail, |(value, _)| value)
+        };
+        (
+            pattern.trim().to_string(),
+            String::new(),
+            target.trim().to_string(),
         )
     } else {
-        (
-            String::new(),
-            fields.get(2).copied().unwrap_or("").to_string(),
-        )
+        let target = rest.split_once(':').map_or(rest, |(value, _)| value);
+        (String::new(), String::new(), target.trim().to_string())
     };
     Some(Event {
         level,
         kind,
         pattern,
+        selector,
         target,
         body,
         group: None,
+        source: String::new(),
+        source_line: 0,
     })
 }
 
@@ -368,9 +603,15 @@ fn parse_event_header(header: &str, body: Vec<Stmt>) -> Option<Event> {
 /// there is no command tail, so the caller can fall back to a `{` on a later
 /// line. `splitn` is used so colons inside the command (timestamps, URLs) are
 /// preserved.
-fn parse_braceless_event(header: &str) -> Option<Event> {
-    let mut top = header.trim().splitn(2, ':');
-    let level = top.next()?.trim().to_string();
+fn parse_braceless_event(header: &str, source_line: usize) -> Option<Event> {
+    let (me_only, header) = strip_me_event_prefix(header);
+    let mut top = header.splitn(2, ':');
+    let base_level = top.next()?.trim();
+    let level = if me_only {
+        format!("me:{base_level}")
+    } else {
+        base_level.to_string()
+    };
     let after_level = top.next()?;
     let mut ev = after_level.splitn(2, ':');
     let kind = ev.next()?.trim().to_ascii_uppercase();
@@ -378,22 +619,59 @@ fn parse_braceless_event(header: &str) -> Option<Event> {
         return None;
     }
     let rest = ev.next().unwrap_or("");
-    let (pattern, target, command) = if NO_TARGET_MATCHTEXT.contains(&kind.as_str()) {
-        // on *:RAW|WALLOPS|SNOTICE|ERROR:<matchtext>:<command> — no target field.
+    let regex_match = base_level.contains('$');
+    let (pattern, selector, target, command) = if kind == "RAW" {
+        // Existing jIRC compatibility form: `on *:RAW:001:<command>`.
         let mut p = rest.splitn(2, ':');
-        let matchtext = p.next().unwrap_or("").trim().to_string();
+        let selector = p.next().unwrap_or("").trim().to_string();
         let command = p.next().unwrap_or("").trim().to_string();
-        (matchtext, String::new(), command)
+        ("*".to_string(), selector, String::new(), command)
+    } else if kind == "PARSELINE" {
+        let mut p = rest.splitn(2, ':');
+        let direction = p.next().unwrap_or("").trim().to_ascii_lowercase();
+        let match_and_command = p.next().unwrap_or("");
+        let (matchtext, command) = split_matchtext_field(match_and_command, regex_match);
+        (
+            matchtext.trim().to_string(),
+            String::new(),
+            direction,
+            command.trim().to_string(),
+        )
+    } else if kind == "CTCPREPLY" {
+        // Standard CTCPREPLY has no target field. Also retain the historical
+        // jIRC targetful form (`...:PING*:?:command`) for compatibility.
+        let (matchtext, tail) = split_matchtext_field(rest, regex_match);
+        let matchtext = matchtext.trim().to_string();
+        let tail = tail.trim();
+        let (target, command) = match tail.split_once(':') {
+            Some((candidate, command)) if is_legacy_event_target(candidate.trim()) => {
+                (candidate.trim().to_string(), command.trim().to_string())
+            }
+            _ => (String::new(), tail.to_string()),
+        };
+        (matchtext, String::new(), target, command)
+    } else if NO_TARGET_MATCHTEXT.contains(&kind.as_str()) {
+        // on *:RAW|WALLOPS|SNOTICE|ERROR:<matchtext>:<command> — no target field.
+        let (matchtext, command) = split_matchtext_field(rest, regex_match);
+        let matchtext = matchtext.trim().to_string();
+        let command = command.trim().to_string();
+        (matchtext, String::new(), String::new(), command)
     } else if MATCHTEXT_EVENTS.contains(&kind.as_str()) {
         // on *:TEXT|NOTICE|CTCP|…:<matchtext>:<*#?>:<command>.
-        let mut p = rest.splitn(3, ':');
-        let matchtext = p.next().unwrap_or("").trim().to_string();
+        let (matchtext, tail) = split_matchtext_field(rest, regex_match);
+        let mut p = tail.splitn(2, ':');
+        let matchtext = matchtext.trim().to_string();
         let target = p.next().unwrap_or("").trim().to_string();
         let command = p.next().unwrap_or("").trim().to_string();
-        (matchtext, target, command)
+        (matchtext, String::new(), target, command)
     } else if PLAIN_EVENTS.contains(&kind.as_str()) {
         // on *:CONNECT|PING|…:<command> — no matchtext, no target.
-        (String::new(), String::new(), rest.trim().to_string())
+        (
+            String::new(),
+            String::new(),
+            String::new(),
+            rest.trim().to_string(),
+        )
     } else if kind == "OPEN" {
         // on *:OPEN:<type>:<matchtext>:<command> — the window type is the target,
         // the matchtext matches the opening message. Note the reversed field
@@ -402,13 +680,13 @@ fn parse_braceless_event(header: &str) -> Option<Event> {
         let target = p.next().unwrap_or("").trim().to_string();
         let matchtext = p.next().unwrap_or("").trim().to_string();
         let command = p.next().unwrap_or("").trim().to_string();
-        (matchtext, target, command)
+        (matchtext, String::new(), target, command)
     } else {
         // on *:JOIN|PART|…:<target>:<command> — channel target, no matchtext.
         let mut p = rest.splitn(2, ':');
         let target = p.next().unwrap_or("").trim().to_string();
         let command = p.next().unwrap_or("").trim().to_string();
-        (String::new(), target, command)
+        (String::new(), String::new(), target, command)
     };
     if command.is_empty() {
         return None;
@@ -417,9 +695,135 @@ fn parse_braceless_event(header: &str) -> Option<Event> {
         level,
         kind,
         pattern,
+        selector,
         target,
-        body: parse_body(&command),
+        body: parse_stmts_at(&command, source_line),
         group: None,
+        source: String::new(),
+        source_line: 0,
+    })
+}
+
+/// `on me:<level>:EVENT:...` has one extra header field. Keep `me:` encoded in
+/// the Event level so dispatch can apply the self-only gate without expanding
+/// the AST for every other event form.
+fn strip_me_event_prefix(header: &str) -> (bool, &str) {
+    let header = header.trim();
+    match header.get(..3) {
+        Some(prefix) if prefix.eq_ignore_ascii_case("me:") => (true, &header[3..]),
+        _ => (false, header),
+    }
+}
+
+/// Splits an event matchtext from its remaining `:target:command` fields. For
+/// `$` events, colons inside the required `/pattern/flags` form are data rather
+/// than header separators.
+fn split_matchtext_field(rest: &str, regex_match: bool) -> (&str, &str) {
+    if regex_match {
+        let leading = rest.len() - rest.trim_start().len();
+        let value = &rest[leading..];
+        let slash = if value.starts_with("m/") {
+            1
+        } else if value.starts_with('/') {
+            0
+        } else {
+            usize::MAX
+        };
+        if slash != usize::MAX {
+            let mut escaped = false;
+            let mut closed = false;
+            for (offset, ch) in value.char_indices().skip(slash + 1) {
+                if ch == '\\' {
+                    escaped = !escaped;
+                    continue;
+                }
+                if ch == '/' && !escaped {
+                    closed = true;
+                    continue;
+                }
+                if ch == ':' && closed {
+                    let split = leading + offset;
+                    return (&rest[..split], &rest[split + 1..]);
+                }
+                escaped = false;
+            }
+        }
+    }
+    rest.split_once(':').unwrap_or((rest, ""))
+}
+
+fn is_legacy_event_target(value: &str) -> bool {
+    matches!(value, "*" | "?" | "#" | "=" | "!" | "@") || value.starts_with(['#', '&', '+', '%'])
+}
+
+fn parse_raw_definition(
+    header: &str,
+    body: Option<Vec<Stmt>>,
+    source_line: usize,
+) -> Option<Event> {
+    let mut fields = header.trim().splitn(3, ':');
+    let selector = fields.next()?.trim().to_ascii_uppercase();
+    let pattern = fields.next().unwrap_or("*").trim().to_string();
+    if selector.is_empty() {
+        return None;
+    }
+    let body = match body {
+        Some(body) => body,
+        None => {
+            let command = fields.next().unwrap_or("").trim();
+            if command.is_empty() {
+                return None;
+            }
+            parse_stmts_at(command, source_line)
+        }
+    };
+    Some(Event {
+        level: "*".to_string(),
+        kind: "RAW".to_string(),
+        pattern,
+        selector,
+        target: String::new(),
+        body,
+        group: None,
+        source: String::new(),
+        source_line: 0,
+    })
+}
+
+fn parse_ctcp_definition(
+    header: &str,
+    body: Option<Vec<Stmt>>,
+    source_line: usize,
+) -> Option<Event> {
+    let (level, rest) = header.trim().split_once(':')?;
+    let (pattern, rest) = split_matchtext_field(rest, level.contains('$'));
+    let (target, command) = rest.split_once(':').unwrap_or((rest, ""));
+    let level = level.trim().to_string();
+    let pattern = pattern.trim().to_string();
+    let target = target.trim().to_string();
+    if level.is_empty() || pattern.is_empty() || target.is_empty() {
+        return None;
+    }
+    let body = match body {
+        Some(body) => body,
+        None => {
+            let command = command.trim();
+            if command.is_empty() {
+                return None;
+            }
+            parse_stmts_at(command, source_line)
+        }
+    };
+    Some(Event {
+        level,
+        kind: "CTCP".to_string(),
+        pattern,
+        selector: String::new(),
+        target,
+        body,
+        group: None,
+        source: String::new(),
+        source_line: 0,
     })
 }
 
@@ -480,14 +884,23 @@ fn parse_dialog(name: String, src: &str) -> Dialog {
             dialog.title = toks.get(1..).map(|r| r.join(" ")).unwrap_or_default();
             continue;
         }
-        if !matches!(kind.as_str(), "text" | "edit" | "editbox" | "button" | "check" | "combo" | "list") {
+        if !matches!(
+            kind.as_str(),
+            "text" | "edit" | "editbox" | "button" | "check" | "combo" | "list"
+        ) {
             continue;
         }
-        let Some(id) = toks.get(1).cloned() else { continue };
+        let Some(id) = toks.get(1).cloned() else {
+            continue;
+        };
         let rest = &toks[2.min(toks.len())..];
         let default = rest.iter().any(|t| t.eq_ignore_ascii_case(":default"));
         let cancel = rest.iter().any(|t| t.eq_ignore_ascii_case(":cancel"));
-        let plain: Vec<String> = rest.iter().filter(|t| !t.starts_with(':')).cloned().collect();
+        let plain: Vec<String> = rest
+            .iter()
+            .filter(|t| !t.starts_with(':'))
+            .cloned()
+            .collect();
         let (label, options) = if kind == "combo" || kind == "list" {
             (String::new(), plain)
         } else {
@@ -527,6 +940,7 @@ fn parse_popup_body(src: &str) -> Vec<PopupItem> {
                     separator: true,
                     checked: false,
                     disabled: false,
+                    source: String::new(),
                     children: Vec::new(),
                 },
             ));
@@ -541,6 +955,7 @@ fn parse_popup_body(src: &str) -> Vec<PopupItem> {
                 separator: false,
                 checked: false,
                 disabled: false,
+                source: String::new(),
                 children: Vec::new(),
             },
         ));
@@ -593,10 +1008,16 @@ fn split_popup_item(rest: &str) -> (String, String) {
     if brace_first {
         let bi = brace.unwrap();
         let close = rest.rfind('}').filter(|&c| c > bi).unwrap_or(rest.len());
-        (rest[..bi].trim().to_string(), rest[bi + 1..close].trim().to_string())
+        (
+            rest[..bi].trim().to_string(),
+            rest[bi + 1..close].trim().to_string(),
+        )
     } else if let Some(ci) = colon {
         // `Label : command`; if the command is wrapped in `{ … }`, drop them.
-        (rest[..ci].trim().to_string(), strip_wrapping_braces(rest[ci + 1..].trim()).to_string())
+        (
+            rest[..ci].trim().to_string(),
+            strip_wrapping_braces(rest[ci + 1..].trim()).to_string(),
+        )
     } else {
         (rest.to_string(), String::new())
     }
@@ -649,7 +1070,11 @@ fn assemble_popup(flat: &[(usize, PopupItem)], idx: &mut usize, depth: usize) ->
 
 /// Parses a body into a list of statements.
 fn parse_stmts(src: &str) -> Vec<Stmt> {
-    let mut cur = Cursor::new(src);
+    parse_stmts_at(src, 1)
+}
+
+fn parse_stmts_at(src: &str, base_line: usize) -> Vec<Stmt> {
+    let mut cur = Cursor::new_at(src, base_line);
     parse_stmts_cursor(&mut cur)
 }
 
@@ -660,22 +1085,23 @@ fn parse_stmts_cursor(cur: &mut Cursor) -> Vec<Stmt> {
         if cur.eof() {
             break;
         }
+        let line = cur.line();
         let kw = cur.peek_word().to_ascii_lowercase();
         match kw.as_str() {
             "if" => {
-                if let Some(s) = parse_if(cur) {
+                if let Some(s) = parse_if(cur, line) {
                     stmts.push(s);
                 }
             }
             "while" => {
-                if let Some(s) = parse_while(cur) {
+                if let Some(s) = parse_while(cur, line) {
                     stmts.push(s);
                 }
             }
             "elseif" | "else" => break, // handled by the enclosing if
             _ => {
                 let text = cur.read_statement_text();
-                if let Some(stmt) = parse_command(&text) {
+                if let Some(stmt) = parse_command(&text, line) {
                     stmts.push(stmt);
                 }
             }
@@ -684,7 +1110,8 @@ fn parse_stmts_cursor(cur: &mut Cursor) -> Vec<Stmt> {
     stmts
 }
 
-fn parse_command(text: &str) -> Option<Stmt> {
+fn parse_command(text: &str, line: usize) -> Option<Stmt> {
+    let text = text.replace(CONTINUATION_BREAK, " ");
     let text = text.trim();
     if text.is_empty() {
         return None;
@@ -695,17 +1122,17 @@ fn parse_command(text: &str) -> Option<Stmt> {
         if label.is_empty() {
             return None;
         }
-        return Some(Stmt::Label(label));
+        return Some(Stmt::Label { name: label, line });
     }
     let rest = text.strip_prefix('/').unwrap_or(text);
     let (name, args) = match rest.split_once(char::is_whitespace) {
         Some((n, a)) => (n.to_string(), a.trim().to_string()),
         None => (rest.to_string(), String::new()),
     };
-    Some(Stmt::Command { name, args })
+    Some(Stmt::Command { name, args, line })
 }
 
-fn parse_if(cur: &mut Cursor) -> Option<Stmt> {
+fn parse_if(cur: &mut Cursor, line: usize) -> Option<Stmt> {
     cur.skip_trivia();
     let _ = cur.read_word(); // "if"
     let mut branches = Vec::new();
@@ -732,6 +1159,7 @@ fn parse_if(cur: &mut Cursor) -> Option<Stmt> {
     Some(Stmt::If {
         branches,
         else_body,
+        line,
     })
 }
 
@@ -767,7 +1195,10 @@ fn read_cond_and_block(cur: &mut Cursor, branches: &mut Vec<(String, Vec<Stmt>)>
         cond.push_str(&format!(" {op} {}", operand.trim()));
     }
     let body = read_branch_body(cur);
-    branches.push((cond.trim().to_string(), body));
+    branches.push((
+        cond.replace(CONTINUATION_BREAK, " ").trim().to_string(),
+        body,
+    ));
     Some(())
 }
 
@@ -794,20 +1225,23 @@ fn read_cond_operand(cur: &mut Cursor) -> String {
 fn read_branch_body(cur: &mut Cursor) -> Vec<Stmt> {
     cur.skip_inline_ws();
     if cur.peek() == Some('{') {
-        return parse_stmts(&cur.read_block());
+        let line = cur.line();
+        return parse_stmts_at(&cur.read_block(), line);
     }
     // Allman style: the opening brace is on a following line.
     let save = cur.pos;
     cur.skip_trivia();
     if cur.peek() == Some('{') {
-        return parse_stmts(&cur.read_block());
+        let line = cur.line();
+        return parse_stmts_at(&cur.read_block(), line);
     }
     cur.pos = save;
     // Brace-less: a single statement up to end-of-line / `|`.
-    parse_stmts(&cur.read_statement_text())
+    let line = cur.line();
+    parse_stmts_at(&cur.read_statement_text(), line)
 }
 
-fn parse_while(cur: &mut Cursor) -> Option<Stmt> {
+fn parse_while(cur: &mut Cursor, line: usize) -> Option<Stmt> {
     cur.skip_trivia();
     let _ = cur.read_word(); // "while"
     cur.skip_inline_ws();
@@ -818,8 +1252,9 @@ fn parse_while(cur: &mut Cursor) -> Option<Stmt> {
     let cond = cur.read_parens();
     let body = read_branch_body(cur);
     Some(Stmt::While {
-        cond: cond.trim().to_string(),
+        cond: cond.replace(CONTINUATION_BREAK, " ").trim().to_string(),
         body,
+        line,
     })
 }
 
@@ -850,6 +1285,32 @@ mod tests {
     }
 
     #[test]
+    fn parses_single_line_and_function_key_aliases() {
+        let s = parse(
+            "alias hello echo -a Hello | msg #c done\n\
+             alias -l /sF2 say shifted",
+        );
+        assert_eq!(s.aliases.len(), 2);
+        assert_eq!(s.aliases[0].name, "hello");
+        assert!(!s.aliases[0].local);
+        assert_eq!(s.aliases[0].body.len(), 2);
+        assert!(matches!(
+            &s.aliases[0].body[0],
+            Stmt::Command { name, args, .. } if name == "echo" && args == "-a Hello"
+        ));
+        assert!(matches!(
+            &s.aliases[0].body[1],
+            Stmt::Command { name, args, .. } if name == "msg" && args == "#c done"
+        ));
+        assert_eq!(s.aliases[1].name, "sF2");
+        assert!(s.aliases[1].local);
+        assert!(matches!(
+            &s.aliases[1].body[0],
+            Stmt::Command { name, args, .. } if name == "say" && args == "shifted"
+        ));
+    }
+
+    #[test]
     fn parses_text_event() {
         let s = parse("on *:TEXT:!ping*:#:{ /msg $chan pong }");
         assert_eq!(s.events.len(), 1);
@@ -867,10 +1328,46 @@ mod tests {
     }
 
     #[test]
+    fn parses_dcc_matchtext_events_without_a_window_target() {
+        let s = parse(
+            "on 1:CHAT:*help*:{ msg =$nick hello }\n\
+             on 1:FILESENT:*.zip:{ echo -s sent $filename }\n\
+             on 1:GETFAIL:*:{ echo -s failed $filename }",
+        );
+        assert_eq!(s.events.len(), 3);
+        assert_eq!(s.events[0].kind, "CHAT");
+        assert_eq!(s.events[0].pattern, "*help*");
+        assert!(s.events[0].target.is_empty());
+        assert_eq!(s.events[1].kind, "FILESENT");
+        assert_eq!(s.events[1].pattern, "*.zip");
+        assert!(s.events[1].target.is_empty());
+        assert_eq!(s.events[2].kind, "GETFAIL");
+    }
+
+    #[test]
+    fn parses_parseline_direction_matchtext_and_source_line() {
+        let s = parse(
+            "\n on *:PARSELINE:in:*PRIVMSG*:{ parseline -it $parseline }\n\
+             on $*:PARSELINE:*:/^PING :.+$/:echo -a ping",
+        );
+        assert_eq!(s.events.len(), 2);
+        assert_eq!(s.events[0].kind, "PARSELINE");
+        assert_eq!(s.events[0].target, "in");
+        assert_eq!(s.events[0].pattern, "*PRIVMSG*");
+        assert_eq!(s.events[0].source_line, 2);
+        assert_eq!(s.events[1].target, "*");
+        assert_eq!(s.events[1].pattern, "/^PING :.+$/");
+    }
+
+    #[test]
     fn parses_if_elseif_else() {
         let s = parse("alias t { if (%x == 1) { /echo one } elseif (%x == 2) { /echo two } else { /echo other } }");
         match &s.aliases[0].body[0] {
-            Stmt::If { branches, else_body } => {
+            Stmt::If {
+                branches,
+                else_body,
+                ..
+            } => {
                 assert_eq!(branches.len(), 2);
                 assert!(else_body.is_some());
             }
@@ -891,7 +1388,11 @@ mod tests {
             "alias t {\n  if (%x == 1) /echo one\n  elseif (%x == 2) /echo two\n  else /echo other\n}",
         );
         match &s.aliases[0].body[0] {
-            Stmt::If { branches, else_body } => {
+            Stmt::If {
+                branches,
+                else_body,
+                ..
+            } => {
                 assert_eq!(branches.len(), 2);
                 assert_eq!(branches[0].1.len(), 1); // one statement in the body
                 assert!(else_body.as_ref().is_some_and(|b| b.len() == 1));
@@ -1012,5 +1513,72 @@ mod tests {
     fn multiple_statements_split_on_pipe_and_newline() {
         let s = parse("alias t {\n /echo a | /echo b\n /echo c\n }");
         assert_eq!(s.aliases[0].body.len(), 3);
+    }
+
+    #[test]
+    fn block_comments_are_ignored_before_structural_parsing() {
+        let s = parse(
+            "alias t {\n  echo before\n  /*\n  msg #c must-not-run | echo wrong\n  } alias broken {\n  $&\n  */\n  echo after\n}",
+        );
+        assert_eq!(s.aliases.len(), 1);
+        assert_eq!(s.aliases[0].name, "t");
+        assert_eq!(s.aliases[0].body.len(), 2);
+        assert!(matches!(
+            &s.aliases[0].body[0],
+            Stmt::Command { name, args, .. } if name == "echo" && args == "before"
+        ));
+        assert!(matches!(
+            &s.aliases[0].body[1],
+            Stmt::Command { name, args, .. } if name == "echo" && args == "after"
+        ));
+    }
+
+    #[test]
+    fn inline_block_comment_is_removed_without_splitting_the_command() {
+        let s = parse("alias t { echo one/* ignored */two }");
+        assert!(matches!(
+            &s.aliases[0].body[0],
+            Stmt::Command { name, args, .. } if name == "echo" && args == "onetwo"
+        ));
+    }
+
+    #[test]
+    fn dollar_ampersand_folds_physical_lines_into_one_command() {
+        let s = parse(
+            "alias t {\r\n  msg #c this is $&\r\n      one command $&\r\n      continued\r\n  echo done\r\n}",
+        );
+        assert_eq!(s.aliases[0].body.len(), 2);
+        assert!(matches!(
+            &s.aliases[0].body[0],
+            Stmt::Command { name, args, .. }
+                if name == "msg" && args == "#c this is one command continued"
+        ));
+        assert!(matches!(
+            &s.aliases[0].body[1],
+            Stmt::Command { name, args, .. } if name == "echo" && args == "done"
+        ));
+        assert_eq!(s.aliases[0].body[0].source_line(), 2);
+        assert_eq!(s.aliases[0].body[1].source_line(), 5);
+    }
+
+    #[test]
+    fn comments_and_continuations_reach_runtime_as_only_the_live_command() {
+        use crate::script::eval::Action;
+        use crate::script::{RunCtx, ScriptEngine};
+
+        let engine = ScriptEngine::new();
+        engine.load("alias t {\n  /* msg #c must-not-run */\n  msg #c hello $&\n    continued\n}");
+        let ctx = RunCtx {
+            my_nick: "me",
+            network: "test",
+            server: "test.invalid",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(Default::default()),
+        };
+
+        assert_eq!(
+            engine.run_alias(&ctx, "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :hello continued".to_string())]
+        );
     }
 }

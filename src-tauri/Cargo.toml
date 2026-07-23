@@ -23,6 +23,7 @@ serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "net", "io-util", "sync", "macros", "time"] }
+socket2 = "0.6.4"
 irc-proto = "1.1.0"
 futures-util = "0.3.32"
 thiserror = "2.0.18"
@@ -31,10 +32,15 @@ uuid = { version = "1.23.3", features = ["v4"] }
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "tls12"] }
 rustls = { version = "0.23.40", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 webpki-roots = "1.0.7"
+rustls-pemfile = "2"
 keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 base64 = "0.22"
 sspi = { version = "0.21.0", default-features = false }
 regex = "1"
+# mSL uses PCRE syntax (look-around, backreferences, recursion, named groups,
+# etc.). Keep `regex` above for internal protocol parsing, where its linear-time
+# guarantees are preferable.
+pcre2 = "0.2.11"
 # Local time + date formatting for mSL $time/$date/$asctime ($asctime needs a
 # timezone db; chrono's clock feature is already in the tree transitively).
 chrono = { version = "0.4", default-features = false, features = ["clock"] }

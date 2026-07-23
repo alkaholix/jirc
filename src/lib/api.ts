@@ -15,8 +15,11 @@ export interface ServerProfile {
   port: number;
   tls?: boolean;
   tlsInsecure?: boolean;
+  tlsClientCertPath?: string;
+  tlsClientKeyPath?: string;
   ircx?: boolean;
   sasl?: boolean;
+  saslMechanism?: "PLAIN" | "EXTERNAL" | "SCRAM-SHA-256";
   account?: string;
   accountPassword?: string;
   nickserv?: boolean;
@@ -101,22 +104,26 @@ export const api = {
     invoke("irc_send_message", { serverId, target, text }),
   join: (serverId: string, channel: string) => invoke("irc_join", { serverId, channel }),
   dccChat: (serverId: string, nick: string) => invoke("dcc_chat", { serverId, nick }),
-  dccAccept: (serverId: string, nick: string, ip: string, port: number) =>
-    invoke("dcc_accept", { serverId, nick, ip, port }),
-  dccSend: (id: string, text: string) => invoke("dcc_send", { id, text }),
-  dccClose: (id: string) => invoke("dcc_close", { id }),
+  dccAccept: (serverId: string, nick: string, ip: string, port: number, token?: number) =>
+    invoke("dcc_accept", { serverId, nick, ip, port, token }),
+  dccSend: (serverId: string, id: string, text: string) => invoke("dcc_send", { serverId, id, text }),
+  dccClose: (serverId: string, id: string) => invoke("dcc_close", { serverId, id }),
   dccRecv: (
     serverId: string,
     nick: string,
     filename: string,
     ip: string,
     port: number,
-    size: number
-  ) => invoke("dcc_recv", { serverId, nick, filename, ip, port, size }),
+    size: number,
+    token?: number,
+    resume = false
+  ) => invoke("dcc_recv", { serverId, nick, filename, ip, port, size, token, resume }),
   dccSendFile: (serverId: string, nick: string, path: string) =>
     invoke("dcc_send_file", { serverId, nick, path }),
-  dccConfigure: (ip: string, portFrom: number, portTo: number) =>
-    invoke("dcc_configure", { ip, portFrom, portTo }),
+  dccConfigure: (ip: string, portFrom: number, portTo: number, passive: boolean) =>
+    invoke("dcc_configure", { ip, portFrom, portTo, passive }),
+  dccCancelTransfer: (id: string) => invoke("dcc_cancel_transfer", { id }),
+  dccRetryTransfer: (id: string) => invoke("dcc_retry_transfer", { id }),
   dccLocalIp: () => invoke<string>("dcc_local_ip"),
   part: (serverId: string, channel: string, reason?: string) =>
     invoke("irc_part", { serverId, channel, reason }),
@@ -166,8 +173,9 @@ export const api = {
     network: string,
     command: string,
     params: string[],
-    snicks?: string[]
-  ) => invoke("script_run_popup", { serverId, target, myNick, network, command, params, snicks }),
+    snicks?: string[],
+    source?: string
+  ) => invoke("script_run_popup", { serverId, target, myNick, network, command, params, snicks, source }),
   scriptRunAlias: (
     serverId: string,
     target: string,
@@ -300,8 +308,15 @@ export type IrcEvent =
   | { type: "numeric"; serverId: string; code: number; args: string[] }
   | { type: "error"; serverId: string; message: string }
   | { type: "echo"; serverId: string; target: string; text: string }
-  | { type: "scriptServer"; host: string; port: number; pass: string }
-  | { type: "isupport"; serverId: string; chanTypes: string; prefixes: string }
+  | { type: "scriptServer"; serverId: string; host: string; port: number; pass: string; newWindow: boolean }
+  | {
+      type: "isupport";
+      serverId: string;
+      chanTypes: string;
+      prefixes: string;
+      caseMapping: "ascii" | "rfc1459" | "strict-rfc1459";
+      statusMsg: string;
+    }
   | { type: "whois"; serverId: string; nick: string; lines: string[] }
   | { type: "listEntry"; serverId: string; channel: string; users: number; topic: string }
   | { type: "listEnd"; serverId: string }
@@ -331,7 +346,7 @@ export type IrcEvent =
   | { type: "dccChatOpen"; serverId: string; id: string; nick: string; outgoing: boolean }
   | { type: "dccChatLine"; serverId: string; id: string; from: string; text: string }
   | { type: "dccChatClosed"; serverId: string; id: string }
-  | { type: "dccChatOffer"; serverId: string; nick: string; ip: string; port: number }
+  | { type: "dccChatOffer"; serverId: string; nick: string; ip: string; port: number; token?: number }
   | {
       type: "dccFileOffer";
       serverId: string;
@@ -340,6 +355,7 @@ export type IrcEvent =
       ip: string;
       port: number;
       size: number;
+      token?: number;
     }
   | {
       type: "dccTransfer";
@@ -367,5 +383,7 @@ export interface PopupItem {
   checked?: boolean;
   /** `$style(2|3)` — greyed and non-selectable. */
   disabled?: boolean;
+  /** Script file origin used to preserve `alias -l` visibility on click. */
+  source?: string;
   children: PopupItem[];
 }

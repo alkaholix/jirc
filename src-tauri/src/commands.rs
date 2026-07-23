@@ -1,6 +1,6 @@
 //! Tauri commands exposed to the frontend (the `invoke` surface).
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::config::ServerProfile;
@@ -29,7 +29,9 @@ pub fn open_help(app: AppHandle) -> Result<(), String> {
 /// Opens a URL in the user's default browser (the `/url` command).
 #[tauri::command]
 pub fn open_url(app: AppHandle, url: String) -> Result<(), String> {
-    app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
 }
 
 // ---- Detachable windows (pop-out / dock-back) ----
@@ -113,8 +115,14 @@ pub fn exit_app(app: AppHandle) {
 /// IP passed in resolves to itself). Used by the `/dns` command.
 #[tauri::command]
 pub async fn dns_lookup(host: String) -> Result<Vec<String>, String> {
-    let target = if host.contains(':') { host } else { format!("{host}:0") };
-    let addrs = tokio::net::lookup_host(target).await.map_err(|e| e.to_string())?;
+    let target = if host.contains(':') {
+        host
+    } else {
+        format!("{host}:0")
+    };
+    let addrs = tokio::net::lookup_host(target)
+        .await
+        .map_err(|e| e.to_string())?;
     let mut ips: Vec<String> = Vec::new();
     for addr in addrs {
         let ip = addr.ip().to_string();
@@ -138,11 +146,22 @@ pub fn irc_connect(
 /// Closes a connection, optionally with a quit message.
 #[tauri::command]
 pub fn irc_disconnect(
+    app: AppHandle,
     manager: State<'_, ConnectionManager>,
     server_id: String,
     quit_message: Option<String>,
 ) -> Result<(), String> {
-    manager.disconnect(&server_id, quit_message)
+    manager.disconnect(&server_id, quit_message)?;
+    if let Some(store) = app.try_state::<crate::irc::state::StateStore>() {
+        store.remove(&server_id);
+    }
+    if let Some(engine) = app.try_state::<crate::script::ScriptEngine>() {
+        engine.forget_cid(&server_id);
+    }
+    if let Some(timers) = app.try_state::<crate::script::timer::TimerManager>() {
+        timers.session_dropped(&app, &server_id);
+    }
+    Ok(())
 }
 
 /// Sends a raw protocol line on a connection.
@@ -349,22 +368,32 @@ pub fn dcc_accept(
     nick: String,
     ip: String,
     port: u16,
+    token: Option<u64>,
 ) -> Result<(), String> {
     let addr: std::net::IpAddr = ip.parse().map_err(|_| "invalid DCC IP".to_string())?;
-    dcc.accept(app.clone(), server_id, nick, addr, port);
-    Ok(())
+    dcc.accept(app.clone(), server_id, nick, addr, port, token)
 }
 
 /// Sends a typed line to a DCC chat peer.
 #[tauri::command]
-pub fn dcc_send(dcc: State<'_, crate::irc::dcc::DccManager>, id: String, text: String) {
-    dcc.send(&id, text);
+pub fn dcc_send(
+    dcc: State<'_, crate::irc::dcc::DccManager>,
+    server_id: String,
+    id: String,
+    text: String,
+) -> Result<(), String> {
+    dcc.send(&server_id, &id, text)
 }
 
 /// Closes a DCC chat session.
 #[tauri::command]
-pub fn dcc_close(dcc: State<'_, crate::irc::dcc::DccManager>, id: String) {
-    dcc.close(&id);
+pub fn dcc_close(
+    app: AppHandle,
+    dcc: State<'_, crate::irc::dcc::DccManager>,
+    server_id: String,
+    id: String,
+) {
+    dcc.close(&app, &server_id, &id);
 }
 
 /// Accepts an incoming DCC SEND offer and downloads the file into the `dcc/` folder.
@@ -378,10 +407,21 @@ pub fn dcc_recv(
     ip: String,
     port: u16,
     size: u64,
+    token: Option<u64>,
+    resume: Option<bool>,
 ) -> Result<(), String> {
     let addr: std::net::IpAddr = ip.parse().map_err(|_| "invalid DCC IP".to_string())?;
-    dcc.recv_file(app.clone(), server_id, nick, filename, addr, port, size);
-    Ok(())
+    dcc.recv_file(
+        app.clone(),
+        server_id,
+        nick,
+        filename,
+        addr,
+        port,
+        size,
+        token,
+        resume.unwrap_or(false),
+    )
 }
 
 /// `/dcc send <nick> <file>` — offer and stream a local file to `nick`.
@@ -403,8 +443,29 @@ pub fn dcc_configure(
     ip: String,
     port_from: u16,
     port_to: u16,
+    passive: bool,
 ) {
-    dcc.configure(ip, port_from, port_to);
+    dcc.configure(ip, port_from, port_to, passive);
+}
+
+/// Cancels an active/waiting DCC transfer.
+#[tauri::command]
+pub fn dcc_cancel_transfer(
+    app: AppHandle,
+    dcc: State<'_, crate::irc::dcc::DccManager>,
+    id: String,
+) -> Result<(), String> {
+    dcc.cancel_transfer(&app, &id)
+}
+
+/// Re-attempts a failed/cancelled transfer (receives negotiate a resume).
+#[tauri::command]
+pub fn dcc_retry_transfer(
+    app: AppHandle,
+    dcc: State<'_, crate::irc::dcc::DccManager>,
+    id: String,
+) -> Result<(), String> {
+    dcc.retry_transfer(app, &id)
 }
 
 /// A routable local IP for DCC (a global IPv6 if available), for the "Detect"

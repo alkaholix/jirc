@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
-import { bufferKey } from "../state/store";
+import { serverBufferKey } from "../state/store";
 import { useChannelModes, useChannelCentral } from "../state/channelModes";
 
 const FLAGS: [string, string][] = [
@@ -16,7 +16,7 @@ const FLAGS: [string, string][] = [
 export function ChannelCentral() {
   const target = useChannelCentral((s) => s.target);
   const close = useChannelCentral((s) => s.close);
-  const key = target ? bufferKey(target.serverId, target.channel) : "";
+  const key = target ? serverBufferKey(target.serverId, target.channel) : "";
   const current = useChannelModes((s) => (key ? s.byBuffer[key] : undefined));
 
   const [flags, setFlags] = useState<Set<string>>(new Set());

@@ -1,4 +1,5 @@
 import { useTransfers, Transfer } from "../state/transfers";
+import { api } from "../lib/api";
 
 function pct(t: Transfer): number {
   if (t.status === "done") return 100;
@@ -30,8 +31,28 @@ export function TransfersPanel() {
             <span className="transfer-meta">
               {t.status === "error"
                 ? "failed"
-                : `${human(t.transferred)} / ${human(t.size)} · ${pct(t)}%`}
+                : t.status === "cancelled"
+                  ? "cancelled"
+                  : `${human(t.transferred)} / ${human(t.size)} · ${pct(t)}%`}
             </span>
+            {(t.status === "active" || t.status === "waiting") && (
+              <button
+                className="ghost"
+                title="Cancel transfer"
+                onClick={() => api.dccCancelTransfer(t.id).catch(() => {})}
+              >
+                ■
+              </button>
+            )}
+            {(t.status === "error" || t.status === "cancelled") && (
+              <button
+                className="ghost"
+                title="Retry (resume receives)"
+                onClick={() => api.dccRetryTransfer(t.id).catch(() => {})}
+              >
+                ↻
+              </button>
+            )}
             <button className="ghost" title="Dismiss" onClick={() => dismiss(t.id)}>
               ✕
             </button>

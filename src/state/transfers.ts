@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 export interface Transfer {
+  serverId: string;
   id: string;
   /** "recv" | "send". */
   kind: string;
@@ -8,7 +9,7 @@ export interface Transfer {
   filename: string;
   transferred: number;
   size: number;
-  /** "active" | "done" | "error". */
+  /** "waiting" | "active" | "done" | "error" | "cancelled". */
   status: string;
 }
 

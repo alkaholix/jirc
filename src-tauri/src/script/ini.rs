@@ -43,21 +43,31 @@ pub fn read(text: &str, section: &str, item: &str) -> Option<String> {
         .into_iter()
         .find(|(s, _)| s.eq_ignore_ascii_case(section))
         .and_then(|(_, items)| {
-            items.into_iter().find(|(k, _)| k.eq_ignore_ascii_case(item)).map(|(_, v)| v)
+            items
+                .into_iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(item))
+                .map(|(_, v)| v)
         })
 }
 
 /// `/writeini` — set section/item=value, returning the new file text.
 pub fn set(text: &str, section: &str, item: &str, value: &str) -> String {
     let mut data = parse(text);
-    let si = match data.iter().position(|(s, _)| s.eq_ignore_ascii_case(section)) {
+    let si = match data
+        .iter()
+        .position(|(s, _)| s.eq_ignore_ascii_case(section))
+    {
         Some(i) => i,
         None => {
             data.push((section.to_string(), Vec::new()));
             data.len() - 1
         }
     };
-    if let Some(kv) = data[si].1.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(item)) {
+    if let Some(kv) = data[si]
+        .1
+        .iter_mut()
+        .find(|(k, _)| k.eq_ignore_ascii_case(item))
+    {
         kv.1 = value.to_string();
     } else {
         data[si].1.push((item.to_string(), value.to_string()));
@@ -70,7 +80,10 @@ pub fn remove(text: &str, section: &str, item: Option<&str>) -> String {
     let mut data = parse(text);
     match item {
         Some(item) => {
-            if let Some((_, items)) = data.iter_mut().find(|(s, _)| s.eq_ignore_ascii_case(section)) {
+            if let Some((_, items)) = data
+                .iter_mut()
+                .find(|(s, _)| s.eq_ignore_ascii_case(section))
+            {
                 items.retain(|(k, _)| !k.eq_ignore_ascii_case(item));
             }
         }
@@ -111,7 +124,10 @@ mod tests {
         assert_eq!(read(&t, "User", "nick").as_deref(), Some("alice"));
         // enumerate
         assert_eq!(sections(&t), vec!["User".to_string(), "Opts".to_string()]);
-        assert_eq!(items(&t, "User"), vec!["nick".to_string(), "host".to_string()]);
+        assert_eq!(
+            items(&t, "User"),
+            vec!["nick".to_string(), "host".to_string()]
+        );
         // remove item, then section
         t = remove(&t, "User", Some("host"));
         assert_eq!(read(&t, "User", "host"), None);

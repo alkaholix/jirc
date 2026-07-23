@@ -246,7 +246,8 @@ part for fine control. Made a mess? Hit <strong>Reset</strong> in the settings p
 
 <h2 id="security">Security &amp; where your data lives</h2>
 <ul>
-  <li><strong>TLS</strong> (rustls), <strong>SASL PLAIN</strong>, NickServ identify, and a
+  <li><strong>TLS</strong> (rustls, including PEM client certificates), SASL
+    <strong>PLAIN / EXTERNAL / SCRAM-SHA-256</strong>, NickServ identify, and a
     <strong>SOCKS5 proxy</strong> are all supported.</li>
   <li>Passwords live in the <strong>OS keyring</strong> (Windows Credential Manager / macOS
     Keychain / Linux Secret Service), never in plain files.</li>
@@ -258,7 +259,7 @@ part for fine control. Made a mess? Hit <strong>Reset</strong> in the settings p
 <h1 style="font-size:1.6rem">Scripting (mSL)</h1>
 <p>A substantial subset of mIRC's scripting language: your own <code>/commands</code>
 (aliases), automatic reactions (events), right-click menus (popups), custom dialogs,
-timers, regex, file I/O and sockets.</p>
+timers, PCRE2 regex, sandboxed file I/O, TCP/UDP sockets, playback queues, and DCC.</p>
 <div class="note warn">
 This is a <strong>subset</strong> of mIRC — not 100% compatible. See
 <a href="#limits">What's not supported</a> for the boundaries.
@@ -407,7 +408,10 @@ out of <code>if</code>/<code>while</code> blocks). A safety cap stops runaway lo
 <p>Events run automatically. The general form is:</p>
 <pre><code><span class="k">on</span> &lt;level&gt;:&lt;EVENT&gt;:&lt;target&gt;:{ commands }
 </code></pre>
-<p>The <em>level</em> is usually <code>*</code> (it's accepted but not enforced).
+<p>The <em>level</em> is usually <code>*</code>; numeric/user-list levels and mIRC's
+<code>!</code>/<code>@</code>/<code>%</code>/<code>+</code>/<code>.</code>/<code>*</code>
+event gates are enforced. Prefix a definition with <code>^</code>, <code>&amp;</code>, or
+<code>$</code> for before-default, after-default, or regex-matchtext behavior.
 Text-style events also take a <strong>matchtext</strong> pattern before the target:</p>
 <pre><code><span class="k">on</span> *:TEXT:&lt;matchtext&gt;:&lt;target&gt;:{ commands }
 </code></pre>
@@ -457,6 +461,9 @@ matches exactly one word. So <code>on *:TEXT:!weather &amp;:#:</code> triggers o
   <tr><td><code>ERROR</code></td><td>the server sends an ERROR (matchtext)</td><td><code>$1-</code> (the message)</td></tr>
   <tr><td><code>PING PONG</code></td><td>server ping / pong keepalives</td><td><code>$1-</code></td></tr>
   <tr><td><code>SIGNAL</code></td><td>a script runs <code>/signal &lt;name&gt;</code></td><td><code>$signal</code> (name), <code>$1-</code> (params)</td></tr>
+  <tr><td><code>PARSELINE</code></td><td>a raw incoming/outgoing line is intercepted before protocol handling</td><td><code>$parseline $parsetype $parseutf $parseem</code></td></tr>
+  <tr><td><code>SOCKOPEN SOCKREAD SOCKWRITE SOCKLISTEN SOCKCLOSE UDPREAD</code></td><td>a script socket changes state or has I/O ready</td><td><code>$sockname $sockerr $sockbr $1-</code></td></tr>
+  <tr><td><code>CHAT FILESENT FILERCVD GETFAIL SENDFAIL</code></td><td>DCC chat or file-transfer activity</td><td><code>$nick $filename $dccid $1-</code></td></tr>
 </table>
 
 <h3>Examples</h3>
@@ -644,8 +651,11 @@ each time you interact, so <code>$did</code> always reads the current form state
   <tr><td><code>/hadd /hdel /hinc /hdec /hsave /hload /hmake /hfree /hclear</code></td><td>Manage hash tables (see below).</td></tr>
   <tr><td><code>/tokenize &lt;c&gt; text</code></td><td>Split <em>text</em> by char code <em>c</em> into <code>$1, $2…</code></td></tr>
   <tr><td><code>/noop</code></td><td>Do nothing (but evaluate its parameters).</td></tr>
-  <tr><td><code>/write [-c] file text</code></td><td>Append a line to a file (see Files).</td></tr>
-  <tr><td><code>/sockopen /sockwrite /sockread /sockclose</code></td><td>TCP sockets (see Sockets).</td></tr>
+  <tr><td><code>/write [switches] file text</code> · <code>/filter</code></td><td>Edit/filter sandboxed text files and custom windows (see Files).</td></tr>
+  <tr><td><code>/play [switches] [target] file [delay]</code></td><td>Queue file lines as messages, notices, commands, or alias calls; inspect with <code>$play</code>/<code>$pnick</code>.</td></tr>
+  <tr><td><code>/sockopen /socklisten /sockudp /sockwrite /sockread /sockclose</code></td><td>TCP, UDP, direct TLS and STARTTLS sockets (see Sockets).</td></tr>
+  <tr><td><code>/parseline [switches] line</code></td><td>Replace or queue a byte-preserving incoming/outgoing protocol line from <code>on PARSELINE</code>.</td></tr>
+  <tr><td><code>/dcc chat|send|get|close|retry</code></td><td>DCC chat and file transfer, including resume and passive/reverse negotiation.</td></tr>
   <tr><td><code>/dialog /did</code></td><td>Open/manage a custom dialog (see Dialogs).</td></tr>
   <tr><td><code>/nickicon nick icon</code></td><td>Badge a nick in the nick list (emoji or image URL).</td></tr>
   <tr><td><code>/timer[name] reps secs cmd</code></td><td>Schedule a command (named; see Timers).</td></tr>
@@ -661,7 +671,7 @@ each time you interact, so <code>$did</code> always reads the current form state
   <tr><td><code>/scon N cmd</code> · <code>/scid cid cmd</code></td><td>Run a command on another connection — by index / by <code>$cid</code> — in that connection's context.</td></tr>
 </table>
 <div class="note">Unrecognized <em>client-side</em> commands (window/display/sound, e.g.
-<code>/clear</code>, <code>/window</code>, <code>/beep</code>, <code>/run</code>) are quietly ignored
+<code>/clear</code>, <code>/beep</code>, <code>/run</code>) are quietly ignored
 so dropped-in scripts don't error. Anything else that isn't a built-in or one of your
 aliases is sent to the server as a raw IRC command — so real IRC commands like
 <code>/whois</code> or <code>/list</code> work, but a typo like <code>/joimn</code> still
@@ -770,8 +780,9 @@ people who've been seen/active. Handy for bans:</p>
 <table>
   <tr><th>Identifier</th><th>Returns</th></tr>
   <tr><td><code>$regex(text, pattern)</code></td><td>number of matches; stores capture groups</td></tr>
-  <tr><td><code>$regml(n)</code></td><td>the nth captured group from the last <code>$regex</code></td></tr>
+  <tr><td><code>$regml(n|name)</code></td><td>the numbered or named capture from the last <code>$regex</code></td></tr>
   <tr><td><code>$regsub(text, pattern, repl)</code></td><td>text with replacements (<code>\1</code> backrefs)</td></tr>
+  <tr><td><code>$regsubex(text, pattern, subtext)</code></td><td>evaluate replacement subtext once per PCRE2 match</td></tr>
 </table>
 <pre><code><span class="k">alias</span> parse {
   <span class="k">if</span> (<span class="i">$regex</span>(<span class="i">$1-</span>, ([a-z]+)(\d+))) {
@@ -783,8 +794,8 @@ people who've been seen/active. Handy for bans:</p>
 <span class="k">alias</span> censor { <span class="k">/return</span> <span class="i">$regsub</span>(<span class="i">$1-</span>, \d, #) }
 <span class="c">; $censor(call 5551234) -> call ####### </span>
 </code></pre>
-<div class="note">Uses standard (PCRE-like) regex syntax via the Rust regex engine. The optional
-named-context first argument of mIRC's <code>$regex</code> is accepted but ignored.</div>
+<div class="note">Uses PCRE2, including named captures, lookaround, backreferences,
+Unicode options, global matching, and mIRC's named regex contexts.</div>
 
 <h2 id="files">Files <span class="pill">sandboxed</span></h2>
 <p>Scripts can read and write small text files. For safety, file access is
@@ -834,22 +845,27 @@ from files (sandboxed, like <a href="#files">file I/O</a>).</p>
 </code></pre>
 
 <h2 id="sockets">Sockets (sockbots) <span class="pill">advanced</span></h2>
-<p>Scripts can open raw TCP connections — enough to build sockbots, talk to other
-services, or speak a custom protocol. Sockets are <strong>line-oriented</strong>;
-use <code>/sockopen -e</code> for a <strong>TLS</strong> (encrypted) connection.</p>
+<p>Scripts can open raw TCP listeners/connections and UDP sockets — enough to build
+sockbots, talk to other services, or speak a custom protocol. Text and binary reads
+are supported; use <code>/sockopen -e</code> for direct <strong>TLS</strong>, or
+<code>/sockopen -t name</code> to upgrade an existing socket with STARTTLS.</p>
 <div class="note bad">
 <strong>Security:</strong> sockets let a script connect anywhere on the network —
 they intentionally step outside the file sandbox. Only run socket scripts you trust.
 </div>
 <table>
   <tr><th>Command / Identifier / Event</th><th>Effect</th></tr>
-  <tr><td><code>/sockopen [-e] name host port</code></td><td>open a TCP socket (<code>-e</code> = TLS)</td></tr>
-  <tr><td><code>/sockwrite [-n] name text</code></td><td>send text; <code>-n</code> appends CRLF</td></tr>
-  <tr><td><code>/sockclose name</code></td><td>close the socket</td></tr>
-  <tr><td><code>/socklist [wild]</code></td><td>list open sockets (optional wildcard)</td></tr>
+  <tr><td><code>/sockopen [-e46n] name host port</code></td><td>open a TCP socket (<code>-e</code> = TLS); <code>-t name</code> performs STARTTLS in place</td></tr>
+  <tr><td><code>/socklisten</code> · <code>/sockaccept</code></td><td>bind a listener and accept a pending connection</td></tr>
+  <tr><td><code>/sockudp [switches] name …</code></td><td>send a datagram; retained sockets fire <code>on UDPREAD</code></td></tr>
+  <tr><td><code>/sockwrite [-n] name|wildcard text</code></td><td>queue text/binary bytes; <code>-n</code> appends CRLF</td></tr>
+  <tr><td><code>/sockclose name|wildcard</code></td><td>close matching sockets</td></tr>
+  <tr><td><code>/socklist [switches] [wild]</code></td><td>list/filter open TCP, UDP, or listener sockets</td></tr>
   <tr><td><code>/sockread %var</code></td><td>(in <code>on SOCKREAD</code>) read the current line</td></tr>
   <tr><td><code>on *:SOCKOPEN:name:{ }</code></td><td>fired when connected</td></tr>
   <tr><td><code>on *:SOCKREAD:name:{ }</code></td><td>fired per incoming line (also in <code>$1-</code>)</td></tr>
+  <tr><td><code>on *:SOCKWRITE:name:{ }</code></td><td>fired when the queued write has drained (or fails via <code>$sockerr</code>)</td></tr>
+  <tr><td><code>on *:UDPREAD:name:{ }</code></td><td>fired for a received datagram; source address/port are socket properties</td></tr>
   <tr><td><code>on *:SOCKCLOSE:name:{ }</code></td><td>fired when the socket closes</td></tr>
   <tr><td><code>$sockname</code></td><td>the socket's name</td></tr>
   <tr><td><code>$sockbr</code></td><td>bytes read by the last <code>/sockread</code></td></tr>
@@ -914,6 +930,33 @@ parse for a <code>&amp;binvar</code> read + binary parse:</p>
 loop <code>while ($sockbr)</code> to drain the buffer. (The text <code>%var</code> form
 still works exactly as before — this is only for binary data.)</p>
 
+<h2 id="webviews">Native script WebViews <span class="pill">jIRC extension</span></h2>
+<p>Scripts that previously needed a browser helper DLL can open a managed native
+browser window instead. Each profile has its own persistent cookies, navigation is
+limited to web URLs, and cookie callbacks include secure/HttpOnly cookies visible to
+the requested URL. Arbitrary DLL loading remains disabled.</p>
+<table>
+  <tr><th>Command / Identifier / Event</th><th>Effect</th></tr>
+  <tr><td><code>/webview -o name profile width height url [title]</code></td><td>open a native browser with an isolated persistent profile</td></tr>
+  <tr><td><code>/webview -n name url</code></td><td>navigate the browser</td></tr>
+  <tr><td><code>/webview -k name scope-url</code></td><td>emit one <code>cookie</code> event per cookie visible to the URL, then <code>cookies_done</code></td></tr>
+  <tr><td><code>/webview -f name</code> · <code>/webview -c name</code></td><td>focus / close the browser</td></tr>
+  <tr><td><code>$webview(name)</code></td><td>the name while open; properties: <code>.status</code>, <code>.url</code>, <code>.profile</code></td></tr>
+  <tr><td><code>on *:WEBVIEW:name:{ }</code></td><td><code>$1</code> is <code>opened</code>, <code>navigate_start</code>, <code>navigate_complete</code>, <code>cookie</code>, <code>cookies_done</code>, <code>closed</code>, or <code>error</code></td></tr>
+</table>
+<p>URL events put the URL in <code>$2-</code>. Cookie events use <code>$2</code> for
+the cookie name and <code>$3-</code> for its value.</p>
+<pre><code><span class="k">alias</span> login {
+  <span class="k">/webview</span> -o auth account-a 980 720 https://example.org/login Account Login
+}
+<span class="k">on</span> *:WEBVIEW:auth:{
+  <span class="k">if</span> ((<span class="i">$1</span> == navigate_complete) &amp;&amp; (example.org isin <span class="i">$2-</span>)) {
+    <span class="k">/webview</span> -k auth https://example.org/
+  }
+  <span class="k">elseif</span> (<span class="i">$1</span> == cookie) { <span class="k">/echo</span> -s cookie <span class="i">$2</span> received }
+}
+</code></pre>
+
 <h2 id="safety">Safety: other people's text stays text</h2>
 <p>This is one place jIRC deliberately behaves differently from mIRC — and it's
 in your favour. In mIRC, a few things get <strong>evaluated twice</strong>, which
@@ -957,6 +1000,9 @@ against jIRC being cross-platform and safe to share:
   <li>Loading native binaries / arbitrary executables from scripts.</li>
 </ul>
 </div>
+<p>Browser-only DLL use cases can use the sandboxed native
+<a href="#webviews"><code>/webview</code> API</a>; this does not enable arbitrary
+native code.</p>
 
 <h3>Now supported</h3>
 <div class="note">
@@ -970,6 +1016,8 @@ IRCX owner/host keys, <strong>user access lists</strong>
 (<code>/auser</code>/<code>$ulevel</code> + level-gated events like <code>on 10:TEXT</code>),
 <strong>dynamic variables</strong> (<code>%v. [ $+ [ $nick ] ]</code>), and window /
 notify / lifecycle events (<code>on OPEN</code>/<code>CLOSE</code>/<code>NOTIFY</code>/<code>START</code>/<code>EXIT</code>).
+Also supported: DCC chat/send/get/resume/passive transfers, <code>/play</code>,
+PARSELINE, UDP/STARTTLS script sockets, echo-message, and SASL EXTERNAL/SCRAM-SHA-256.
 Some aren't in the reference tables above yet.
 </div>
 
@@ -977,8 +1025,8 @@ Some aren't in the reference tables above yet.
 <div class="note warn">
 Planned or possible future work — scripts using these won't work today:
 <ul style="margin:.5rem 0 0">
-  <li><strong>DCC</strong> — chat and file transfer (the main remaining gap).</li>
-  <li>Auto-op / auto-voice / protect lists, and picture / drawing <code>@windows</code>.</li>
+  <li>DCC server / fileserver (<code>/dccserver</code>, <code>/fserve</code>).</li>
+  <li>Picture / drawing <code>@windows</code> and script-defined application toolbars/panels.</li>
   <li>A few <strong>property suffixes</strong> such as <code>$chan(#).topic</code> — most
     now work, just not every one.</li>
   <li>A long tail of rarely-used identifiers, and Windows-only bits (COM/DLL/DDE).</li>
@@ -987,7 +1035,7 @@ Planned or possible future work — scripts using these won't work today:
 
 <p>Two gotchas worth remembering:</p>
 <ul>
-  <li>An <strong>unknown identifier</strong> prints as literal text (e.g. a typo like <code>$madeupname</code> shows up as the words "$madeupname").</li>
+  <li>An <strong>unknown identifier</strong> evaluates to <code>$null</code>, matching mIRC.</li>
   <li>An unknown <strong>client-side</strong> command (windows/display/sound) is ignored;
     any other unknown command is sent to the server as a raw IRC line.</li>
 </ul>

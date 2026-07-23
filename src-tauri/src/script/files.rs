@@ -13,6 +13,7 @@ use std::io::{BufRead, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
 use super::eval::wildcard_match;
+use super::ident::mirc_regex;
 
 #[derive(Clone, Default)]
 pub struct FileHandle {
@@ -53,17 +54,33 @@ impl FileStore {
     pub fn open(&mut self, name: &str, path: PathBuf, create_new: bool, overwrite: bool) -> bool {
         use std::fs::OpenOptions;
         let ok = if overwrite {
-            OpenOptions::new().write(true).create(true).truncate(true).open(&path).is_ok()
+            OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&path)
+                .is_ok()
         } else if create_new {
-            OpenOptions::new().write(true).create_new(true).open(&path).is_ok()
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .is_ok()
         } else {
             path.is_file()
         };
         self.feof = false;
         self.ferr = !ok;
         if ok {
-            self.handles
-                .insert(name.to_string(), FileHandle { path, pos: 0, eof: false, err: false });
+            self.handles.insert(
+                name.to_string(),
+                FileHandle {
+                    path,
+                    pos: 0,
+                    eof: false,
+                    err: false,
+                },
+            );
         }
         ok
     }
@@ -87,7 +104,11 @@ impl FileStore {
 
     /// `/fwrite [-n]` — write at the current pointer; `-n` appends a `$crlf`.
     pub fn write(&mut self, name: &str, text: &[u8], newline: bool) {
-        let Self { handles, feof, ferr } = self;
+        let Self {
+            handles,
+            feof,
+            ferr,
+        } = self;
         *feof = false;
         let Some(h) = handles.get_mut(name) else {
             *ferr = true;
@@ -112,7 +133,11 @@ impl FileStore {
 
     /// `$fread(name)` — the next `$crlf`-delimited line (without the line break).
     pub fn read_line(&mut self, name: &str) -> String {
-        let Self { handles, feof, ferr } = self;
+        let Self {
+            handles,
+            feof,
+            ferr,
+        } = self;
         *feof = false;
         let Some(h) = handles.get_mut(name) else {
             *ferr = true;
@@ -138,7 +163,11 @@ impl FileStore {
 
     /// `$fgetc(name)` — the next character (byte).
     pub fn read_char(&mut self, name: &str) -> String {
-        let Self { handles, feof, ferr } = self;
+        let Self {
+            handles,
+            feof,
+            ferr,
+        } = self;
         *feof = false;
         let Some(h) = handles.get_mut(name) else {
             *ferr = true;
@@ -169,7 +198,11 @@ impl FileStore {
 
     /// `/fseek` — move the pointer per [`SeekMode`].
     pub fn seek(&mut self, name: &str, mode: SeekMode) {
-        let Self { handles, feof, ferr } = self;
+        let Self {
+            handles,
+            feof,
+            ferr,
+        } = self;
         *feof = false;
         let Some(h) = handles.get_mut(name) else {
             *ferr = true;
@@ -192,9 +225,10 @@ impl FileStore {
             SeekMode::Wild(p) => {
                 find_line(&data, h.pos, |line| wildcard_match(&p, line)).unwrap_or(h.pos)
             }
-            SeekMode::Regex(p) => match build_regex(&p) {
-                Some(re) => find_line(&data, h.pos, |line| re.is_match(line)).unwrap_or(h.pos),
-                None => h.pos,
+            SeekMode::Regex(p) => match mirc_regex(&p) {
+                Ok(re) => find_line(&data, h.pos, |line| re.is_match(line).unwrap_or(false))
+                    .unwrap_or(h.pos),
+                Err(_) => h.pos,
             },
         };
         h.pos = new_pos;
@@ -286,7 +320,12 @@ fn next_line(data: &[u8], pos: u64) -> u64 {
 
 fn prev_line(data: &[u8], pos: u64) -> u64 {
     let offs = line_offsets(data);
-    let cur = offs.iter().copied().filter(|&o| o <= pos).max().unwrap_or(0);
+    let cur = offs
+        .iter()
+        .copied()
+        .filter(|&o| o <= pos)
+        .max()
+        .unwrap_or(0);
     if cur == pos {
         offs.iter().copied().filter(|&o| o < pos).max().unwrap_or(0)
     } else {
@@ -308,32 +347,6 @@ fn find_line<F: Fn(&str) -> bool>(data: &[u8], pos: u64, pred: F) -> Option<u64>
         }
     }
     None
-}
-
-/// Parse a mIRC `/pattern/flags` (or bare) regex for `/fseek -r`.
-fn build_regex(pat: &str) -> Option<regex::Regex> {
-    let body = pat.trim();
-    let re = if body.starts_with('/') && body.len() > 1 {
-        match body.rfind('/') {
-            Some(end) if end > 0 => {
-                let inner = &body[1..end];
-                let flags = &body[end + 1..];
-                let prefix: String = ['i', 's', 'm']
-                    .into_iter()
-                    .filter(|c| flags.contains(*c))
-                    .collect();
-                if prefix.is_empty() {
-                    inner.to_string()
-                } else {
-                    format!("(?{prefix}){inner}")
-                }
-            }
-            _ => body.to_string(),
-        }
-    } else {
-        body.to_string()
-    };
-    regex::Regex::new(&re).ok()
 }
 
 #[cfg(test)]

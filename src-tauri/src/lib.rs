@@ -33,6 +33,8 @@ pub fn run() {
         .manage(ScriptEngine::new())
         .manage(script::socket::SocketManager::new())
         .manage(script::timer::TimerManager::new())
+        .manage(script::play::PlayManager::new())
+        .manage(script::webview::WebviewManager::new())
         .manage(irc::state::StateStore::new())
         .manage(irc::dcc::DccManager::new())
         .manage(script::input::PromptRegistry::default())
@@ -48,6 +50,15 @@ pub fn run() {
             )));
             // Install the `$timer` view (reads the managed TimerManager).
             engine.set_timers(std::sync::Arc::new(script::timer::EngineTimers::new(
+                app.handle().clone(),
+            )));
+            engine.set_play(std::sync::Arc::new(script::play::EnginePlay::new(
+                app.handle().clone(),
+            )));
+            engine.set_dcc(std::sync::Arc::new(irc::dcc::EngineDcc::new(
+                app.handle().clone(),
+            )));
+            engine.set_webviews(std::sync::Arc::new(script::webview::EngineWebviews::new(
                 app.handle().clone(),
             )));
             // Install the `$input` prompt backend (shares the managed registry).
@@ -100,6 +111,8 @@ pub fn run() {
             commands::dcc_recv,
             commands::dcc_send_file,
             commands::dcc_configure,
+            commands::dcc_cancel_transfer,
+            commands::dcc_retry_transfer,
             commands::dcc_local_ip,
             storage::profiles_load,
             storage::profiles_save,

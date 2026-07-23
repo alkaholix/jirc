@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { IrcEvent } from "../lib/api";
-import { bufferKey } from "./store";
+import { serverBufferKey, useStore } from "./store";
 
 export interface ChanModes {
   /** Active boolean flag modes (e.g. m, t, i, n, s, p). */
@@ -34,7 +34,7 @@ export const useChannelBans = create<BanState>(() => ({ byBuffer: {} }));
 
 /** The current +b masks for a channel. */
 export function channelBans(serverId: string, channel: string): string[] {
-  return useChannelBans.getState().byBuffer[bufferKey(serverId, channel)] ?? [];
+  return useChannelBans.getState().byBuffer[serverBufferKey(serverId, channel)] ?? [];
 }
 
 function addBan(key: string, mask: string): void {
@@ -103,20 +103,23 @@ function set(key: string, modes: ChanModes): void {
 /** Routes MODE / numeric (324 channel-modes, 367 ban-list) events into the
  *  channel-mode + ban trackers. */
 export function routeModeEvent(ev: IrcEvent): void {
-  if (ev.type === "mode" && ev.target.startsWith("#")) {
+  const chanTypes = "serverId" in ev
+    ? useStore.getState().servers[ev.serverId]?.chanTypes ?? "#&!+%"
+    : "#&!+%";
+  if (ev.type === "mode" && !!ev.target && chanTypes.includes(ev.target[0])) {
     const [modeStr, ...params] = ev.modes.split(" ");
-    const k = bufferKey(ev.serverId, ev.target);
+    const k = serverBufferKey(ev.serverId, ev.target);
     const { modes, banOps } = applyDelta(useChannelModes.getState().byBuffer[k] ?? empty(), modeStr, params);
     set(k, modes);
     for (const op of banOps) (op.sign === "+" ? addBan : removeBan)(k, op.mask);
   } else if (ev.type === "numeric" && ev.code === 324) {
     // RPL_CHANNELMODEIS: args = [me, channel, +modes, param...]
     const [, channel, modeStr = "", ...params] = ev.args;
-    if (channel) set(bufferKey(ev.serverId, channel), applyDelta(empty(), modeStr, params).modes);
+    if (channel) set(serverBufferKey(ev.serverId, channel), applyDelta(empty(), modeStr, params).modes);
   } else if (ev.type === "numeric" && ev.code === 367) {
     // RPL_BANLIST: args = [me, channel, banmask, setter?, time?]
     const [, channel, mask] = ev.args;
-    if (channel && mask) addBan(bufferKey(ev.serverId, channel), mask);
+    if (channel && mask) addBan(serverBufferKey(ev.serverId, channel), mask);
   }
 }
 

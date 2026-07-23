@@ -49,7 +49,11 @@ where
 
     // Type 1 (negotiate).
     let type1 = client.negotiate()?;
-    echo(app, server_id, &format!("NTLM: sending negotiate (Type 1, {} bytes)…", type1.len()));
+    echo(
+        app,
+        server_id,
+        &format!("NTLM: sending negotiate (Type 1, {} bytes)…", type1.len()),
+    );
     send_token(writer, app, server_id, b"AUTH NTLM I :", &escape(&type1)).await?;
 
     // Await the Type 2 challenge (handling PING and any pre-auth notices meanwhile).
@@ -79,7 +83,11 @@ where
 
     // Type 3 (authenticate).
     let type3 = client.authenticate(&challenge)?;
-    echo(app, server_id, &format!("NTLM: sending response (Type 3, {} bytes)…", type3.len()));
+    echo(
+        app,
+        server_id,
+        &format!("NTLM: sending response (Type 3, {} bytes)…", type3.len()),
+    );
     send_token(writer, app, server_id, b"AUTH NTLM S :", &escape(&type3)).await?;
 
     // Await the success marker (`AUTH NTLM * …`).
@@ -298,15 +306,24 @@ mod tests {
             Some((b'S', b"tok\\0en".to_vec()))
         );
         // The success marker carries no `:payload` (AUTH <pkg> * <addr> <oid>).
-        assert_eq!(parse_auth(b"AUTH NTLM * user@cg 0"), Some((b'*', Vec::new())));
+        assert_eq!(
+            parse_auth(b"AUTH NTLM * user@cg 0"),
+            Some((b'*', Vec::new()))
+        );
         // An optional leading :prefix is tolerated.
-        assert_eq!(parse_auth(b":srv AUTH NTLM S :x"), Some((b'S', b"x".to_vec())));
+        assert_eq!(
+            parse_auth(b":srv AUTH NTLM S :x"),
+            Some((b'S', b"x".to_vec()))
+        );
         assert_eq!(parse_auth(b"PING :tok"), None);
     }
 
     #[test]
     fn numeric_detection() {
-        assert!(is_numeric(b":server 910 nick NTLM :Authentication failed", b"910"));
+        assert!(is_numeric(
+            b":server 910 nick NTLM :Authentication failed",
+            b"910"
+        ));
         assert!(is_numeric(b"910 nick", b"910"));
         assert!(!is_numeric(b":server 001 nick :Welcome", b"910"));
     }

@@ -5,6 +5,7 @@ vi.mock("./api", () => ({
   api: {
     sendRaw: vi.fn().mockResolvedValue(undefined),
     scriptRunInput: vi.fn().mockResolvedValue(false),
+    scriptRunAlias: vi.fn().mockResolvedValue(false),
     scriptRunCommand: vi.fn().mockResolvedValue(undefined),
   },
 }));
@@ -21,7 +22,28 @@ const channel = (name: string) => ({ serverId: SID, name, kind: "channel" }) as 
 
 beforeEach(() => {
   vi.mocked(api.sendRaw).mockClear();
+  vi.mocked(api.scriptRunAlias).mockReset().mockResolvedValue(false);
   vi.mocked(api.scriptRunCommand).mockClear();
+});
+
+describe("mIRC alias precedence", () => {
+  it("lets a user alias override a frontend built-in command", async () => {
+    vi.mocked(api.scriptRunAlias).mockResolvedValueOnce(true);
+
+    await handleInput("/mode +m", channel("#test"));
+
+    expect(api.scriptRunAlias).toHaveBeenCalledWith(SID, "#test", "me", "", "mode", "+m");
+    expect(api.sendRaw).not.toHaveBeenCalled();
+  });
+
+  it("uses !command to bypass a user alias", async () => {
+    vi.mocked(api.scriptRunAlias).mockResolvedValueOnce(true);
+
+    await handleInput("/!mode +m", channel("#test"));
+
+    expect(api.scriptRunAlias).not.toHaveBeenCalled();
+    expect(api.sendRaw).toHaveBeenCalledWith(SID, "MODE #test +m");
+  });
 });
 
 describe("/mode targeting", () => {

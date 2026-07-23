@@ -2,6 +2,28 @@
 
 use serde::{Deserialize, Serialize};
 
+/// SASL mechanism used during IRCv3 capability negotiation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SaslMechanism {
+    #[default]
+    #[serde(rename = "PLAIN")]
+    Plain,
+    #[serde(rename = "EXTERNAL")]
+    External,
+    #[serde(rename = "SCRAM-SHA-256")]
+    ScramSha256,
+}
+
+impl SaslMechanism {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Plain => "PLAIN",
+            Self::External => "EXTERNAL",
+            Self::ScramSha256 => "SCRAM-SHA-256",
+        }
+    }
+}
+
 /// A server connection profile. Sent from the frontend when opening a
 /// connection; persistence of profiles to disk arrives in Phase 2.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,12 +42,24 @@ pub struct ServerProfile {
     /// Skip TLS certificate verification (for self-signed test servers).
     #[serde(default)]
     pub tls_insecure: bool,
+    /// PEM certificate chain presented to the IRC server for TLS client
+    /// authentication (normally used with SASL EXTERNAL). Only the path is
+    /// persisted; certificate/key contents are never copied into profiles.
+    #[serde(default)]
+    pub tls_client_cert_path: Option<String>,
+    /// PEM private key matching `tls_client_cert_path`. Only the path is
+    /// persisted, never the private-key material itself.
+    #[serde(default)]
+    pub tls_client_key_path: Option<String>,
     /// Enable IRCX mode after registration (sends the `IRCX` command).
     #[serde(default)]
     pub ircx: bool,
-    /// Attempt SASL PLAIN authentication during CAP negotiation.
+    /// Attempt SASL authentication during CAP negotiation.
     #[serde(default)]
     pub sasl: bool,
+    /// SASL mechanism. Profiles saved before this field was added use PLAIN.
+    #[serde(default)]
+    pub sasl_mechanism: SaslMechanism,
     /// SASL/NickServ account name (defaults to `nick`).
     #[serde(default)]
     pub account: Option<String>,
@@ -110,5 +144,34 @@ impl ServerProfile {
     /// NTLM domain (empty string when unset).
     pub fn ntlm_domain(&self) -> &str {
         self.ntlm_domain.as_deref().unwrap_or("")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SaslMechanism, ServerProfile};
+
+    #[test]
+    fn profiles_without_a_sasl_mechanism_default_to_plain() {
+        let profile: ServerProfile = serde_json::from_str(
+            r#"{
+                "name":"test","host":"localhost","port":6667,
+                "nick":"nick","sasl":true,"autojoin":[]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(profile.sasl_mechanism, SaslMechanism::Plain);
+        assert!(profile.tls_client_cert_path.is_none());
+        assert!(profile.tls_client_key_path.is_none());
+    }
+
+    #[test]
+    fn scram_mechanism_uses_the_irc_name_in_json() {
+        let mechanism: SaslMechanism = serde_json::from_str(r#""SCRAM-SHA-256""#).unwrap();
+        assert_eq!(mechanism, SaslMechanism::ScramSha256);
+        assert_eq!(
+            serde_json::to_string(&mechanism).unwrap(),
+            r#""SCRAM-SHA-256""#
+        );
     }
 }

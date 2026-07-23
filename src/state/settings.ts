@@ -39,6 +39,8 @@ export interface Settings {
   dccIp: string; // advertised IP; "" = auto (local IP)
   dccPortFrom: number; // listen-port range; 0 = ephemeral
   dccPortTo: number;
+  /** Use mIRC's passive/reverse DCC negotiation for outgoing offers. */
+  dccPassive: boolean;
 }
 
 const DEFAULTS: Settings = {
@@ -68,6 +70,7 @@ const DEFAULTS: Settings = {
   dccIp: "",
   dccPortFrom: 0,
   dccPortTo: 0,
+  dccPassive: false,
 };
 
 const STORAGE_KEY = "jirc.settings";

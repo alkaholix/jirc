@@ -31,6 +31,7 @@ import { pollNotify, routeNotifyEvent } from "./state/notify";
 import { routeUrlEvent } from "./state/urlGrabber";
 import { routeModeEvent } from "./state/channelModes";
 import { applyTheme, applyCustomCss, applyChatFont, useSettings } from "./state/settings";
+import { scriptServerAutoReconnect } from "./lib/profileValidation";
 
 function App() {
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -47,6 +48,7 @@ function App() {
   const dccIp = useSettings((s) => s.dccIp);
   const dccPortFrom = useSettings((s) => s.dccPortFrom);
   const dccPortTo = useSettings((s) => s.dccPortTo);
+  const dccPassive = useSettings((s) => s.dccPassive);
   const handleEvent = useStore((s) => s.handleEvent);
   const ensureServer = useStore((s) => s.ensureServer);
   const ensureBuffer = useStore((s) => s.ensureBuffer);
@@ -72,17 +74,17 @@ function App() {
           `${o.nick} wants to start a DCC chat with you (from ${o.ip}). Accept?`,
           { title: "DCC chat request", confirmLabel: "Accept" }
         ).then((ok) => {
-          if (ok) api.dccAccept(o.serverId, o.nick, o.ip, o.port).catch(() => {});
+          if (ok) api.dccAccept(o.serverId, o.nick, o.ip, o.port, o.token).catch(() => {});
         });
       }
       if (e.payload.type === "dccFileOffer" && detachedKey === null) {
         const o = e.payload;
         confirmDialog(
-          `${o.nick} wants to send you "${o.filename}" (${o.size} bytes). Download it?`,
+          `${o.nick} wants to send you "${o.filename}" (${o.size} bytes). Download it? Existing files are kept under a new name; cancel and use /dcc resume ${o.nick} to continue a partial copy.`,
           { title: "DCC file offer", confirmLabel: "Download" }
         ).then((ok) => {
           if (ok)
-            api.dccRecv(o.serverId, o.nick, o.filename, o.ip, o.port, o.size).catch(() => {});
+            api.dccRecv(o.serverId, o.nick, o.filename, o.ip, o.port, o.size, o.token).catch(() => {});
         });
       }
       if (e.payload.type === "dccLocalHost") dccDetect.set(e.payload.host);
@@ -90,18 +92,40 @@ function App() {
       // server window and connect the native client to it. Main window only.
       if (e.payload.type === "scriptServer" && detachedKey === null) {
         const o = e.payload;
-        const serverId = crypto.randomUUID();
+        const source = useStore.getState().servers[o.serverId];
+        // Reuse a disconnected source when `/server` has no `-m`. This is
+        // essential for Local script bridges: their socket callbacks, @windows,
+        // timers, and typed commands all retain the source id.
+        const reuseSource = !o.newWindow && !!source && !source.connected;
+        const serverId = reuseSource ? o.serverId : crypto.randomUUID();
+        const nick = `Guest${Math.floor(1000 + Math.random() * 9000)}`;
         const profile: ServerProfile = {
           id: serverId,
           name: o.host,
           host: o.host,
           port: o.port,
-          nick: `Guest${Math.floor(1000 + Math.random() * 9000)}`,
+          nick,
           password: o.pass || undefined,
           tls: false,
+          ircx: false,
+          autoReconnect: scriptServerAutoReconnect(o.host),
           autojoin: [],
         };
         ensureServer(serverId, o.host);
+        if (reuseSource) {
+          useStore.setState((s) => ({
+            servers: {
+              ...s.servers,
+              [serverId]: {
+                ...s.servers[serverId],
+                name: o.host,
+                nick,
+                connected: false,
+                registered: false,
+              },
+            },
+          }));
+        }
         ensureBuffer(serverId, STATUS, "status");
         setActive(bufferKey(serverId, STATUS));
         appendLine(serverId, STATUS, "status", {
@@ -182,8 +206,8 @@ function App() {
 
   // Keep the backend DCC config (advertised IP + listen-port range) in sync.
   useEffect(() => {
-    api.dccConfigure(dccIp, dccPortFrom, dccPortTo).catch(() => {});
-  }, [dccIp, dccPortFrom, dccPortTo]);
+    api.dccConfigure(dccIp, dccPortFrom, dccPortTo, dccPassive).catch(() => {});
+  }, [dccIp, dccPortFrom, dccPortTo, dccPassive]);
 
   // Close the "new connection" chooser on Escape.
   useEffect(() => {

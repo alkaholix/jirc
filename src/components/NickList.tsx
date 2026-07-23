@@ -8,6 +8,7 @@ import { handleInput } from "../lib/slash";
 import { promptDialog } from "../state/prompt";
 import { iconKey, useNickIcons } from "../state/nickIcons";
 import { open } from "@tauri-apps/plugin-dialog";
+import { PopupItems } from "./popupMenu";
 
 const isUrl = (s: string) => /^(https?:|data:)/i.test(s);
 
@@ -15,53 +16,6 @@ interface MenuState {
   nick: string;
   x: number;
   y: number;
-}
-
-/** A popup item with children — its flyout opens left when it would otherwise
- *  run off the right edge of the window. */
-function SubMenu({ item, onRun }: { item: PopupItem; onRun: (command: string) => void }) {
-  const subRef = useRef<HTMLDivElement>(null);
-  const [flipLeft, setFlipLeft] = useState(false);
-
-  // Decide direction from the parent item + submenu width, independent of the
-  // current flip state (so it can't oscillate on repeated hovers).
-  const onEnter = () => {
-    const sub = subRef.current;
-    const item = sub?.parentElement;
-    if (!sub || !item) return;
-    const rect = item.getBoundingClientRect();
-    setFlipLeft(rect.right + sub.offsetWidth > window.innerWidth - 8);
-  };
-
-  return (
-    <div className="pmenu-item has-sub" onMouseEnter={onEnter}>
-      <span className="pmenu-label">
-        {item.label} <span className="pmenu-arrow">▸</span>
-      </span>
-      <div ref={subRef} className={`pmenu-sub context-menu${flipLeft ? " flip-left" : ""}`}>
-        <PopupItems items={item.children} onRun={onRun} />
-      </div>
-    </div>
-  );
-}
-
-/** Recursively renders script-defined popup items. */
-function PopupItems({ items, onRun }: { items: PopupItem[]; onRun: (command: string) => void }) {
-  return (
-    <>
-      {items.map((item, i) =>
-        item.separator ? (
-          <div key={i} className="menu-sep" />
-        ) : item.children.length > 0 ? (
-          <SubMenu key={i} item={item} onRun={onRun} />
-        ) : (
-          <button key={i} onClick={() => onRun(item.command)}>
-            {item.label}
-          </button>
-        )
-      )}
-    </>
-  );
 }
 
 export function NickList({ buffer }: { buffer: Buffer }) {
@@ -162,9 +116,9 @@ export function NickList({ buffer }: { buffer: Buffer }) {
   // Runs a script popup command with $1 = selected nick, $chan = channel.
   // The nicklist is single-select, so the clicked nick is also the whole
   // selection exposed via $snick/$snicks.
-  const runPopup = (command: string, nick: string) => {
+  const runPopup = (item: PopupItem, nick: string) => {
     api
-      .scriptRunPopup(serverId, channel, server?.nick ?? "", server?.name ?? "", command, [nick], [nick])
+      .scriptRunPopup(serverId, channel, server?.nick ?? "", server?.name ?? "", item.command, [nick], [nick], item.source)
       .catch(() => {});
     setMenu(null);
   };
@@ -218,7 +172,7 @@ export function NickList({ buffer }: { buffer: Buffer }) {
           <div ref={menuRef} className="context-menu" style={{ left: pos.left, top: pos.top }}>
             <div className="menu-title">{ircxDisplay(menu.nick)}</div>
             {popups.length > 0 ? (
-              <PopupItems items={popups} onRun={(cmd) => runPopup(cmd, menu.nick)} />
+              <PopupItems items={popups} onRun={(item) => runPopup(item, menu.nick)} />
             ) : (
               <>
                 <button onClick={() => raw(`WHOIS ${menu.nick}`)}>Whois</button>

@@ -49,3 +49,7 @@ mirckb-master/
 # mSL script files (e.g. dropped in for debugging) are NEVER committed — they can
 # carry credentials. jIRC's own example scripts live embedded in the Rust source.
 *.mrc
+
+# Reviewed, credential-free scripts shipped as documentation examples.
+!docs/examples/
+!docs/examples/*.mrc

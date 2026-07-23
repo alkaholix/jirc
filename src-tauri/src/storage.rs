@@ -106,7 +106,10 @@ fn read_location_redirect(default_base: &std::path::Path) -> Option<PathBuf> {
 }
 
 /// Pure resolver for [`custom_base`] (so it can be unit-tested).
-fn resolve_custom_base(env_override: Option<&str>, exe_dir: Option<&std::path::Path>) -> Option<PathBuf> {
+fn resolve_custom_base(
+    env_override: Option<&str>,
+    exe_dir: Option<&std::path::Path>,
+) -> Option<PathBuf> {
     if let Some(p) = env_override {
         let p = p.trim();
         if !p.is_empty() {
@@ -187,7 +190,8 @@ pub fn data_location(app: AppHandle) -> Result<DataLocation, String> {
         .unwrap_or_default();
     let exe = std::env::current_exe().ok();
     let exe_dir = exe.as_deref().and_then(|e| e.parent());
-    let forced = resolve_custom_base(std::env::var("JIRC_DATA_DIR").ok().as_deref(), exe_dir).is_some();
+    let forced =
+        resolve_custom_base(std::env::var("JIRC_DATA_DIR").ok().as_deref(), exe_dir).is_some();
     Ok(DataLocation {
         current,
         custom,
@@ -231,7 +235,8 @@ pub fn profiles_load(app: AppHandle) -> Result<Vec<ServerProfile>, String> {
         return Ok(Vec::new());
     }
     let data = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let mut profiles: Vec<ServerProfile> = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+    let mut profiles: Vec<ServerProfile> =
+        serde_json::from_str(&data).map_err(|e| e.to_string())?;
     for p in &mut profiles {
         if let Some(id) = p.id.clone() {
             if p.account_password.is_none() {
@@ -262,7 +267,9 @@ pub fn profiles_save(app: AppHandle, mut profiles: Vec<ServerProfile>) -> Result
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
     for p in &mut profiles {
-        let id = p.id.get_or_insert_with(|| Uuid::new_v4().to_string()).clone();
+        let id =
+            p.id.get_or_insert_with(|| Uuid::new_v4().to_string())
+                .clone();
         if store_secret(&id, "account_password", p.account_password.as_deref()) {
             p.account_password = None;
         }
@@ -395,10 +402,16 @@ mod tests {
     #[test]
     #[ignore]
     fn keyring_round_trip() {
-        assert!(keyring_available(), "OS keyring not available on this platform");
+        assert!(
+            keyring_available(),
+            "OS keyring not available on this platform"
+        );
         let id = "test-roundtrip";
         assert!(store_secret(id, "account_password", Some("s3cret")));
-        assert_eq!(load_secret(id, "account_password").as_deref(), Some("s3cret"));
+        assert_eq!(
+            load_secret(id, "account_password").as_deref(),
+            Some("s3cret")
+        );
         // delete and confirm it's gone
         assert!(store_secret(id, "account_password", None));
         assert_eq!(load_secret(id, "account_password"), None);

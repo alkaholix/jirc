@@ -42,6 +42,12 @@ impl ConnectionManager {
         // Replace any prior handle for this id.
         if let Some(old) = self.conns.lock().unwrap().remove(&server_id) {
             old.task.abort();
+            if let Some(store) = app.try_state::<crate::irc::state::StateStore>() {
+                store.remove(&server_id);
+            }
+            if let Some(timers) = app.try_state::<crate::script::timer::TimerManager>() {
+                timers.session_dropped(&app, &server_id);
+            }
         }
 
         let (tx, rx) = mpsc::unbounded_channel::<String>();

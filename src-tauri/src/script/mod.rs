@@ -9,13 +9,16 @@ pub mod ast;
 pub mod binvar;
 pub mod eval;
 pub mod files;
+pub mod hash;
 pub mod ident;
 pub mod ini;
 pub mod input;
 pub mod parser;
+pub mod play;
 pub mod socket;
 pub mod timer;
 pub mod users;
+pub mod webview;
 pub mod window;
 
 use std::collections::HashMap;
@@ -23,8 +26,8 @@ use std::sync::Mutex;
 
 use ast::{PopupItem, Script};
 use eval::{
-    wildcard_match, Action, EventVars, NoInput, NoSockets, NoTimers, Runtime, ScriptInput,
-    ScriptSockets, ScriptTimers,
+    wildcard_match, Action, EventVars, NoDcc, NoInput, NoPlay, NoSockets, NoTimers, NoWebviews,
+    Runtime, ScriptDcc, ScriptInput, ScriptPlay, ScriptSockets, ScriptTimers, ScriptWebviews,
 };
 
 /// Connection context supplied by the caller for each run.
@@ -38,16 +41,46 @@ pub struct RunCtx<'a> {
     pub state: std::sync::Arc<crate::irc::state::StateSnapshot>,
 }
 
+/// Raw server-line metadata shared by every script event derived from one IRC
+/// message. IRCv3 tags are removed from `raw_msg` but retained in `msg_tags`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RawEventContext {
+    pub raw_msg: String,
+    pub raw_bytes: Vec<u8>,
+    pub msg_tags: Vec<(String, String, bool)>,
+    pub msg_tags_raw: String,
+    pub msg_stamp: String,
+}
+
+/// Result of the pre-protocol `on PARSELINE` pass.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ParseLineOutcome {
+    /// Last non-queued replacement for the current direction, if supplied.
+    pub current: Option<Vec<u8>>,
+    /// Current replacement requested `-n`; outgoing processing should ensure a
+    /// CRLF even when the queued line being replaced did not carry one.
+    pub force_crlf: bool,
+    /// `/parseline -q` actions, applied after the handler exits.
+    pub queued: Vec<Action>,
+    /// Ordinary actions emitted by the handler.
+    pub actions: Vec<Action>,
+}
+
 struct Inner {
     script: Script,
     vars: HashMap<String, String>,
     hashes: HashMap<String, HashMap<String, String>>,
+    var_expiry: HashMap<String, eval::TimedExpiry>,
+    hash_expiry: HashMap<(String, String), eval::TimedExpiry>,
     files: files::FileStore,
     bins: binvar::BinStore,
     windows: window::WindowStore,
     users: users::UserList,
     sockets: std::sync::Arc<dyn ScriptSockets>,
     timers: std::sync::Arc<dyn ScriptTimers>,
+    play: std::sync::Arc<dyn ScriptPlay>,
+    dcc: std::sync::Arc<dyn ScriptDcc>,
+    webviews: std::sync::Arc<dyn ScriptWebviews>,
     input: std::sync::Arc<dyn ScriptInput>,
     /// The frontend's currently-focused window/buffer name, for `$active`.
     active: String,
@@ -63,12 +96,17 @@ impl Inner {
             script: Script::default(),
             vars: HashMap::new(),
             hashes: HashMap::new(),
+            var_expiry: HashMap::new(),
+            hash_expiry: HashMap::new(),
             files: files::FileStore::default(),
             bins: binvar::BinStore::default(),
             windows: window::WindowStore::default(),
             users: users::UserList::default(),
             sockets: std::sync::Arc::new(NoSockets),
             timers: std::sync::Arc::new(NoTimers),
+            play: std::sync::Arc::new(NoPlay),
+            dcc: std::sync::Arc::new(NoDcc),
+            webviews: std::sync::Arc::new(NoWebviews),
             input: std::sync::Arc::new(NoInput),
             active: String::new(),
             conns: ConnReg::default(),
@@ -86,6 +124,8 @@ struct ConnReg {
     entries: Vec<(u32, String)>,
     /// The active window's server id.
     active: String,
+    /// Profile context used when a dynamic timer follows another connection.
+    contexts: HashMap<String, (String, String)>,
 }
 
 impl ConnReg {
@@ -101,6 +141,25 @@ impl ConnReg {
 
     fn forget(&mut self, server_id: &str) {
         self.entries.retain(|(_, id)| id != server_id);
+        self.contexts.remove(server_id);
+        if self.active == server_id {
+            self.active.clear();
+        }
+    }
+
+    fn cid_for(&self, server_id: &str) -> u32 {
+        self.entries
+            .iter()
+            .find(|(_, id)| id == server_id)
+            .map(|(cid, _)| *cid)
+            .unwrap_or(0)
+    }
+
+    fn set_context(&mut self, server_id: &str, network: &str, server: &str) {
+        self.contexts.insert(
+            server_id.to_string(),
+            (network.to_string(), server.to_string()),
+        );
     }
 
     fn view(&self) -> crate::script::eval::ConnsView {
@@ -110,7 +169,10 @@ impl ConnReg {
             .find(|(_, id)| *id == self.active)
             .map(|(c, _)| *c)
             .unwrap_or(0);
-        crate::script::eval::ConnsView { entries: self.entries.clone(), active_cid }
+        crate::script::eval::ConnsView {
+            entries: self.entries.clone(),
+            active_cid,
+        }
     }
 }
 
@@ -135,7 +197,8 @@ impl WinReg {
             return *w;
         }
         self.next += 1;
-        self.entries.push((self.next, server_id.to_string(), name.to_string()));
+        self.entries
+            .push((self.next, server_id.to_string(), name.to_string()));
         self.next
     }
 
@@ -154,7 +217,10 @@ impl WinReg {
     }
 
     fn view(&self) -> crate::script::eval::WinView {
-        crate::script::eval::WinView { entries: self.entries.clone(), active_wid: self.active_wid }
+        crate::script::eval::WinView {
+            entries: self.entries.clone(),
+            active_wid: self.active_wid,
+        }
     }
 }
 
@@ -182,6 +248,18 @@ impl ScriptEngine {
         self.inner.lock().unwrap().timers = timers;
     }
 
+    pub fn set_play(&self, play: std::sync::Arc<dyn ScriptPlay>) {
+        self.inner.lock().unwrap().play = play;
+    }
+
+    pub fn set_dcc(&self, dcc: std::sync::Arc<dyn ScriptDcc>) {
+        self.inner.lock().unwrap().dcc = dcc;
+    }
+
+    pub fn set_webviews(&self, webviews: std::sync::Arc<dyn ScriptWebviews>) {
+        self.inner.lock().unwrap().webviews = webviews;
+    }
+
     pub fn set_sockets(&self, sockets: std::sync::Arc<dyn ScriptSockets>) {
         self.inner.lock().unwrap().sockets = sockets;
     }
@@ -206,6 +284,49 @@ impl ScriptEngine {
         self.inner.lock().unwrap().conns.forget(server_id);
     }
 
+    /// Returns the numeric mIRC-style connection id for a server id.
+    pub fn cid_for(&self, server_id: &str) -> u32 {
+        self.inner.lock().unwrap().conns.cid_for(server_id)
+    }
+
+    /// Records the profile context timers need when `-i` changes connection.
+    pub fn set_connection_context(&self, server_id: &str, network: &str, server: &str) {
+        self.inner
+            .lock()
+            .unwrap()
+            .conns
+            .set_context(server_id, network, server);
+    }
+
+    /// Returns `(network, server)` for a live connection profile.
+    pub fn connection_context(&self, server_id: &str) -> Option<(String, String)> {
+        self.inner
+            .lock()
+            .unwrap()
+            .conns
+            .contexts
+            .get(server_id)
+            .cloned()
+    }
+
+    /// The connection owning the active frontend window, if one is selected.
+    pub fn active_connection(&self) -> Option<String> {
+        let active = self.inner.lock().unwrap().conns.active.clone();
+        (!active.is_empty()).then_some(active)
+    }
+
+    /// Server ids in stable mIRC `$cid` order (never HashMap iteration order).
+    pub fn connections_in_cid_order(&self) -> Vec<String> {
+        self.inner
+            .lock()
+            .unwrap()
+            .conns
+            .entries
+            .iter()
+            .map(|(_, server_id)| server_id.clone())
+            .collect()
+    }
+
     /// Records which connection owns the active window (for `$activecid`).
     pub fn set_active_conn(&self, server_id: &str) {
         self.inner.lock().unwrap().conns.active = server_id.to_string();
@@ -228,8 +349,20 @@ impl ScriptEngine {
 
     /// Compiles the combined source of all loaded script files.
     pub fn load(&self, source: &str) {
+        self.load_sources(&[("<memory>".to_string(), source.to_string())]);
+    }
+
+    /// Compiles independently-loaded script files, preserving their order and
+    /// source identity for mIRC's per-file event and local-alias semantics.
+    pub fn load_sources(&self, sources: &[(String, String)]) {
+        let mut combined = Script::default();
+        for (name, source) in sources {
+            let mut parsed = parser::parse(source);
+            parsed.set_source(name);
+            combined.append(parsed);
+        }
         let mut g = self.inner.lock().unwrap();
-        g.script = parser::parse(source);
+        g.script = combined;
     }
 
     /// Loads the persisted user list (and auto-lists) from `dir/users.json`.
@@ -254,8 +387,8 @@ impl ScriptEngine {
         // `#group` makes its aliases uncallable too.
         let g = self.inner.lock().unwrap();
         g.script
-            .find_alias(name)
-            .is_some_and(|a| !a.local && g.script.group_enabled(&g.vars, &a.group))
+            .find_public_alias(name)
+            .is_some_and(|a| g.script.group_enabled(&g.vars, &a.group))
     }
 
     /// Returns the user-defined popup items for a context (nicklist, channel, …),
@@ -263,15 +396,36 @@ impl ScriptEngine {
     /// right-clicked nick + channel) and dropping items whose label renders empty
     /// — mIRC's display behaviour. The `command` is left unexpanded (it's expanded
     /// when the item runs via [`run_command`]).
-    pub fn popups_evaluated(&self, ctx: &RunCtx, context: &str, nick: &str, chan: &str) -> Vec<PopupItem> {
+    pub fn popups_evaluated(
+        &self,
+        ctx: &RunCtx,
+        context: &str,
+        nick: &str,
+        chan: &str,
+    ) -> Vec<PopupItem> {
         let mut g = self.inner.lock().unwrap();
         let script = g.script.clone();
         let raw = script.popup_items(context);
         let event = EventVars {
             nick: nick.to_string(),
             chan: chan.to_string(),
-            target: if chan.is_empty() { nick.to_string() } else { chan.to_string() },
-            params: if nick.is_empty() { Vec::new() } else { vec![nick.to_string()] },
+            target: if chan.is_empty() {
+                nick.to_string()
+            } else {
+                chan.to_string()
+            },
+            params: if nick.is_empty() {
+                Vec::new()
+            } else {
+                vec![nick.to_string()]
+            },
+            // mIRC exposes the current listbox selection while dynamic popup
+            // labels are evaluated, not only after an item is clicked.
+            snicks: if nick.is_empty() {
+                Vec::new()
+            } else {
+                vec![nick.to_string()]
+            },
             ..Default::default()
         };
         let g = &mut *g;
@@ -281,13 +435,17 @@ impl ScriptEngine {
             network: ctx.network,
             server: ctx.server,
             vars: &mut g.vars,
+            local_scopes: Vec::new(),
             hashes: &mut g.hashes,
+            var_expiry: &mut g.var_expiry,
+            hash_expiry: &mut g.hash_expiry,
             files: &mut g.files,
             bins: &mut g.bins,
             windows: &mut g.windows,
             users: &mut g.users,
             event,
             actions: Vec::new(),
+            pending_pipe_commands: Vec::new(),
             halted: false,
             steps: 0,
             depth: 0,
@@ -300,6 +458,9 @@ impl ScriptEngine {
             wins: g.wins.view(),
             sockets: g.sockets.clone(),
             timers: g.timers.clone(),
+            play: g.play.clone(),
+            dcc: g.dcc.clone(),
+            webviews: g.webviews.clone(),
             input: g.input.clone(),
             caller: "menu",
             show: true,
@@ -311,20 +472,22 @@ impl ScriptEngine {
     pub fn run_alias(&self, ctx: &RunCtx, target: &str, name: &str, args: &str) -> Vec<Action> {
         let mut g = self.inner.lock().unwrap();
         let script = g.script.clone();
-        let Some(alias) = script.find_alias(name).filter(|a| !a.local) else {
+        let Some(alias) = script.find_public_alias(name) else {
             return Vec::new();
         };
         // A disabled `#group` makes its aliases uncallable.
         if !script.group_enabled(&g.vars, &alias.group) {
             return Vec::new();
         }
-        let chan = if is_channel(target) { target.to_string() } else { String::new() };
+        let chan = context_channel(ctx, target);
         let event = EventVars {
             nick: ctx.my_nick.to_string(),
             chan,
             target: target.to_string(),
             text: args.to_string(),
             params: args.split_whitespace().map(String::from).collect(),
+            script_source: alias.source.clone(),
+            script_line: alias.source_line,
             ..Default::default()
         };
         let g = &mut *g;
@@ -334,13 +497,17 @@ impl ScriptEngine {
             network: ctx.network,
             server: ctx.server,
             vars: &mut g.vars,
+            local_scopes: Vec::new(),
             hashes: &mut g.hashes,
+            var_expiry: &mut g.var_expiry,
+            hash_expiry: &mut g.hash_expiry,
             files: &mut g.files,
             bins: &mut g.bins,
             windows: &mut g.windows,
             users: &mut g.users,
             event,
             actions: Vec::new(),
+            pending_pipe_commands: Vec::new(),
             halted: false,
             steps: 0,
             depth: 0,
@@ -353,6 +520,9 @@ impl ScriptEngine {
             wins: g.wins.view(),
             sockets: g.sockets.clone(),
             timers: g.timers.clone(),
+            play: g.play.clone(),
+            dcc: g.dcc.clone(),
+            webviews: g.webviews.clone(),
             input: g.input.clone(),
             caller: "command",
             show: true,
@@ -376,7 +546,104 @@ impl ScriptEngine {
         command: &str,
         params: &[String],
     ) -> Vec<Action> {
-        self.run_command_snicks(ctx, target, command, params, &[])
+        self.run_command_from_source(ctx, target, command, params, "")
+    }
+
+    /// Runs a deferred command while retaining the remote script file that
+    /// created it, so `alias -l` resolution matches mIRC when a timer fires.
+    pub fn run_command_from_source(
+        &self,
+        ctx: &RunCtx,
+        target: &str,
+        command: &str,
+        params: &[String],
+        source: &str,
+    ) -> Vec<Action> {
+        self.run_command_snicks_from_source(
+            ctx,
+            target,
+            command,
+            params,
+            &[],
+            source,
+            "command",
+            "",
+            "",
+        )
+    }
+
+    /// Runs a timer callback with mIRC's `$caller`/`$ctimer` context.
+    pub fn run_timer_command(
+        &self,
+        ctx: &RunCtx,
+        target: &str,
+        command: &str,
+        source: &str,
+        timer_name: &str,
+    ) -> Vec<Action> {
+        self.run_command_snicks_from_source(
+            ctx,
+            target,
+            command,
+            &[],
+            &[],
+            source,
+            "timer",
+            timer_name,
+            "",
+        )
+    }
+
+    /// Runs a command line dequeued by `/play -c`, retaining both the script
+    /// file that created it and mIRC's `$pnick` destination.
+    pub fn run_play_command(
+        &self,
+        ctx: &RunCtx,
+        target: &str,
+        command: &str,
+        source: &str,
+        play_target: &str,
+    ) -> Vec<Action> {
+        self.run_command_snicks_from_source(
+            ctx,
+            target,
+            command,
+            &[],
+            &[],
+            source,
+            "play",
+            "",
+            play_target,
+        )
+    }
+
+    /// Runs one `/play -a` line as the selected alias' parameters. File-local
+    /// aliases remain visible because the deferred invocation retains `source`.
+    pub fn run_play_alias(
+        &self,
+        ctx: &RunCtx,
+        target: &str,
+        alias: &str,
+        line: &str,
+        source: &str,
+        play_target: &str,
+    ) -> Vec<Action> {
+        let command = if line.is_empty() {
+            alias.to_string()
+        } else {
+            format!("{alias} {line}")
+        };
+        self.run_command_snicks_from_source(
+            ctx,
+            target,
+            &command,
+            &[],
+            &[],
+            source,
+            "play",
+            "",
+            play_target,
+        )
     }
 
     /// Like [`run_command`], but also supplies the selected nicknames for a
@@ -390,10 +657,27 @@ impl ScriptEngine {
         params: &[String],
         snicks: &[String],
     ) -> Vec<Action> {
+        self.run_command_snicks_from_source(
+            ctx, target, command, params, snicks, "", "command", "", "",
+        )
+    }
+
+    fn run_command_snicks_from_source(
+        &self,
+        ctx: &RunCtx,
+        target: &str,
+        command: &str,
+        params: &[String],
+        snicks: &[String],
+        source: &str,
+        caller: &'static str,
+        timer_name: &str,
+        play_target: &str,
+    ) -> Vec<Action> {
         let body = parser::parse_body(command);
         let mut g = self.inner.lock().unwrap();
         let script = g.script.clone();
-        let chan = if is_channel(target) { target.to_string() } else { String::new() };
+        let chan = context_channel(ctx, target);
         let event = EventVars {
             nick: params
                 .first()
@@ -403,6 +687,9 @@ impl ScriptEngine {
             target: target.to_string(),
             params: params.to_vec(),
             snicks: snicks.to_vec(),
+            script_source: source.to_string(),
+            timer: timer_name.to_string(),
+            pnick: play_target.to_string(),
             ..Default::default()
         };
         let g = &mut *g;
@@ -412,13 +699,17 @@ impl ScriptEngine {
             network: ctx.network,
             server: ctx.server,
             vars: &mut g.vars,
+            local_scopes: Vec::new(),
             hashes: &mut g.hashes,
+            var_expiry: &mut g.var_expiry,
+            hash_expiry: &mut g.hash_expiry,
             files: &mut g.files,
             bins: &mut g.bins,
             windows: &mut g.windows,
             users: &mut g.users,
             event,
             actions: Vec::new(),
+            pending_pipe_commands: Vec::new(),
             halted: false,
             steps: 0,
             depth: 0,
@@ -431,8 +722,11 @@ impl ScriptEngine {
             wins: g.wins.view(),
             sockets: g.sockets.clone(),
             timers: g.timers.clone(),
+            play: g.play.clone(),
+            dcc: g.dcc.clone(),
+            webviews: g.webviews.clone(),
             input: g.input.clone(),
-            caller: "command",
+            caller,
             show: true,
         };
         rt.run(&body);
@@ -446,7 +740,7 @@ impl ScriptEngine {
 
     /// Dispatches an event to all matching handlers. Returns the actions.
     pub fn dispatch_event(&self, ctx: &RunCtx, kind: &str, event: EventVars) -> Vec<Action> {
-        self.dispatch_event_halt(ctx, kind, event).0
+        self.dispatch_event_status(ctx, kind, event, None).0
     }
 
     /// Like [`dispatch_event`], but also reports whether any handler called
@@ -457,132 +751,315 @@ impl ScriptEngine {
         kind: &str,
         event: EventVars,
     ) -> (Vec<Action>, bool) {
+        let (actions, halted, _) = self.dispatch_event_status(ctx, kind, event, None);
+        (actions, halted)
+    }
+
+    fn dispatch_event_default_halt_raw(
+        &self,
+        ctx: &RunCtx,
+        kind: &str,
+        event: EventVars,
+        raw: Option<&RawEventContext>,
+    ) -> (Vec<Action>, bool) {
+        let (actions, _, default_halted) = self.dispatch_event_status(ctx, kind, event, raw);
+        (actions, default_halted)
+    }
+
+    fn dispatch_event_status(
+        &self,
+        ctx: &RunCtx,
+        kind: &str,
+        event: EventVars,
+        raw: Option<&RawEventContext>,
+    ) -> (Vec<Action>, bool, bool) {
         // $event reflects the dispatch kind for every handler (text, raw, op, …).
         let mut event = event;
         event.event = kind.to_ascii_lowercase();
+        if let Some(raw) = raw {
+            event.raw_msg = raw.raw_msg.clone();
+            event.raw_bytes = raw.raw_bytes.clone();
+            event.msg_tags = raw.msg_tags.clone();
+            event.msg_tags_raw = raw.msg_tags_raw.clone();
+            event.msg_stamp = raw.msg_stamp.clone();
+        }
         let mut g = self.inner.lock().unwrap();
         let script = g.script.clone();
         let g = &mut *g;
         let vars = &mut g.vars;
         let hashes = &mut g.hashes;
+        let var_expiry = &mut g.var_expiry;
+        let hash_expiry = &mut g.hash_expiry;
         let files = &mut g.files;
         let bins = &mut g.bins;
         let windows = &mut g.windows;
         let users = &mut g.users;
         let mut actions = Vec::new();
         let mut halted = false;
+        let mut default_halted = false;
+        let mut event_sources = Vec::new();
         for ev in script.events_of(kind) {
-            if !matches(&event, &ev.pattern, &ev.target, kind) {
-                continue;
-            }
-            // A disabled `#group` suppresses its event handlers.
-            if !script.group_enabled(vars, &ev.group) {
-                continue;
-            }
-            // Access-level gate: the triggering user must satisfy the event's
-            // level prefix (`*` = anyone). $clevel/$ulevel are set from the match.
-            let mut ev_event = event.clone();
+            if !event_sources
+                .iter()
+                .any(|source: &String| source.eq_ignore_ascii_case(&ev.source))
             {
-                let addr = ctx
-                    .state
-                    .ial
-                    .iter()
-                    .find(|(n, _)| n.eq_ignore_ascii_case(&event.nick))
-                    .map(|(_, a)| a.as_str())
-                    .unwrap_or("");
-                let status = ctx
-                    .state
-                    .channels
-                    .iter()
-                    .find(|c| c.name.eq_ignore_ascii_case(&event.chan))
-                    .and_then(|c| c.members.iter().find(|(n, _)| n.eq_ignore_ascii_case(&event.nick)))
-                    .map(|(_, p)| p.as_str())
-                    .unwrap_or("");
-                let ulevels = users.levels_of(&event.nick, addr);
-                match users::level_matches(&ev.level, &ulevels, status) {
-                    Some((clevel, ulevel)) => {
-                        ev_event.clevel = clevel;
-                        ev_event.ulevel = ulevel;
+                event_sources.push(ev.source.clone());
+            }
+        }
+        // `^` handlers are the early/default-text pass. mIRC processes them
+        // independently from normal handlers, in script-file load order.
+        for early_pass in [true, false] {
+            for source in &event_sources {
+                let mut candidates = Vec::new();
+                let mut highest_numeric: Option<i64> = None;
+                for ev in script
+                    .events_of(kind)
+                    .filter(|ev| ev.source.eq_ignore_ascii_case(source))
+                {
+                    // A disabled `#group` suppresses its event handlers.
+                    if !script.group_enabled(vars, &ev.group) {
+                        continue;
                     }
-                    None => continue,
+                    let access = event_access(&ev.level);
+                    if access.early != early_pass || (access.skip_if_halted && default_halted) {
+                        continue;
+                    }
+                    let pattern = expand_event_vars(&ev.pattern, vars);
+                    let selector = expand_event_vars(&ev.selector, vars);
+                    let target = expand_event_vars(&ev.target, vars);
+                    if !matches(
+                        &event,
+                        &pattern,
+                        &selector,
+                        &target,
+                        kind,
+                        access.regex_match,
+                        &ctx.state.isupport,
+                    ) {
+                        continue;
+                    }
+                    let is_self = !event.nick.is_empty()
+                        && ctx.state.isupport.names_equal(&event.nick, ctx.my_nick);
+                    if (access.self_only && !is_self) || (access.exclude_self && is_self) {
+                        continue;
+                    }
+                    if access.require_own_op {
+                        let op_prefix = ctx.state.isupport.prefix_for_mode('o').unwrap_or('@');
+                        let own_is_op = ctx
+                            .state
+                            .channels
+                            .iter()
+                            .find(|c| {
+                                let channel = ctx
+                                    .state
+                                    .isupport
+                                    .channel_target(&event.chan)
+                                    .unwrap_or(&event.chan);
+                                ctx.state.isupport.names_equal(&c.name, channel)
+                            })
+                            .and_then(|c| {
+                                c.members.iter().find(|(nick, _)| {
+                                    ctx.state.isupport.names_equal(nick, ctx.my_nick)
+                                })
+                            })
+                            .is_some_and(|(_, prefixes)| prefixes.contains(op_prefix));
+                        if !own_is_op {
+                            continue;
+                        }
+                    }
+                    // Access-level gate: the triggering user must satisfy the
+                    // remaining level. $clevel/$ulevel come from this match.
+                    let mut ev_event = event.clone();
+                    let addr = ctx
+                        .state
+                        .ial
+                        .iter()
+                        .find(|(n, _)| ctx.state.isupport.names_equal(n, &event.nick))
+                        .map(|(_, a)| a.as_str())
+                        .unwrap_or("");
+                    ev_event.match_key = pattern.clone();
+                    let status = ctx
+                        .state
+                        .channels
+                        .iter()
+                        .find(|c| {
+                            let channel = ctx
+                                .state
+                                .isupport
+                                .channel_target(&event.chan)
+                                .unwrap_or(&event.chan);
+                            ctx.state.isupport.names_equal(&c.name, channel)
+                        })
+                        .and_then(|c| {
+                            c.members
+                                .iter()
+                                .find(|(n, _)| ctx.state.isupport.names_equal(n, &event.nick))
+                        })
+                        .map(|(_, p)| p.as_str())
+                        .unwrap_or("");
+                    let ulevels = users.levels_of(&event.nick, addr);
+                    match users::level_matches(&access.level, &ulevels, status) {
+                        Some((clevel, ulevel)) => {
+                            ev_event.clevel = clevel;
+                            ev_event.matched_address = users
+                                .matched_address_for(&event.nick, addr, &ulevel)
+                                .unwrap_or(addr)
+                                .to_string();
+                            ev_event.ulevel = ulevel;
+                        }
+                        None => continue,
+                    }
+                    ev_event.script_source = ev.source.clone();
+                    ev_event.script_line = ev.source_line;
+                    ev_event.default_halted = default_halted;
+                    let rank = event_level_rank(&access.level);
+                    if let Some(rank) = rank {
+                        highest_numeric = Some(highest_numeric.map_or(rank, |old| old.max(rank)));
+                    }
+                    candidates.push((ev, access, ev_event, rank));
+                }
+
+                for (ev, access, ev_event, rank) in candidates {
+                    // Only the highest numeric level matching this event in this
+                    // script file fires. Named levels are exact but unordered.
+                    if rank.is_some() && rank != highest_numeric {
+                        continue;
+                    }
+                    let mut rt = Runtime {
+                        script: &script,
+                        my_nick: ctx.my_nick,
+                        network: ctx.network,
+                        server: ctx.server,
+                        vars: &mut *vars,
+                        local_scopes: Vec::new(),
+                        hashes: &mut *hashes,
+                        var_expiry: &mut *var_expiry,
+                        hash_expiry: &mut *hash_expiry,
+                        files: &mut *files,
+                        bins: &mut *bins,
+                        windows: &mut *windows,
+                        users: &mut *users,
+                        event: ev_event,
+                        actions: Vec::new(),
+                        pending_pipe_commands: Vec::new(),
+                        halted: false,
+                        steps: 0,
+                        depth: 0,
+                        ret: None,
+                        goto: None,
+                        data_dir: ctx.data_dir.clone(),
+                        state: ctx.state.clone(),
+                        active: g.active.clone(),
+                        conns: g.conns.view(),
+                        wins: g.wins.view(),
+                        sockets: g.sockets.clone(),
+                        timers: g.timers.clone(),
+                        play: g.play.clone(),
+                        dcc: g.dcc.clone(),
+                        webviews: g.webviews.clone(),
+                        input: g.input.clone(),
+                        caller: "event",
+                        show: true,
+                    };
+                    rt.run(&ev.body);
+                    // `/return` ends the handler but is not `/halt`.
+                    let handler_halted = rt.halted && rt.ret.is_none();
+                    // `/haltdef` always suppresses the event's default display;
+                    // a plain `/halt` only does so in an early (`^`) handler.
+                    let handler_default_halted =
+                        rt.event.default_halted || (access.early && handler_halted);
+                    default_halted |= handler_default_halted;
+                    halted |= handler_halted || handler_default_halted;
+                    actions.extend(rt.actions);
                 }
             }
-            let mut rt = Runtime {
-                script: &script,
-                my_nick: ctx.my_nick,
-                network: ctx.network,
-                server: ctx.server,
-                vars: &mut *vars,
-                hashes: &mut *hashes,
-                files: &mut *files,
-                bins: &mut *bins,
-                windows: &mut *windows,
-                users: &mut *users,
-                event: ev_event,
-                actions: Vec::new(),
-                halted: false,
-                steps: 0,
-                depth: 0,
-                ret: None,
-                goto: None,
-                data_dir: ctx.data_dir.clone(),
-                state: ctx.state.clone(),
-            active: g.active.clone(),
-            conns: g.conns.view(),
-            wins: g.wins.view(),
-                sockets: g.sockets.clone(),
-            timers: g.timers.clone(),
-            input: g.input.clone(),
-                caller: "event",
-                show: true,
-            };
-            rt.run(&ev.body);
-            halted |= rt.halted;
-            actions.extend(rt.actions);
         }
         // Auto-op / auto-voice: when someone else joins a channel where I hold
         // op (or higher) and they match an enabled list, queue the mode change.
-        if kind == "JOIN" && !event.nick.eq_ignore_ascii_case(ctx.my_nick) {
+        if kind == "JOIN" && !ctx.state.isupport.names_equal(&event.nick, ctx.my_nick) {
             let addr = ctx
                 .state
                 .ial
                 .iter()
-                .find(|(n, _)| n.eq_ignore_ascii_case(&event.nick))
+                .find(|(n, _)| ctx.state.isupport.names_equal(n, &event.nick))
                 .map(|(_, a)| a.as_str())
                 .unwrap_or("");
             let am_op = ctx
                 .state
                 .channels
                 .iter()
-                .find(|c| c.name.eq_ignore_ascii_case(&event.chan))
-                .and_then(|c| c.members.iter().find(|(n, _)| n.eq_ignore_ascii_case(ctx.my_nick)))
+                .find(|c| {
+                    let channel = ctx
+                        .state
+                        .isupport
+                        .channel_target(&event.chan)
+                        .unwrap_or(&event.chan);
+                    ctx.state.isupport.names_equal(&c.name, channel)
+                })
+                .and_then(|c| {
+                    c.members
+                        .iter()
+                        .find(|(n, _)| ctx.state.isupport.names_equal(n, ctx.my_nick))
+                })
                 .map(|(_, p)| p.contains('@') || p.contains('&') || p.contains('~'))
                 .unwrap_or(false);
             if am_op {
                 use users::AutoKind;
-                if users.auto_should_apply(AutoKind::Aop, addr, &event.nick, &event.chan, ctx.network) {
-                    actions.push(Action::Send(format!("MODE {} +o {}", event.chan, event.nick)));
-                } else if users.auto_should_apply(AutoKind::Avoice, addr, &event.nick, &event.chan, ctx.network) {
-                    actions.push(Action::Send(format!("MODE {} +v {}", event.chan, event.nick)));
+                if users.auto_should_apply(
+                    AutoKind::Aop,
+                    addr,
+                    &event.nick,
+                    &event.chan,
+                    ctx.network,
+                ) {
+                    actions.push(Action::Send(format!(
+                        "MODE {} +o {}",
+                        event.chan, event.nick
+                    )));
+                } else if users.auto_should_apply(
+                    AutoKind::Avoice,
+                    addr,
+                    &event.nick,
+                    &event.chan,
+                    ctx.network,
+                ) {
+                    actions.push(Action::Send(format!(
+                        "MODE {} +v {}",
+                        event.chan, event.nick
+                    )));
                 }
             }
         }
         // Protect: re-op a protected user who is deopped ($knick) in a channel
         // where I hold op.
-        if kind == "DEOP" && !event.knick.is_empty() && !event.knick.eq_ignore_ascii_case(ctx.my_nick) {
+        if kind == "DEOP"
+            && !event.knick.is_empty()
+            && !ctx.state.isupport.names_equal(&event.knick, ctx.my_nick)
+        {
             let addr = ctx
                 .state
                 .ial
                 .iter()
-                .find(|(n, _)| n.eq_ignore_ascii_case(&event.knick))
+                .find(|(n, _)| ctx.state.isupport.names_equal(n, &event.knick))
                 .map(|(_, a)| a.as_str())
                 .unwrap_or("");
             let am_op = ctx
                 .state
                 .channels
                 .iter()
-                .find(|c| c.name.eq_ignore_ascii_case(&event.chan))
-                .and_then(|c| c.members.iter().find(|(n, _)| n.eq_ignore_ascii_case(ctx.my_nick)))
+                .find(|c| {
+                    let channel = ctx
+                        .state
+                        .isupport
+                        .channel_target(&event.chan)
+                        .unwrap_or(&event.chan);
+                    ctx.state.isupport.names_equal(&c.name, channel)
+                })
+                .and_then(|c| {
+                    c.members
+                        .iter()
+                        .find(|(n, _)| ctx.state.isupport.names_equal(n, ctx.my_nick))
+                })
                 .map(|(_, p)| p.contains('@') || p.contains('&') || p.contains('~'))
                 .unwrap_or(false);
             if am_op
@@ -594,13 +1071,16 @@ impl ScriptEngine {
                     ctx.network,
                 )
             {
-                actions.push(Action::Send(format!("MODE {} +o {}", event.chan, event.knick)));
+                actions.push(Action::Send(format!(
+                    "MODE {} +o {}",
+                    event.chan, event.knick
+                )));
             }
         }
         if users.take_dirty() {
             users.save_to(&ctx.data_dir);
         }
-        (actions, halted)
+        (actions, halted, default_halted)
     }
 }
 
@@ -609,13 +1089,16 @@ impl ScriptEngine {
 fn eval_popup_labels(rt: &mut Runtime, items: &[PopupItem]) -> Vec<PopupItem> {
     let mut out = Vec::new();
     for item in items {
+        let saved_source = std::mem::replace(&mut rt.event.script_source, item.source.clone());
         if item.separator {
             out.push(item.clone());
+            rt.event.script_source = saved_source;
             continue;
         }
         // $submenu($id($1)) dynamically generates a flat list of items in place.
         if let Some(arg) = parse_submenu_arg(&item.label) {
             out.extend(expand_submenu(rt, &arg));
+            rt.event.script_source = saved_source;
             continue;
         }
         // A leading $style(N) sentinel (mIRC requires it be the first word) sets
@@ -624,6 +1107,7 @@ fn eval_popup_labels(rt: &mut Runtime, items: &[PopupItem]) -> Vec<PopupItem> {
         let (checked, disabled, rest) = split_style_marker(&expanded);
         let label = rest.trim().to_string();
         if label.is_empty() {
+            rt.event.script_source = saved_source;
             continue;
         }
         out.push(PopupItem {
@@ -632,8 +1116,10 @@ fn eval_popup_labels(rt: &mut Runtime, items: &[PopupItem]) -> Vec<PopupItem> {
             separator: false,
             checked,
             disabled,
+            source: item.source.clone(),
             children: eval_popup_labels(rt, &item.children),
         });
+        rt.event.script_source = saved_source;
     }
     out
 }
@@ -686,10 +1172,11 @@ fn parse_submenu_arg(label: &str) -> Option<String> {
 fn expand_submenu(rt: &mut Runtime, arg: &str) -> Vec<PopupItem> {
     const CAP: usize = 1000;
     let saved = rt.event.params.clone();
+    let source = rt.event.script_source.clone();
     let mut out = Vec::new();
 
     rt.event.params = vec!["begin".to_string()];
-    if let Some(it) = make_generated_item(&rt.expand(arg)) {
+    if let Some(it) = make_generated_item(&rt.expand(arg), &source) {
         out.push(it);
     }
     for i in 1..=CAP {
@@ -698,12 +1185,12 @@ fn expand_submenu(rt: &mut Runtime, arg: &str) -> Vec<PopupItem> {
         if r.trim().is_empty() {
             break;
         }
-        if let Some(it) = make_generated_item(&r) {
+        if let Some(it) = make_generated_item(&r, &source) {
             out.push(it);
         }
     }
     rt.event.params = vec!["end".to_string()];
-    if let Some(it) = make_generated_item(&rt.expand(arg)) {
+    if let Some(it) = make_generated_item(&rt.expand(arg), &source) {
         out.push(it);
     }
 
@@ -713,7 +1200,7 @@ fn expand_submenu(rt: &mut Runtime, arg: &str) -> Vec<PopupItem> {
 
 /// Parses one generated `$submenu` line (`-` separator, or `label:command`, with
 /// an optional leading `$style` marker) into a flat popup item.
-fn make_generated_item(text: &str) -> Option<PopupItem> {
+fn make_generated_item(text: &str, source: &str) -> Option<PopupItem> {
     let t = text.trim();
     if t.is_empty() {
         return None;
@@ -725,6 +1212,7 @@ fn make_generated_item(text: &str) -> Option<PopupItem> {
             separator: true,
             checked: false,
             disabled: false,
+            source: source.to_string(),
             children: Vec::new(),
         });
     }
@@ -742,6 +1230,7 @@ fn make_generated_item(text: &str) -> Option<PopupItem> {
         separator: false,
         checked,
         disabled,
+        source: source.to_string(),
         children: Vec::new(),
     })
 }
@@ -749,6 +1238,104 @@ fn make_generated_item(text: &str) -> Option<PopupItem> {
 fn is_channel(name: &str) -> bool {
     // Includes IRCX's '%' channel prefix so `$chan` resolves on IRCX servers.
     name.starts_with(['#', '&', '!', '+', '%'])
+}
+
+fn context_channel(ctx: &RunCtx<'_>, target: &str) -> String {
+    let Some(bare) = ctx.state.isupport.channel_target(target) else {
+        return String::new();
+    };
+    ctx.state
+        .channels
+        .iter()
+        .find(|channel| ctx.state.isupport.names_equal(&channel.name, bare))
+        .map(|channel| channel.name.clone())
+        .unwrap_or_else(|| bare.to_string())
+}
+
+#[derive(Clone)]
+struct EventAccess {
+    level: String,
+    self_only: bool,
+    exclude_self: bool,
+    require_own_op: bool,
+    early: bool,
+    skip_if_halted: bool,
+    regex_match: bool,
+}
+
+/// Separates the mIRC event gates that can be combined before an access level,
+/// e.g. `on @!*:JOIN:#:`. `+N` deliberately remains part of the level because
+/// it means an exact user-list level, not a gate character.
+fn event_access(raw: &str) -> EventAccess {
+    let mut value = raw.trim();
+    let mut self_only = false;
+    if value
+        .get(..3)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("me:"))
+    {
+        self_only = true;
+        value = &value[3..];
+    }
+    let mut exclude_self = false;
+    let mut require_own_op = false;
+    let mut early = false;
+    let mut skip_if_halted = false;
+    let mut regex_match = false;
+    loop {
+        match value.chars().next() {
+            Some('!') => {
+                exclude_self = true;
+                value = &value[1..];
+            }
+            Some('@') => {
+                require_own_op = true;
+                value = &value[1..];
+            }
+            Some('^') => {
+                early = true;
+                value = &value[1..];
+            }
+            Some('&') => {
+                skip_if_halted = true;
+                value = &value[1..];
+            }
+            Some('$') => {
+                regex_match = true;
+                value = &value[1..];
+            }
+            _ => break,
+        }
+    }
+    EventAccess {
+        level: if value.is_empty() {
+            "*".into()
+        } else {
+            value.into()
+        },
+        self_only,
+        exclude_self,
+        require_own_op,
+        early,
+        skip_if_halted,
+        regex_match,
+    }
+}
+
+/// Numeric ordering key used by mIRC's "highest matching event level" rule.
+/// Named levels are specific but unordered, so they are kept independently.
+fn event_level_rank(level: &str) -> Option<i64> {
+    let level = level.trim();
+    if level.is_empty() || level == "*" {
+        // `*` explicitly bypasses access levels and remains independent from
+        // the numeric highest-level selection.
+        return None;
+    }
+    level
+        .strip_prefix('+')
+        .or_else(|| level.strip_prefix('='))
+        .unwrap_or(level)
+        .parse::<i64>()
+        .ok()
 }
 
 /// Splits a phrase into whitespace-separated `$1..` parameters.
@@ -775,51 +1362,161 @@ fn mode_event_name(letter: char, adding: bool) -> Option<&'static str> {
     })
 }
 
-/// Parses a rendered mode string ("+o bob -v alice +b m!*@*") into the specific
-/// (event-name, affected-target) pairs to fire alongside the generic `on MODE`.
-fn split_mode_events(modes: &str) -> Vec<(&'static str, String)> {
+/// Parses a rendered mode string ("+ov bob alice", "+o bob -v alice") into the
+/// specific (event-name, affected-target) pairs to fire alongside `on MODE`.
+/// Argument consumption follows the server's ISUPPORT PREFIX/CHANMODES rules so
+/// parameter modes such as `+k`/`+l` do not shift the nick attached to a later
+/// batched `+o`/`+v` change.
+fn split_mode_events(
+    modes: &str,
+    isupport: &crate::irc::state::Isupport,
+) -> Vec<(&'static str, String)> {
     let toks: Vec<&str> = modes.split_whitespace().collect();
-    let is_spec = |t: &str| t.len() == 2 && (t.starts_with('+') || t.starts_with('-'));
+    let is_mode_token = |t: &str| {
+        t.len() > 1
+            && t.starts_with(['+', '-'])
+            && t.chars()
+                .all(|c| c == '+' || c == '-' || c.is_ascii_alphabetic())
+    };
     let mut out = Vec::new();
     let mut i = 0;
     while i < toks.len() {
-        let t = toks[i];
-        if is_spec(t) {
-            let adding = t.starts_with('+');
-            let letter = t.chars().nth(1).unwrap();
-            let arg = toks.get(i + 1).filter(|n| !is_spec(n)).copied();
-            if let (Some(kind), Some(a)) = (mode_event_name(letter, adding), arg) {
-                out.push((kind, a.to_string()));
-            }
-            i += if arg.is_some() { 2 } else { 1 };
-        } else {
+        if !is_mode_token(toks[i]) {
             i += 1;
+            continue;
+        }
+
+        let mode_token = toks[i];
+        i += 1;
+        let mut adding = true;
+        for letter in mode_token.chars() {
+            match letter {
+                '+' => adding = true,
+                '-' => adding = false,
+                _ => {
+                    let arg = if isupport.mode_takes_arg(letter, adding)
+                        && toks.get(i).is_some_and(|t| !is_mode_token(t))
+                    {
+                        let arg = toks[i];
+                        i += 1;
+                        Some(arg)
+                    } else {
+                        None
+                    };
+                    if let (Some(kind), Some(affected)) = (mode_event_name(letter, adding), arg) {
+                        out.push((kind, affected.to_string()));
+                    }
+                }
+            }
         }
     }
     out
 }
 
 /// Tests whether an event matches a handler's pattern and target spec.
-fn matches(ev: &EventVars, pattern: &str, target_spec: &str, kind: &str) -> bool {
+fn matches(
+    ev: &EventVars,
+    pattern: &str,
+    selector: &str,
+    target_spec: &str,
+    kind: &str,
+    regex_match: bool,
+    isupport: &crate::irc::state::Isupport,
+) -> bool {
+    if kind == "PARSELINE" {
+        let direction_ok = target_spec.is_empty()
+            || target_spec == "*"
+            || target_spec.eq_ignore_ascii_case(&ev.parse_type);
+        let pattern_ok = pattern.is_empty()
+            || pattern == "*"
+            || if regex_match {
+                ident::mirc_regex_is_match(&ev.parse_line, pattern)
+            } else {
+                wildcard_match(pattern, &ev.parse_line)
+            };
+        return direction_ok && pattern_ok;
+    }
+    if kind == "RAW" {
+        let selector_ok =
+            selector.is_empty() || selector == "*" || wildcard_match(selector, &ev.text);
+        let raw_text = ev.params.join(" ");
+        let pattern_ok = pattern.is_empty()
+            || pattern == "*"
+            || if regex_match {
+                ident::mirc_regex_is_match(&raw_text, pattern)
+            } else {
+                wildcard_match(pattern, &raw_text)
+            };
+        return selector_ok && pattern_ok;
+    }
     let pat_ok = pattern.is_empty()
         || pattern == "*"
-        || wildcard_match(pattern, &ev.text)
+        || if regex_match {
+            ident::mirc_regex_is_match(&ev.text, pattern)
+        } else {
+            wildcard_match(pattern, &ev.text)
+        }
         // A CTCP matchtext also matches just the command word, so
         // `on CTCP:PING:` catches "PING <timestamp>" (likewise `on CTCPREPLY`).
-        || ((kind == "CTCP" || kind == "CTCPREPLY")
+        || (!regex_match
+            && (kind == "CTCP" || kind == "CTCPREPLY")
             && wildcard_match(pattern, ev.text.split_whitespace().next().unwrap_or("")));
     if !pat_ok {
         return false;
     }
-    match target_spec {
+    target_spec.split(',').any(|spec| match spec.trim() {
         "" | "*" => true,
-        "#" => is_channel(&ev.chan),
-        "?" => ev.chan.is_empty(),
-        spec if is_channel(spec) => ev.chan.eq_ignore_ascii_case(spec),
+        "#" => isupport.channel_target(&ev.chan).is_some(),
+        "?" => {
+            ev.chan.is_empty()
+                && !ev.target.starts_with('=')
+                && !ev.target.starts_with('!')
+                && !ev.target.starts_with('@')
+        }
+        "=" => ev.target.starts_with('='),
+        "!" => ev.target.starts_with('!'),
+        "@" => ev.target.starts_with('@'),
+        spec if isupport.channel_target(spec).is_some() => {
+            let wanted = isupport.channel_target(spec).unwrap_or(spec);
+            let actual = isupport.channel_target(&ev.chan).unwrap_or(&ev.chan);
+            isupport.names_equal(actual, wanted)
+        }
         // A named target (e.g. a socket name in `on *:SOCKREAD:bot:`) is matched
         // as a wildcard against the event's name/channel.
         spec => wildcard_match(spec, &ev.chan),
+    })
+}
+
+/// Event matchtext/target fields are evaluated when the event fires. This
+/// covers the common mIRC `%match` / `%channel` forms using persistent globals;
+/// local variables cannot exist between event runs.
+fn expand_event_vars(field: &str, vars: &HashMap<String, String>) -> String {
+    let chars: Vec<char> = field.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] != '%' {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        let start = i + 1;
+        let mut end = start;
+        while end < chars.len()
+            && (chars[end].is_alphanumeric() || chars[end] == '_' || chars[end] == '.')
+        {
+            end += 1;
+        }
+        if end == start {
+            out.push('%');
+            i += 1;
+        } else {
+            let name: String = chars[start..end].iter().collect();
+            out.push_str(vars.get(&name).map(String::as_str).unwrap_or(""));
+            i = end;
+        }
     }
+    out
 }
 
 // ---- Tauri commands ----
@@ -851,10 +1548,20 @@ pub fn script_data_dir(app: &AppHandle) -> std::path::PathBuf {
 fn script_stem(name: &str) -> String {
     let cleaned: String = name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let trimmed = cleaned.trim_matches('_').to_string();
-    if trimmed.is_empty() { "script".to_string() } else { trimmed }
+    if trimmed.is_empty() {
+        "script".to_string()
+    } else {
+        trimmed
+    }
 }
 
 /// Starter example scripts seeded on first run and via "Add examples".
@@ -952,7 +1659,7 @@ fn recompile(app: &AppHandle, engine: &ScriptEngine) {
         FIRING_UNLOAD.store(false, Ordering::SeqCst);
     }
     let Ok(dir) = scripts_dir(app) else { return };
-    let mut combined = String::new();
+    let mut sources = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&dir) {
         let mut files: Vec<_> = entries
             .flatten()
@@ -962,12 +1669,16 @@ fn recompile(app: &AppHandle, engine: &ScriptEngine) {
         files.sort();
         for path in files {
             if let Ok(src) = std::fs::read_to_string(&path) {
-                combined.push_str(&src);
-                combined.push('\n');
+                let name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("<script>")
+                    .to_string();
+                sources.push((name, src));
             }
         }
     }
-    engine.load(&combined);
+    engine.load_sources(&sources);
     engine.load_users(&script_data_dir(app));
 }
 
@@ -1167,6 +1878,40 @@ fn apply_actions_depth(
     for action in actions {
         match action {
             Action::Send(line) => {
+                // mIRC addresses DCC chat buffers as `=nick`. Scripted
+                // `/msg =$nick ...` must use the peer socket, never leak a
+                // non-standard `PRIVMSG =nick` to the IRC server.
+                if let Some(rest) = line.strip_prefix("PRIVMSG =") {
+                    if let Some((nick, text)) = rest.split_once(" :") {
+                        let id = format!("={nick}");
+                        if let Some(dcc) = app.try_state::<crate::irc::dcc::DccManager>() {
+                            match dcc.send(server_id, &id, text.to_string()) {
+                                Ok(()) => {
+                                    let _ = app.emit(
+                                        IRC_EVENT,
+                                        UiEvent::DccChatLine {
+                                            server_id: server_id.to_string(),
+                                            id,
+                                            from: my_nick.to_string(),
+                                            text: text.to_string(),
+                                        },
+                                    );
+                                }
+                                Err(error) => {
+                                    let _ = app.emit(
+                                        IRC_EVENT,
+                                        UiEvent::Echo {
+                                            server_id: server_id.to_string(),
+                                            target: "(status)".to_string(),
+                                            text: format!("DCC: {error}"),
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                }
                 // Echo scripted chat messages locally so the sender sees their
                 // own output (like mIRC). Raw commands (MODE/JOIN/…) are skipped
                 // — those become visible through the server's own reply.
@@ -1187,6 +1932,76 @@ fn apply_actions_depth(
                     },
                 );
             }
+            Action::Play {
+                args,
+                current_target,
+                remote,
+                source,
+            } => {
+                let invocation = play::PlayInvocation {
+                    args,
+                    current_target,
+                    remote,
+                    source,
+                };
+                let result = app
+                    .try_state::<play::PlayManager>()
+                    .ok_or_else(|| "play manager is unavailable".to_string())
+                    .and_then(|play| {
+                        play.command(
+                            app.clone(),
+                            server_id.to_string(),
+                            my_nick.to_string(),
+                            network.to_string(),
+                            server.to_string(),
+                            invocation,
+                        )
+                    });
+                if let Err(error) = result {
+                    let _ = app.emit(
+                        IRC_EVENT,
+                        UiEvent::Echo {
+                            server_id: server_id.to_string(),
+                            target: "(status)".to_string(),
+                            text: format!("Play: {error}"),
+                        },
+                    );
+                }
+            }
+            Action::PlayLine {
+                target,
+                text,
+                notice,
+                echo,
+            } => {
+                if let Some(nick) = target.strip_prefix('=').filter(|_| !notice) {
+                    let id = format!("={nick}");
+                    if let Some(dcc) = app.try_state::<crate::irc::dcc::DccManager>() {
+                        if dcc.send(server_id, &id, text.clone()).is_ok() && echo {
+                            let _ = app.emit(
+                                IRC_EVENT,
+                                UiEvent::DccChatLine {
+                                    server_id: server_id.to_string(),
+                                    id,
+                                    from: my_nick.to_string(),
+                                    text,
+                                },
+                            );
+                        }
+                    }
+                    continue;
+                }
+                let command = if notice { "NOTICE" } else { "PRIVMSG" };
+                let line = format!("{command} {target} :{text}");
+                if echo {
+                    if let Some(event) = self_echo(server_id, my_nick, &line) {
+                        let _ = app.emit(IRC_EVENT, event);
+                    }
+                }
+                if let Some(manager) = &manager {
+                    let _ = manager.send(server_id, line);
+                }
+            }
             Action::SetIdentity { field, value } => {
                 // Routed to the connection task as an internal control line: it
                 // updates the live session state (so $anick/$mnick/$fullname
@@ -1200,6 +2015,22 @@ fn apply_actions_depth(
                 // runs after the engine lock (run_command/dispatch) is released.
                 if let Some(engine) = app.try_state::<ScriptEngine>() {
                     recompile(app, &engine);
+                }
+            }
+            Action::Dcc { args } => {
+                if let Some(dcc) = app.try_state::<crate::irc::dcc::DccManager>() {
+                    if let Err(error) =
+                        dcc.run_script_command(app.clone(), server_id, &args, &script_data_dir(app))
+                    {
+                        let _ = app.emit(
+                            IRC_EVENT,
+                            UiEvent::Echo {
+                                server_id: server_id.to_string(),
+                                target: "(status)".to_string(),
+                                text: format!("DCC: {error}"),
+                            },
+                        );
+                    }
                 }
             }
             Action::DefineAlias { name, command } => {
@@ -1233,12 +2064,21 @@ fn apply_actions_depth(
                         };
                         let more = engine.dispatch_event(&ctx, "SIGNAL", event);
                         apply_actions_depth(
-                            app, server_id, my_nick, network, server, more, depth + 1,
+                            app,
+                            server_id,
+                            my_nick,
+                            network,
+                            server,
+                            more,
+                            depth + 1,
                         );
                     }
                 }
             }
-            Action::RunOn { server_id: target, command } => {
+            Action::RunOn {
+                server_id: target,
+                command,
+            } => {
                 // /scon /scid: run the command in the target connection's context
                 // and route its output there. Depth-capped like /signal.
                 if depth < 24 {
@@ -1274,7 +2114,10 @@ fn apply_actions_depth(
             Action::WindowClose { name } => {
                 let _ = app.emit(
                     IRC_EVENT,
-                    UiEvent::WindowClose { server_id: server_id.to_string(), name },
+                    UiEvent::WindowClose {
+                        server_id: server_id.to_string(),
+                        name,
+                    },
                 );
             }
             Action::WindowLine { name, op, n, text } => {
@@ -1289,12 +2132,119 @@ fn apply_actions_depth(
                     },
                 );
             }
+            Action::WebviewOpen {
+                name,
+                profile,
+                width,
+                height,
+                url,
+                title,
+            } => {
+                let result = match app.try_state::<webview::WebviewManager>() {
+                    Some(manager) => manager.open(
+                        app.clone(),
+                        server_id,
+                        my_nick,
+                        network,
+                        server,
+                        name,
+                        profile,
+                        width,
+                        height,
+                        url,
+                        title,
+                    ),
+                    None => Err("native browser manager is unavailable".to_string()),
+                };
+                if let Err(error) = result {
+                    let _ = app.emit(
+                        IRC_EVENT,
+                        UiEvent::Echo {
+                            server_id: server_id.to_string(),
+                            target: "(status)".to_string(),
+                            text: format!("Webview: {error}"),
+                        },
+                    );
+                }
+            }
+            Action::WebviewNavigate { name, url } => {
+                let result = match app.try_state::<webview::WebviewManager>() {
+                    Some(manager) => manager.navigate(app.clone(), server_id, &name, url),
+                    None => Err("native browser manager is unavailable".to_string()),
+                };
+                if let Err(error) = result {
+                    let _ = app.emit(
+                        IRC_EVENT,
+                        UiEvent::Echo {
+                            server_id: server_id.to_string(),
+                            target: "(status)".to_string(),
+                            text: format!("Webview: {error}"),
+                        },
+                    );
+                }
+            }
+            Action::WebviewCookies { name, url } => {
+                let result = match app.try_state::<webview::WebviewManager>() {
+                    Some(manager) => manager.cookies(app.clone(), server_id, &name, url),
+                    None => Err("native browser manager is unavailable".to_string()),
+                };
+                if let Err(error) = result {
+                    let _ = app.emit(
+                        IRC_EVENT,
+                        UiEvent::Echo {
+                            server_id: server_id.to_string(),
+                            target: "(status)".to_string(),
+                            text: format!("Webview: {error}"),
+                        },
+                    );
+                }
+            }
+            Action::WebviewFocus { name } => {
+                let result = match app.try_state::<webview::WebviewManager>() {
+                    Some(manager) => manager.focus(app.clone(), server_id, &name),
+                    None => Err("native browser manager is unavailable".to_string()),
+                };
+                if let Err(error) = result {
+                    let _ = app.emit(
+                        IRC_EVENT,
+                        UiEvent::Echo {
+                            server_id: server_id.to_string(),
+                            target: "(status)".to_string(),
+                            text: format!("Webview: {error}"),
+                        },
+                    );
+                }
+            }
+            Action::WebviewClose { name } => {
+                let result = match app.try_state::<webview::WebviewManager>() {
+                    Some(manager) => manager.close(app.clone(), server_id, &name),
+                    None => Err("native browser manager is unavailable".to_string()),
+                };
+                if let Err(error) = result {
+                    let _ = app.emit(
+                        IRC_EVENT,
+                        UiEvent::Echo {
+                            server_id: server_id.to_string(),
+                            target: "(status)".to_string(),
+                            text: format!("Webview: {error}"),
+                        },
+                    );
+                }
+            }
             Action::Timer {
                 name,
                 reps,
                 interval_ms,
+                start_at,
                 command,
                 target,
+                offline,
+                catch_up,
+                ordered,
+                milliseconds,
+                high_resolution,
+                dynamic,
+                source,
             } => {
                 if let Some(m) = app.try_state::<timer::TimerManager>() {
                     m.start(
@@ -1306,8 +2256,16 @@ fn apply_actions_depth(
                         name,
                         reps,
                         interval_ms,
+                        start_at,
                         command,
                         target,
+                        offline,
+                        catch_up,
+                        ordered,
+                        milliseconds,
+                        high_resolution,
+                        dynamic,
+                        source,
                     );
                 }
             }
@@ -1316,15 +2274,48 @@ fn apply_actions_depth(
                     m.stop(&name);
                 }
             }
-            Action::TimerList { target } => {
-                let names = app
+            Action::TimerExecute { name } => {
+                if let Some(m) = app.try_state::<timer::TimerManager>() {
+                    m.execute(&name);
+                }
+            }
+            Action::TimerPause { name, countdown } => {
+                if let Some(m) = app.try_state::<timer::TimerManager>() {
+                    m.pause(&name, countdown);
+                }
+            }
+            Action::TimerResume { name } => {
+                if let Some(m) = app.try_state::<timer::TimerManager>() {
+                    m.resume(&name);
+                }
+            }
+            Action::TimerList { target, name } => {
+                let timers = app
                     .try_state::<timer::TimerManager>()
-                    .map(|m| m.list())
+                    .map(|m| m.snapshot_matching(&name))
                     .unwrap_or_default();
-                let text = if names.is_empty() {
+                let text = if timers.is_empty() {
                     "No active timers".to_string()
+                } else if name == "*" {
+                    format!(
+                        "Active timers: {}",
+                        timers
+                            .iter()
+                            .map(|timer| timer.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
                 } else {
-                    format!("Active timers: {}", names.join(", "))
+                    timers
+                        .iter()
+                        .map(|timer| {
+                            format!(
+                                "Timer {}: {} {} {}",
+                                timer.name, timer.reps, timer.delay, timer.command
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("; ")
                 };
                 let _ = app.emit(
                     IRC_EVENT,
@@ -1335,7 +2326,17 @@ fn apply_actions_depth(
                     },
                 );
             }
-            Action::SockOpen { name, host, port, tls } => {
+            Action::SockOpen {
+                name,
+                host,
+                port,
+                tls,
+                accept_invalid,
+                bind_ip,
+                nodelay,
+                ip_version,
+                reservation_id,
+            } => {
                 if let Some(m) = app.try_state::<socket::SocketManager>() {
                     m.open(
                         app.clone(),
@@ -1346,6 +2347,40 @@ fn apply_actions_depth(
                         host,
                         port,
                         tls,
+                        accept_invalid,
+                        bind_ip,
+                        nodelay,
+                        ip_version,
+                        reservation_id,
+                    );
+                }
+            }
+            Action::SockUdp {
+                name,
+                bind_ip,
+                local_port,
+                dest_ip,
+                dest_port,
+                data,
+                keep,
+                dual_stack,
+                reservation_id,
+            } => {
+                if let Some(m) = app.try_state::<socket::SocketManager>() {
+                    m.udp(
+                        app.clone(),
+                        server_id.to_string(),
+                        network.to_string(),
+                        my_nick.to_string(),
+                        name,
+                        bind_ip,
+                        local_port,
+                        dest_ip,
+                        dest_port,
+                        data,
+                        keep,
+                        dual_stack,
+                        reservation_id,
                     );
                 }
             }
@@ -1354,12 +2389,30 @@ fn apply_actions_depth(
                     m.write(&name, data);
                 }
             }
+            Action::SockError { kind, name, error } => {
+                socket::fire_error(app, server_id, network, my_nick, &kind, &name, "", error);
+            }
             Action::SockClose { name } => {
                 if let Some(m) = app.try_state::<socket::SocketManager>() {
                     m.close(&name);
                 }
             }
-            Action::SockListen { name } => {
+            Action::SockMark { name, mark } => {
+                if let Some(m) = app.try_state::<socket::SocketManager>() {
+                    m.set_mark(&name, &mark);
+                }
+            }
+            Action::SockRename { name, newname } => {
+                if let Some(m) = app.try_state::<socket::SocketManager>() {
+                    m.rename(&name, &newname);
+                }
+            }
+            Action::SockPause { name, resume } => {
+                if let Some(m) = app.try_state::<socket::SocketManager>() {
+                    m.pause(&name, resume);
+                }
+            }
+            Action::SockListen { name, listener_id } => {
                 if let Some(m) = app.try_state::<socket::SocketManager>() {
                     m.start_listener(
                         app.clone(),
@@ -1367,43 +2420,138 @@ fn apply_actions_depth(
                         network.to_string(),
                         my_nick.to_string(),
                         name,
+                        listener_id,
                     );
                 }
             }
-            Action::Server { host, port, pass } => {
+            Action::Server {
+                host,
+                port,
+                pass,
+                new_window,
+            } => {
                 // The frontend opens a server window and starts the native
                 // connection (a script `/server`, as used by local bridges).
                 let _ = app.emit(
                     IRC_EVENT,
-                    UiEvent::ScriptServer { host, port, pass },
+                    UiEvent::ScriptServer {
+                        server_id: server_id.to_string(),
+                        host,
+                        port,
+                        pass,
+                        new_window,
+                    },
                 );
             }
-            Action::DialogOpen { name, title, controls } => {
+            Action::DialogOpen {
+                name,
+                title,
+                controls,
+            } => {
                 let _ = app.emit(
                     IRC_EVENT,
-                    UiEvent::DialogOpen { server_id: server_id.to_string(), name, title, controls },
+                    UiEvent::DialogOpen {
+                        server_id: server_id.to_string(),
+                        name,
+                        title,
+                        controls,
+                    },
                 );
             }
             Action::DialogClose { name } => {
                 let _ = app.emit(
                     IRC_EVENT,
-                    UiEvent::DialogClose { server_id: server_id.to_string(), name },
+                    UiEvent::DialogClose {
+                        server_id: server_id.to_string(),
+                        name,
+                    },
                 );
             }
-            Action::DialogSet { dialog, control, op, value } => {
+            Action::DialogSet {
+                dialog,
+                control,
+                op,
+                value,
+            } => {
                 let _ = app.emit(
                     IRC_EVENT,
-                    UiEvent::DialogSet { server_id: server_id.to_string(), dialog, control, op, value },
+                    UiEvent::DialogSet {
+                        server_id: server_id.to_string(),
+                        dialog,
+                        control,
+                        op,
+                        value,
+                    },
                 );
             }
             Action::NickIcon { nick, icon } => {
                 let _ = app.emit(
                     IRC_EVENT,
-                    UiEvent::NickIcon { server_id: server_id.to_string(), nick, icon },
+                    UiEvent::NickIcon {
+                        server_id: server_id.to_string(),
+                        nick,
+                        icon,
+                    },
                 );
             }
+            queued @ Action::ParseLine { queue: true, .. } => {
+                if let (Some(m), Some(control)) = (&manager, encode_parseline_control(&queued)) {
+                    let _ = m.send(server_id, control);
+                }
+            }
+            // A non-queued replacement is meaningful only while the connection
+            // task is extracting PARSELINE actions from the current event.
+            Action::ParseLine { .. } => {}
         }
     }
+}
+
+/// Encodes a queued PARSELINE action as an internal connection-manager line.
+/// Base64 keeps arbitrary binary variables and embedded whitespace byte-exact.
+pub fn encode_parseline_control(action: &Action) -> Option<String> {
+    use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
+    let Action::ParseLine {
+        direction,
+        bytes,
+        queue: true,
+        trigger,
+        append_crlf,
+        utf8,
+    } = action
+    else {
+        return None;
+    };
+    Some(format!(
+        "\u{0}PARSELINE {direction} {}{}{} {}",
+        u8::from(*trigger),
+        u8::from(*append_crlf),
+        u8::from(*utf8),
+        STANDARD_NO_PAD.encode(bytes)
+    ))
+}
+
+/// Decodes an internal queued PARSELINE control line.
+pub fn decode_parseline_control(line: &str) -> Option<Action> {
+    use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
+    let rest = line.strip_prefix("\u{0}PARSELINE ")?;
+    let mut fields = rest.splitn(3, ' ');
+    let direction = fields.next()?.to_string();
+    if direction != "in" && direction != "out" {
+        return None;
+    }
+    let flags = fields.next()?.as_bytes();
+    if flags.len() != 3 {
+        return None;
+    }
+    let bytes = STANDARD_NO_PAD.decode(fields.next()?).ok()?;
+    Some(Action::ParseLine {
+        direction,
+        bytes,
+        queue: true,
+        trigger: flags[0] == b'1',
+        append_crlf: flags[1] == b'1',
+        utf8: flags[2] == b'1',
+    })
 }
 
 /// Runs a user-typed alias (invoked by the frontend for unknown `/commands`).
@@ -1474,7 +2622,11 @@ pub async fn script_popups(
                 .map(|s| s.get(&server_id))
                 .unwrap_or_default(),
         };
-        let chan = if is_channel(&target) { target.as_str() } else { "" };
+        let chan = if is_channel(&target) {
+            target.as_str()
+        } else {
+            ""
+        };
         engine.popups_evaluated(&ctx, &context, &nick, chan)
     })
     .await
@@ -1519,7 +2671,9 @@ pub fn script_run_dialog(
             did: values,
             ..Default::default()
         };
-        let actions = app.state::<ScriptEngine>().dispatch_event(&ctx, "DIALOG", vars);
+        let actions = app
+            .state::<ScriptEngine>()
+            .dispatch_event(&ctx, "DIALOG", vars);
         apply_actions(&app, &server_id, &my_nick, &network, "", actions);
     });
 }
@@ -1527,7 +2681,13 @@ pub fn script_run_dialog(
 /// A notify-list nick came online (`on NOTIFY`) or went offline (`on UNOTIFY`).
 /// The frontend calls this from its ISON diff; `$nick` is the affected nick.
 #[tauri::command]
-pub fn script_notify(app: AppHandle, server_id: String, network: String, nick: String, online: bool) {
+pub fn script_notify(
+    app: AppHandle,
+    server_id: String,
+    network: String,
+    nick: String,
+    online: bool,
+) {
     // `on NOTIFY`/`on UNOTIFY` may call `$input`; run off the main thread so a
     // blocking prompt can't freeze WebView2.
     tauri::async_runtime::spawn_blocking(move || {
@@ -1544,7 +2704,11 @@ pub fn script_notify(app: AppHandle, server_id: String, network: String, nick: S
             data_dir: script_data_dir(&app),
             state,
         };
-        let vars = EventVars { nick: nick.clone(), target: nick, ..Default::default() };
+        let vars = EventVars {
+            nick: nick.clone(),
+            target: nick,
+            ..Default::default()
+        };
         let actions = app.state::<ScriptEngine>().dispatch_event(&ctx, kind, vars);
         apply_actions(&app, &server_id, &my_nick, &network, "", actions);
     });
@@ -1570,14 +2734,16 @@ pub fn users_snapshot(app: AppHandle) -> String {
 #[tauri::command]
 pub fn users_set(app: AppHandle, levels: String, address: String, info: String) {
     let dir = script_data_dir(&app);
-    app.state::<ScriptEngine>().edit_users(&dir, |u| u.add(&levels, &address, &info, false));
+    app.state::<ScriptEngine>()
+        .edit_users(&dir, |u| u.add(&levels, &address, &info, false));
 }
 
 /// Remove a user-list entry (`/ruser`).
 #[tauri::command]
 pub fn users_remove(app: AppHandle, address: String) {
     let dir = script_data_dir(&app);
-    app.state::<ScriptEngine>().edit_users(&dir, |u| u.remove("", &address));
+    app.state::<ScriptEngine>()
+        .edit_users(&dir, |u| u.remove("", &address));
 }
 
 /// Toggle an auto-list on/off.
@@ -1585,16 +2751,24 @@ pub fn users_remove(app: AppHandle, address: String) {
 pub fn users_auto_toggle(app: AppHandle, kind: String, on: bool) {
     if let Some(k) = auto_kind(&kind) {
         let dir = script_data_dir(&app);
-        app.state::<ScriptEngine>().edit_users(&dir, |u| u.auto_toggle(k, on));
+        app.state::<ScriptEngine>()
+            .edit_users(&dir, |u| u.auto_toggle(k, on));
     }
 }
 
 /// Add an auto-list entry.
 #[tauri::command]
-pub fn users_auto_add(app: AppHandle, kind: String, address: String, channels: Vec<String>, network: String) {
+pub fn users_auto_add(
+    app: AppHandle,
+    kind: String,
+    address: String,
+    channels: Vec<String>,
+    network: String,
+) {
     if let Some(k) = auto_kind(&kind) {
         let dir = script_data_dir(&app);
-        app.state::<ScriptEngine>().edit_users(&dir, |u| u.auto_add(k, &address, channels, network));
+        app.state::<ScriptEngine>()
+            .edit_users(&dir, |u| u.auto_add(k, &address, channels, network));
     }
 }
 
@@ -1603,7 +2777,8 @@ pub fn users_auto_add(app: AppHandle, kind: String, address: String, channels: V
 pub fn users_auto_remove(app: AppHandle, kind: String, address: String) {
     if let Some(k) = auto_kind(&kind) {
         let dir = script_data_dir(&app);
-        app.state::<ScriptEngine>().edit_users(&dir, |u| u.auto_remove(k, &address));
+        app.state::<ScriptEngine>()
+            .edit_users(&dir, |u| u.auto_remove(k, &address));
     }
 }
 
@@ -1654,8 +2829,16 @@ fn fire_window_event(app: AppHandle, server_id: String, name: String, kind: &'st
         let my_nick = state.nick.clone();
         let is_query = !is_channel(&name) && !name.starts_with('@') && !name.starts_with('=');
         let vars = EventVars {
-            nick: if is_query { name.clone() } else { String::new() },
-            chan: if is_query { String::new() } else { name.clone() },
+            nick: if is_query {
+                name.clone()
+            } else {
+                String::new()
+            },
+            chan: if is_query {
+                String::new()
+            } else {
+                name.clone()
+            },
             target: name.clone(),
             ..Default::default()
         };
@@ -1739,7 +2922,11 @@ pub async fn script_run_input(
                 .map(|s| s.get(&server_id))
                 .unwrap_or_default(),
         };
-        let chan = if is_channel(&target) { target.clone() } else { String::new() };
+        let chan = if is_channel(&target) {
+            target.clone()
+        } else {
+            String::new()
+        };
         let vars = EventVars {
             nick: my_nick.clone(),
             chan,
@@ -1770,6 +2957,7 @@ pub fn script_run_popup(
     command: String,
     params: Vec<String>,
     snicks: Option<Vec<String>>,
+    source: Option<String>,
 ) {
     // A popup command may call `$input`, which blocks the run waiting for the UI
     // dialog. Run it on a blocking thread so the main thread (and WebView2) stay
@@ -1789,27 +2977,66 @@ pub fn script_run_popup(
         // A nicklist popup carries the listbox selection ($snick/$snicks); other
         // contexts (channel/menubar) send none, so fall back to the item params.
         let snicks = snicks.unwrap_or_else(|| params.clone());
-        let actions = engine.run_command_snicks(&ctx, &target, &command, &params, &snicks);
+        let actions = engine.run_command_snicks_from_source(
+            &ctx,
+            &target,
+            &command,
+            &params,
+            &snicks,
+            source.as_deref().unwrap_or(""),
+            "menu",
+            "",
+            "",
+        );
         apply_actions(&app, &server_id, &my_nick, &network, "", actions);
     });
 }
 
 /// Drives event handlers from a UI event produced by the connection. Returns
 /// the resulting outgoing lines and echo events to apply.
-pub fn drive_event(
+pub fn drive_event(engine: &ScriptEngine, ctx: &RunCtx, ev: &UiEvent) -> Vec<Action> {
+    drive_event_halt(engine, ctx, ev).0
+}
+
+/// Like [`drive_event`], also reports whether a matching handler suppressed
+/// mIRC's default display for this event (`^` + `/halt`, `/haltdef`, or `/halt`).
+pub fn drive_event_halt(engine: &ScriptEngine, ctx: &RunCtx, ev: &UiEvent) -> (Vec<Action>, bool) {
+    drive_event_halt_raw(engine, ctx, ev, None)
+}
+
+/// Event dispatch retaining the exact server line that produced `ev` for
+/// `$rawmsg`, `$rawbytes`, `$msgtags`, and `$msgstamp`.
+pub fn drive_event_halt_raw(
     engine: &ScriptEngine,
     ctx: &RunCtx,
     ev: &UiEvent,
-) -> Vec<Action> {
+    raw: Option<&RawEventContext>,
+) -> (Vec<Action>, bool) {
     let (kind, vars) = match ev {
-        UiEvent::Message { kind, from, target, text, .. } => {
+        UiEvent::Message {
+            kind,
+            from,
+            target,
+            text,
+            ..
+        } => {
             let from = from.clone().unwrap_or_default();
-            if from == ctx.my_nick {
-                return Vec::new();
+            if ctx.state.isupport.names_equal(&from, ctx.my_nick) {
+                return (Vec::new(), false);
             }
-            let is_chan = is_channel(target);
-            let chan = if is_chan { target.clone() } else { String::new() };
-            let reply = if is_chan { target.clone() } else { from.clone() };
+            let channel_target = ctx.state.isupport.channel_target(target);
+            let chan = channel_target
+                .map(|bare| {
+                    ctx.state
+                        .channels
+                        .iter()
+                        .find(|channel| ctx.state.isupport.names_equal(&channel.name, bare))
+                        .map(|channel| channel.name.clone())
+                        .unwrap_or_else(|| bare.to_string())
+                })
+                .unwrap_or_default();
+            let is_chan = !chan.is_empty();
+            let reply = if is_chan { chan.clone() } else { from.clone() };
             // CTCP framing: \x01COMMAND args\x01. ACTION surfaces as `on ACTION`;
             // any other CTCP (PING, VERSION, DCC, ...) as `on CTCP`, with
             // $1 = the command word.
@@ -1834,7 +3061,7 @@ pub fn drive_event(
                     text: body.to_string(),
                     ..Default::default()
                 };
-                return engine.dispatch_event(ctx, ckind, vars);
+                return engine.dispatch_event_default_halt_raw(ctx, ckind, vars, raw);
             }
             let kind = match kind {
                 // A NOTICE with no nick prefix is a server notice → `on SNOTICE`.
@@ -1852,21 +3079,21 @@ pub fn drive_event(
             };
             (kind, vars)
         }
-        UiEvent::Join { channel, nick, .. } => {
-            if nick == ctx.my_nick {
-                return Vec::new();
-            }
-            (
-                "JOIN",
-                EventVars {
-                    nick: nick.clone(),
-                    chan: channel.clone(),
-                    target: channel.clone(),
-                    ..Default::default()
-                },
-            )
-        }
-        UiEvent::Part { channel, nick, reason, .. } => (
+        UiEvent::Join { channel, nick, .. } => (
+            "JOIN",
+            EventVars {
+                nick: nick.clone(),
+                chan: channel.clone(),
+                target: channel.clone(),
+                ..Default::default()
+            },
+        ),
+        UiEvent::Part {
+            channel,
+            nick,
+            reason,
+            ..
+        } => (
             "PART",
             EventVars {
                 nick: nick.clone(),
@@ -1897,7 +3124,13 @@ pub fn drive_event(
                 ..Default::default()
             },
         ),
-        UiEvent::Kick { channel, nick, by, reason, .. } => (
+        UiEvent::Kick {
+            channel,
+            nick,
+            by,
+            reason,
+            ..
+        } => (
             "KICK",
             EventVars {
                 // $nick = kicker, $knick = the kicked user (mIRC semantics).
@@ -1910,11 +3143,16 @@ pub fn drive_event(
                 ..Default::default()
             },
         ),
-        UiEvent::Topic { channel, topic, set_by, .. } => {
+        UiEvent::Topic {
+            channel,
+            topic,
+            set_by,
+            ..
+        } => {
             // Only fire on a live change (set_by present), not the join-time
             // RPL_TOPIC snapshot.
             let Some(setter) = set_by else {
-                return Vec::new();
+                return (Vec::new(), false);
             };
             (
                 "TOPIC",
@@ -1937,9 +3175,11 @@ pub fn drive_event(
                 ..Default::default()
             },
         ),
-        UiEvent::Mode { target, modes, by, .. } => {
+        UiEvent::Mode {
+            target, modes, by, ..
+        } => {
             let setter = by.clone().unwrap_or_default();
-            if !is_channel(target) {
+            let Some(bare_target) = ctx.state.isupport.channel_target(target) else {
                 // A user-mode change (only ever your own) fires `on USERMODE`.
                 let vars = EventVars {
                     nick: setter,
@@ -1948,41 +3188,130 @@ pub fn drive_event(
                     text: modes.clone(),
                     ..Default::default()
                 };
-                return engine.dispatch_event(ctx, "USERMODE", vars);
-            }
-            let chan = target.clone();
+                return engine.dispatch_event_default_halt_raw(ctx, "USERMODE", vars, raw);
+            };
+            let chan = ctx
+                .state
+                .channels
+                .iter()
+                .find(|channel| ctx.state.isupport.names_equal(&channel.name, bare_target))
+                .map(|channel| channel.name.clone())
+                .unwrap_or_else(|| bare_target.to_string());
             // Generic `on MODE` and raw `on RAWMODE` ($1- = the whole change).
             let generic = EventVars {
                 nick: setter.clone(),
                 chan: chan.clone(),
-                target: target.clone(),
+                target: chan.clone(),
                 params: words(modes),
                 text: modes.clone(),
                 ..Default::default()
             };
-            let mut actions = engine.dispatch_event(ctx, "MODE", generic.clone());
-            actions.extend(engine.dispatch_event(ctx, "RAWMODE", generic));
+            let (mut actions, mut halted) =
+                engine.dispatch_event_default_halt_raw(ctx, "MODE", generic.clone(), raw);
+            let (more, raw_halted) =
+                engine.dispatch_event_default_halt_raw(ctx, "RAWMODE", generic, raw);
+            actions.extend(more);
+            halted |= raw_halted;
             // Plus a specific event per prefix/ban change (on OP/DEOP/BAN/…),
             // with the affected nick/mask as $1 and $knick/$opnick/$bnick/…
-            for (kind, affected) in split_mode_events(modes) {
+            for (kind, affected) in split_mode_events(modes, &ctx.state.isupport) {
                 let vars = EventVars {
                     nick: setter.clone(),
                     knick: affected.clone(),
                     chan: chan.clone(),
-                    target: target.clone(),
+                    target: chan.clone(),
                     params: vec![affected.clone()],
                     text: affected,
                     ..Default::default()
                 };
-                actions.extend(engine.dispatch_event(ctx, kind, vars));
+                let (more, event_halted) =
+                    engine.dispatch_event_default_halt_raw(ctx, kind, vars, raw);
+                actions.extend(more);
+                halted |= event_halted;
             }
-            return actions;
+            return (actions, halted);
         }
         UiEvent::Disconnected { .. } => ("DISCONNECT", EventVars::default()),
         UiEvent::Registered { .. } => ("CONNECT", EventVars::default()),
-        _ => return Vec::new(),
+        _ => return (Vec::new(), false),
     };
-    engine.dispatch_event(ctx, kind, vars)
+    engine.dispatch_event_default_halt_raw(ctx, kind, vars, raw)
+}
+
+/// Builds the raw-event context for one decoded IRC line and its exact bytes.
+pub fn raw_event_context(line: &str, bytes: &[u8]) -> RawEventContext {
+    let (msg_tags_raw, raw_msg) = match line.strip_prefix('@').and_then(|s| s.split_once(' ')) {
+        Some((tags, rest)) => (tags.to_string(), rest.to_string()),
+        None => (String::new(), line.to_string()),
+    };
+    let msg_tags = msg_tags_raw
+        .split(';')
+        .filter(|tag| !tag.is_empty())
+        .map(|tag| match tag.split_once('=') {
+            Some((key, value)) => (key.to_string(), value.to_string(), true),
+            None => (tag.to_string(), String::new(), false),
+        })
+        .collect::<Vec<_>>();
+    let msg_stamp = msg_tags
+        .iter()
+        .find(|(key, _, _)| {
+            key == "time" || key == "znc.in/server-time-iso" || key == "server-time"
+        })
+        .map(|(_, value, _)| value.clone())
+        .unwrap_or_default();
+    RawEventContext {
+        raw_msg,
+        raw_bytes: bytes.to_vec(),
+        msg_tags,
+        msg_tags_raw,
+        msg_stamp,
+    }
+}
+
+/// Runs `on PARSELINE` for an incoming or outgoing line and separates its
+/// replacement/queue controls from ordinary script side effects.
+pub fn dispatch_parseline(
+    engine: &ScriptEngine,
+    ctx: &RunCtx,
+    direction: &str,
+    display_line: &str,
+    bytes: &[u8],
+    parse_utf: bool,
+    parse_em: bool,
+) -> ParseLineOutcome {
+    let parse_line = if direction.eq_ignore_ascii_case("in") && parse_utf {
+        bytes.iter().map(|byte| *byte as char).collect()
+    } else {
+        display_line.to_string()
+    };
+    let event = EventVars {
+        text: parse_line.clone(),
+        parse_line,
+        parse_type: direction.to_ascii_lowercase(),
+        parse_utf,
+        parse_em,
+        ..Default::default()
+    };
+    let (emitted, _, _) = engine.dispatch_event_status(ctx, "PARSELINE", event, None);
+    let mut outcome = ParseLineOutcome::default();
+    for action in emitted {
+        match action {
+            queued @ Action::ParseLine { queue: true, .. } => outcome.queued.push(queued),
+            Action::ParseLine {
+                direction: ref action_direction,
+                ref bytes,
+                queue: false,
+                append_crlf,
+                ..
+            } if action_direction.eq_ignore_ascii_case(direction) => {
+                outcome.current = Some(bytes.clone());
+                outcome.force_crlf |= append_crlf;
+            }
+            Action::ParseLine { .. } => {}
+            other => outcome.actions.push(other),
+        }
+    }
+    outcome
 }
 
 /// Dispatches `on RAW` for one inbound server line. `command` is the
@@ -1995,6 +3324,19 @@ pub fn dispatch_raw(
     command: &str,
     params: Vec<String>,
 ) -> Vec<Action> {
+    dispatch_raw_with_context(engine, ctx, command, params, None).0
+}
+
+/// Raw dispatch with full line metadata. The boolean reports any `/halt` or
+/// `/haltdef`, allowing the caller to suppress the UI events derived from this
+/// same server line while protocol state continues to update.
+pub fn dispatch_raw_with_context(
+    engine: &ScriptEngine,
+    ctx: &RunCtx,
+    command: &str,
+    params: Vec<String>,
+    raw: Option<&RawEventContext>,
+) -> (Vec<Action>, bool) {
     let numeric = if !command.is_empty() && command.bytes().all(|b| b.is_ascii_digit()) {
         command.to_string()
     } else {
@@ -2006,7 +3348,8 @@ pub fn dispatch_raw(
         numeric,
         ..Default::default()
     };
-    engine.dispatch_event(ctx, "RAW", vars)
+    let (actions, halted, default_halted) = engine.dispatch_event_status(ctx, "RAW", vars, raw);
+    (actions, halted || default_halted)
 }
 
 /// Dispatches a named protocol event fired straight off an inbound command —
@@ -2020,13 +3363,24 @@ pub fn dispatch_named(
     nick: &str,
     text: &str,
 ) -> Vec<Action> {
+    dispatch_named_with_context(engine, ctx, kind, nick, text, None)
+}
+
+pub fn dispatch_named_with_context(
+    engine: &ScriptEngine,
+    ctx: &RunCtx,
+    kind: &str,
+    nick: &str,
+    text: &str,
+    raw: Option<&RawEventContext>,
+) -> Vec<Action> {
     let vars = EventVars {
         nick: nick.to_string(),
         params: words(text),
         text: text.to_string(),
         ..Default::default()
     };
-    engine.dispatch_event(ctx, kind, vars)
+    engine.dispatch_event_status(ctx, kind, vars, raw).0
 }
 
 #[cfg(test)]
@@ -2052,7 +3406,13 @@ mod tests {
         let engine = ScriptEngine::new();
         engine.load(r#"alias t { var %x = a(b]c | /echo -a [ $+ $regsubex(%x,/(.)/g,$asc(\1) $+ $chr(32)) $+ ] }"#);
         let actions = engine.run_alias(&ctx(), "", "t", "");
-        assert_eq!(actions, vec![Action::Echo { target: "(status)".into(), text: "[97 40 98 93 99 ]".into() }]);
+        assert_eq!(
+            actions,
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "[97 40 98 93 99 ]".into()
+            }]
+        );
     }
 
     #[test]
@@ -2063,7 +3423,13 @@ mod tests {
         let engine = ScriptEngine::new();
         engine.load(r#"alias t { /echo -a [ $+ $regsubex(a\0b,/(\\?.)/g,$iif(\* iswm \1,ESC,$asc(\1)) $+ $chr(32)) $+ ] }"#);
         let actions = engine.run_alias(&ctx(), "", "t", "");
-        assert_eq!(actions, vec![Action::Echo { target: "(status)".into(), text: "[97 ESC 98 ]".into() }]);
+        assert_eq!(
+            actions,
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "[97 ESC 98 ]".into()
+            }]
+        );
     }
 
     #[test]
@@ -2074,7 +3440,13 @@ mod tests {
         let engine = ScriptEngine::new();
         engine.load("alias t { /echo -a [ $+ $input(msg,e,title,thedefault) $+ ] }");
         let actions = engine.run_alias(&ctx(), "", "t", "");
-        assert_eq!(actions, vec![Action::Echo { target: "(status)".into(), text: "[thedefault]".into() }]);
+        assert_eq!(
+            actions,
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "[thedefault]".into()
+            }]
+        );
     }
 
     #[test]
@@ -2082,7 +3454,34 @@ mod tests {
         let engine = ScriptEngine::new();
         engine.load("alias hi { /msg $chan hello $me }");
         let actions = engine.run_alias(&ctx(), "#test", "hi", "");
-        assert_eq!(actions, vec![Action::Send("PRIVMSG #test :hello me".into())]);
+        assert_eq!(
+            actions,
+            vec![Action::Send("PRIVMSG #test :hello me".into())]
+        );
+    }
+
+    #[test]
+    fn aliases_override_builtins_and_bang_bypasses_them() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias join { /msg #audit custom $1- }
+             alias frob { /msg #audit alias $1- }
+             alias t {
+               join #room
+               !join #room
+               frob one
+               !frob two
+             }",
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "#audit", "t", ""),
+            vec![
+                Action::Send("PRIVMSG #audit :custom #room".into()),
+                Action::Send("JOIN #room".into()),
+                Action::Send("PRIVMSG #audit :alias one".into()),
+                Action::Send("FROB two".into()),
+            ]
+        );
     }
 
     #[test]
@@ -2094,6 +3493,28 @@ mod tests {
             actions,
             vec![Action::Send(
                 "PRIVMSG #d :[b c d] [b c d e] [c] [a b c d e] [5] [b]".into()
+            )]
+        );
+    }
+
+    #[test]
+    fn nested_alias_missing_parameter_does_not_leak_from_caller() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            r#"
+            alias outer { rekey i7.room %#room - }
+            alias -l rekey {
+              var %sock = $1, %chan = $2, %flags = $3, %kicknick = $4
+              /msg #d count=$0 fourth=[$4] local=[%kicknick]
+            }
+            "#,
+        );
+
+        let actions = engine.run_alias(&ctx(), "#here", "outer", "one two three Snue");
+        assert_eq!(
+            actions,
+            vec![Action::Send(
+                "PRIVMSG #d :count=3 fourth=[] local=[]".into()
             )]
         );
     }
@@ -2124,12 +3545,97 @@ mod tests {
         engine.load("alias -l helper { /msg #c from-helper }\nalias go { helper }");
         // invoked from within `go`: resolves and runs the helper body
         let actions = engine.run_alias(&ctx(), "#c", "go", "");
-        assert_eq!(actions, vec![Action::Send("PRIVMSG #c :from-helper".into())]);
+        assert_eq!(
+            actions,
+            vec![Action::Send("PRIVMSG #c :from-helper".into())]
+        );
         // invoked directly as a user command: not exposed
         assert!(!engine.has_alias("helper"));
         assert!(engine.run_alias(&ctx(), "#c", "helper", "").is_empty());
         // a normal (global) alias is still user-callable
         assert!(engine.has_alias("go"));
+    }
+
+    #[test]
+    fn local_aliases_are_isolated_to_their_defining_script_file() {
+        let engine = ScriptEngine::new();
+        engine.load_sources(&[
+            (
+                "one.mrc".into(),
+                "alias -l helper { msg #c local-one }\n\
+                 alias -l value { return local-value }\n\
+                 on *:TEXT:one:#:{ helper | msg #c $value }"
+                    .into(),
+            ),
+            (
+                "two.mrc".into(),
+                "alias helper { msg #c global-two }\n\
+                 alias value { return global-value }\n\
+                 on *:TEXT:two:#:{ helper | msg #c $value }"
+                    .into(),
+            ),
+        ]);
+        let text = |body: &str| EventVars {
+            nick: "bob".into(),
+            chan: "#c".into(),
+            target: "#c".into(),
+            text: body.into(),
+            params: vec![body.into()],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            engine.dispatch_event(&ctx(), "TEXT", text("one")),
+            vec![
+                Action::Send("PRIVMSG #c :local-one".into()),
+                Action::Send("PRIVMSG #c :local-value".into()),
+            ]
+        );
+        assert_eq!(
+            engine.dispatch_event(&ctx(), "TEXT", text("two")),
+            vec![
+                Action::Send("PRIVMSG #c :global-two".into()),
+                Action::Send("PRIVMSG #c :global-value".into()),
+            ]
+        );
+        assert!(engine.has_alias("helper"));
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "helper", ""),
+            vec![Action::Send("PRIVMSG #c :global-two".into())]
+        );
+    }
+
+    #[test]
+    fn popup_commands_keep_their_defining_script_source() {
+        let engine = ScriptEngine::new();
+        engine.load_sources(&[
+            (
+                "one.mrc".into(),
+                "alias -l helper { msg #c from-one }\nmenu channel { One:helper }".into(),
+            ),
+            (
+                "two.mrc".into(),
+                "alias -l helper { msg #c from-two }\nmenu channel { Two:helper }".into(),
+            ),
+        ]);
+        let items = engine.popups_evaluated(&ctx(), "channel", "", "#c");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].source, "one.mrc");
+        assert_eq!(items[1].source, "two.mrc");
+        assert_eq!(
+            engine.run_command_snicks_from_source(
+                &ctx(),
+                "#c",
+                &items[1].command,
+                &[],
+                &[],
+                &items[1].source,
+                "menu",
+                "",
+                "",
+            ),
+            vec![Action::Send("PRIVMSG #c :from-two".into())]
+        );
     }
 
     #[test]
@@ -2145,7 +3651,10 @@ mod tests {
             ..Default::default()
         };
         let actions = engine.dispatch_event(&ctx(), "TEXT", vars);
-        assert_eq!(actions, vec![Action::Send("PRIVMSG #test :pong bob".into())]);
+        assert_eq!(
+            actions,
+            vec![Action::Send("PRIVMSG #test :pong bob".into())]
+        );
     }
 
     #[test]
@@ -2193,9 +3702,7 @@ mod tests {
     #[test]
     fn script_groups_suppress_events() {
         let engine = ScriptEngine::new();
-        engine.load(
-            "#g off\non *:TEXT:*:#:{ msg #c got }\n#g end\nalias en { enable #g }",
-        );
+        engine.load("#g off\non *:TEXT:*:#:{ msg #c got }\n#g end\nalias en { enable #g }");
         let ev = EventVars {
             nick: "bob".into(),
             chan: "#c".into(),
@@ -2376,6 +3883,24 @@ mod tests {
     }
 
     #[test]
+    fn standard_top_level_ctcp_definition_dispatches() {
+        let engine = ScriptEngine::new();
+        engine.load("ctcp *:PING:?:{ /msg $nick official $1- }");
+        let request = UiEvent::Message {
+            server_id: "s".into(),
+            kind: MessageKind::Privmsg,
+            from: Some("bob".into()),
+            target: "me".into(),
+            text: "\u{1}PING 99\u{1}".into(),
+            time: None,
+        };
+        assert_eq!(
+            drive_event(&engine, &ctx(), &request),
+            vec![Action::Send("PRIVMSG bob :official PING 99".into())]
+        );
+    }
+
+    #[test]
     fn ctcpreply_event_fires_on_notice_only() {
         let engine = ScriptEngine::new();
         // A NOTICE-wrapped CTCP fires `on CTCPREPLY`, never `on CTCP`.
@@ -2394,6 +3919,24 @@ mod tests {
                 target: "bob".into(),
                 text: "bob replied PING 99".into(),
             }]
+        );
+    }
+
+    #[test]
+    fn standard_targetless_ctcpreply_definition_dispatches() {
+        let engine = ScriptEngine::new();
+        engine.load("on *:CTCPREPLY:VERSION*:/msg #audit reply $1-");
+        let reply = UiEvent::Message {
+            server_id: "s".into(),
+            kind: MessageKind::Notice,
+            from: Some("bob".into()),
+            target: "me".into(),
+            text: "\u{1}VERSION mIRC v7\u{1}".into(),
+            time: None,
+        };
+        assert_eq!(
+            drive_event(&engine, &ctx(), &reply),
+            vec![Action::Send("PRIVMSG #audit :reply VERSION mIRC v7".into())]
         );
     }
 
@@ -2426,20 +3969,32 @@ mod tests {
         // WALLOPS is a matchtext event — matches the text; $nick = sender.
         assert_eq!(
             dispatch_named(&engine, &ctx(), "WALLOPS", "oper", "net flood detected"),
-            vec![Action::Echo { target: "(status)".into(), text: "w oper net flood detected".into() }]
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "w oper net flood detected".into()
+            }]
         );
         // ERROR / PING / CONNECTFAIL are plain — they fire regardless; $1- = text.
         assert_eq!(
             dispatch_named(&engine, &ctx(), "ERROR", "", "Closing Link: spam"),
-            vec![Action::Echo { target: "(status)".into(), text: "e Closing Link: spam".into() }]
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "e Closing Link: spam".into()
+            }]
         );
         assert_eq!(
             dispatch_named(&engine, &ctx(), "PING", "", "12345"),
-            vec![Action::Echo { target: "(status)".into(), text: "p".into() }]
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "p".into()
+            }]
         );
         assert_eq!(
             dispatch_named(&engine, &ctx(), "CONNECTFAIL", "", "connection refused"),
-            vec![Action::Echo { target: "(status)".into(), text: "cf connection refused".into() }]
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "cf connection refused".into()
+            }]
         );
     }
 
@@ -2470,18 +4025,70 @@ mod tests {
         let engine = ScriptEngine::new();
         engine.load("alias f { /ialfill $1- }");
         // Bare channel, and with a leading network token — both WHO the channel.
-        assert_eq!(engine.run_alias(&ctx(), "#x", "f", "#chan"), vec![Action::Send("WHO #chan".into())]);
+        assert_eq!(
+            engine.run_alias(&ctx(), "#x", "f", "#chan"),
+            vec![Action::Send("WHO #chan".into())]
+        );
         assert_eq!(
             engine.run_alias(&ctx(), "#x", "f", "libera #chan"),
             vec![Action::Send("WHO #chan".into())]
+        );
+
+        let mut state = crate::irc::state::StateSnapshot::default();
+        state.isupport.whox = true;
+        state.channels.push(crate::irc::state::ChannelView {
+            name: "#chan".into(),
+            nicks: vec!["alice".into(), "bob".into()],
+            ..Default::default()
+        });
+        state.ial = vec![
+            ("alice".into(), "alice!u@a".into()),
+            ("bob".into(), "bob!u@b".into()),
+        ];
+        let rich = RunCtx {
+            state: std::sync::Arc::new(state),
+            ..ctx()
+        };
+        // A complete IAL suppresses redundant WHO traffic; -f forces mIRC's
+        // fixed WHOX query when the server advertises support.
+        assert!(engine.run_alias(&rich, "#chan", "f", "#chan").is_empty());
+        assert_eq!(
+            engine.run_alias(&rich, "#chan", "f", "-f #chan"),
+            vec![Action::Send("WHO #chan %acdfhlnrstu,995".into())]
+        );
+    }
+
+    #[test]
+    fn ial_commands_emit_connection_local_controls() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias c { /ial off | /ial on | /ialclear Bob | /ialclear | /ialmark Bob trusted | /ialmark -n Bob role admin | /ialmark -rnw Bob r* }",
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "#chan", "c", ""),
+            vec![
+                Action::Send("\u{0}IAL OFF".into()),
+                Action::Send("\u{0}IAL ON".into()),
+                Action::Send("\u{0}IAL CLEAR Bob".into()),
+                Action::Send("\u{0}IAL CLEAR".into()),
+                Action::Send("\u{0}IAL MARK\t0\t0\tBob\tdefault\ttrusted".into()),
+                Action::Send("\u{0}IAL MARK\t0\t0\tBob\trole\tadmin".into()),
+                Action::Send("\u{0}IAL MARK\t1\t1\tBob\tr*\t".into()),
+            ]
         );
     }
 
     #[test]
     fn raw_event_matches_and_exposes_numeric_event() {
         let engine = ScriptEngine::new();
-        engine.load("on *:RAW:001:/echo got $numeric ev $event p1 $1-\non *:RAW:PING:/echo gotping");
-        let welcome = dispatch_raw(&engine, &ctx(), "001", vec!["me".into(), "Welcome here".into()]);
+        engine
+            .load("on *:RAW:001:/echo got $numeric ev $event p1 $1-\non *:RAW:PING:/echo gotping");
+        let welcome = dispatch_raw(
+            &engine,
+            &ctx(),
+            "001",
+            vec!["me".into(), "Welcome here".into()],
+        );
         assert_eq!(
             welcome,
             vec![Action::Echo {
@@ -2492,20 +4099,224 @@ mod tests {
         let ping = dispatch_raw(&engine, &ctx(), "PING", vec!["12345".into()]);
         assert_eq!(
             ping,
-            vec![Action::Echo { target: "(status)".into(), text: "gotping".into() }]
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "gotping".into()
+            }]
         );
         // A numeric matching neither handler fires nothing.
         assert!(dispatch_raw(&engine, &ctx(), "999", vec![]).is_empty());
     }
 
     #[test]
-    fn custom_identifier_alias_returns_value() {
+    fn standard_top_level_raw_definition_matches_command_and_reply_text() {
         let engine = ScriptEngine::new();
         engine.load(
-            "alias double { /return $calc($1 * 2) }\nalias t { /msg #c result $double(5) }",
+            "raw 322:*mirc*:{ /msg #audit list $numeric $1- }\n\
+             raw PROP:*owner*:/msg #audit prop $1-",
         );
+        assert_eq!(
+            dispatch_raw(
+                &engine,
+                &ctx(),
+                "322",
+                vec![
+                    "me".into(),
+                    "#mirc".into(),
+                    "42".into(),
+                    "mirc users".into()
+                ],
+            ),
+            vec![Action::Send(
+                "PRIVMSG #audit :list 322 me #mirc 42 mirc users".into()
+            )]
+        );
+        assert!(dispatch_raw(
+            &engine,
+            &ctx(),
+            "322",
+            vec!["me".into(), "#other".into(), "1".into(), "unrelated".into()],
+        )
+        .is_empty());
+        assert_eq!(
+            dispatch_raw(
+                &engine,
+                &ctx(),
+                "PROP",
+                vec!["%#room".into(), "OWNERKEY".into(), "owner value".into()],
+            ),
+            vec![Action::Send(
+                "PRIVMSG #audit :prop %#room OWNERKEY owner value".into()
+            )]
+        );
+    }
+
+    #[test]
+    fn parseline_matches_direction_and_returns_replacement_and_queue() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "on *:PARSELINE:in:*PRIVMSG*:{ echo -a $parsetype $parseutf $parseem $parseline | parseline -itu0 :srv NOTICE me :changed | parseline -oqpt PING :later }\n\
+             on *:PARSELINE:out:*:{ parseline -ot PRIVMSG #c :outbound }",
+        );
+        let incoming = dispatch_parseline(
+            &engine,
+            &ctx(),
+            "in",
+            ":nick PRIVMSG #c :café",
+            b":nick PRIVMSG #c :caf\xc3\xa9",
+            true,
+            false,
+        );
+        assert_eq!(incoming.current, Some(b":srv NOTICE me :changed".to_vec()));
+        assert_eq!(
+            incoming.actions,
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "in $true $false :nick PRIVMSG #c :cafÃ©".into(),
+            }]
+        );
+        let echoed = dispatch_parseline(
+            &engine,
+            &ctx(),
+            "in",
+            ":me PRIVMSG #c :echo",
+            b":me PRIVMSG #c :echo",
+            true,
+            true,
+        );
+        assert!(matches!(
+            echoed.actions.as_slice(),
+            [Action::Echo { text, .. }] if text.starts_with("in $true $true ")
+        ));
+        assert!(matches!(
+            incoming.queued.as_slice(),
+            [Action::ParseLine {
+                direction,
+                bytes,
+                queue: true,
+                trigger: true,
+                ..
+            }] if direction == "out" && bytes == b"PING :later"
+        ));
+        let encoded = encode_parseline_control(&incoming.queued[0]).unwrap();
+        assert_eq!(
+            decode_parseline_control(&encoded),
+            Some(incoming.queued[0].clone())
+        );
+
+        let outgoing = dispatch_parseline(
+            &engine,
+            &ctx(),
+            "out",
+            "PRIVMSG #c :original",
+            b"PRIVMSG #c :original",
+            true,
+            false,
+        );
+        assert_eq!(outgoing.current, Some(b"PRIVMSG #c :outbound".to_vec()));
+
+        let utf = ScriptEngine::new();
+        utf.load("on *:PARSELINE:in:*:{ parseline -itu0 $upper($utfdecode($parseline)) }");
+        let decoded = dispatch_parseline(&utf, &ctx(), "in", "café", b"caf\xc3\xa9", true, false);
+        assert_eq!(decoded.current, Some("CAFÉ".as_bytes().to_vec()));
+
+        let binary = ScriptEngine::new();
+        binary.load("on *:PARSELINE:in:*:{ bset -z &wire 1 0 255 13 10 | parseline -iqb &wire }");
+        let binary_outcome =
+            dispatch_parseline(&binary, &ctx(), "in", "PING", b"PING", true, false);
+        assert!(matches!(
+            binary_outcome.queued.as_slice(),
+            [Action::ParseLine { bytes, .. }] if bytes == &[0, 255, 13, 10]
+        ));
+    }
+
+    #[test]
+    fn raw_context_exposes_tags_stamp_and_halt_suppression() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "on *:TEXT:*:#:{ echo -a raw=$rawmsg bytes=$rawbytes tags=$msgtags count=$msgtags(0) tag=$msgtags(2).tag key=$msgtags(2).key full=$msgtags(label) stamp=$msgstamp }\n\
+             on *:RAW:PRIVMSG:{ halt }",
+        );
+        let line = "@time=2026-07-15T01:02:03.000Z;label=hello\\sworld :bob!u@h PRIVMSG #c :hi";
+        let raw = raw_event_context(line, line.as_bytes());
+        let event = UiEvent::Message {
+            server_id: "s".into(),
+            kind: MessageKind::Privmsg,
+            from: Some("bob".into()),
+            target: "#c".into(),
+            text: "hi".into(),
+            time: None,
+        };
+        let actions = drive_event_halt_raw(&engine, &ctx(), &event, Some(&raw)).0;
+        assert_eq!(actions.len(), 1);
+        let Action::Echo { text, .. } = &actions[0] else {
+            panic!("expected echo");
+        };
+        assert!(text.contains("raw=:bob!u@h PRIVMSG #c :hi"));
+        assert!(text.contains("count=2 tag=label key=hello\\sworld full=label=hello\\sworld"));
+        assert!(text.contains("stamp=2026-07-15T01:02:03.000Z"));
+        let (_, halted) = dispatch_raw_with_context(
+            &engine,
+            &ctx(),
+            "PRIVMSG",
+            vec!["#c".into(), "hi".into()],
+            Some(&raw),
+        );
+        assert!(halted);
+
+        let haltdef = ScriptEngine::new();
+        haltdef.load("on *:RAW:PING:{ haltdef }");
+        assert!(
+            dispatch_raw_with_context(&haltdef, &ctx(), "PING", vec!["token".into()], Some(&raw),)
+                .1
+        );
+    }
+
+    #[test]
+    fn script_and_scriptline_follow_loaded_source_and_nested_alias() {
+        let engine = ScriptEngine::new();
+        engine.load_sources(&[
+            (
+                "one.mrc".into(),
+                "\n\nalias show {\n echo -a $script $scriptline $script(0) $script(2)\n}".into(),
+            ),
+            ("two.mrc".into(), "alias helper return ok".into()),
+        ]);
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "show", ""),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "one.mrc 4 2 two.mrc".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn custom_identifier_alias_returns_value() {
+        let engine = ScriptEngine::new();
+        engine
+            .load("alias double { /return $calc($1 * 2) }\nalias t { /msg #c result $double(5) }");
         let actions = engine.run_alias(&ctx(), "#c", "t", "");
         assert_eq!(actions, vec![Action::Send("PRIVMSG #c :result 10".into())]);
+    }
+
+    #[test]
+    fn unknown_identifiers_evaluate_to_mirc_null() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias t {
+                /msg #c before[ $+ $definitely_missing $+ ][ $+ $also_missing(x) $+ ]after
+                if ($definitely_missing) /msg #c should-not-run
+                if ($definitely_missing == $null) /msg #c null-ok
+            }",
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![
+                Action::Send("PRIVMSG #c :before[][]after".into()),
+                Action::Send("PRIVMSG #c :null-ok".into()),
+            ]
+        );
     }
 
     #[test]
@@ -2524,7 +4335,72 @@ mod tests {
         engine.run_command(&rctx, "#c", "/write notes.txt second line", &[]);
         engine.load("alias r { /msg #c $read(notes.txt, 2) [ $+ $lines(notes.txt) $+ ] }");
         let actions = engine.run_alias(&rctx, "#c", "r", "");
-        assert_eq!(actions, vec![Action::Send("PRIVMSG #c :second line [2]".into())]);
+        assert_eq!(
+            actions,
+            vec![Action::Send("PRIVMSG #c :second line [2]".into())]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_line_insert_replace_delete_and_search_switches() {
+        let dir = std::env::temp_dir().join(format!("jirc-write-ops-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: dir.clone(),
+            state: std::sync::Arc::new(Default::default()),
+        };
+        let engine = ScriptEngine::new();
+        engine.run_command(&rctx, "#c", "/write -c ops.txt one", &[]);
+        engine.run_command(&rctx, "#c", "/write ops.txt three", &[]);
+        engine.run_command(&rctx, "#c", "/write -il2 ops.txt two", &[]);
+        engine.run_command(&rctx, "#c", "/write -l1 ops.txt ONE", &[]);
+        engine.run_command(&rctx, "#c", "/write -al3 ops.txt !", &[]);
+        engine.run_command(&rctx, "#c", "/write -dsONE ops.txt", &[]);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("ops.txt")).unwrap(),
+            "two\r\nthree!\r\n"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn filter_handles_files_windows_regex_ranges_and_filtered_count() {
+        let dir = std::env::temp_dir().join(format!("jirc-filter-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("in.txt"),
+            "apple red\r\nbanana yellow\r\ncherry red\r\ndate brown\r\n",
+        )
+        .unwrap();
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: dir.clone(),
+            state: std::sync::Arc::new(Default::default()),
+        };
+        let engine = ScriptEngine::new();
+        engine.run_command(&rctx, "#c", "/filter -ffc in.txt out.txt *red*", &[]);
+        engine.load("alias count { msg #c $filtered $lines(out.txt) }");
+        assert_eq!(
+            engine.run_alias(&rctx, "#c", "count", ""),
+            vec![Action::Send("PRIVMSG #c :2 2".into())]
+        );
+
+        engine.run_command(&rctx, "#c", "/window @input", &[]);
+        engine.run_command(&rctx, "#c", "/aline @input Alpha", &[]);
+        engine.run_command(&rctx, "#c", "/aline @input beta", &[]);
+        engine.run_command(&rctx, "#c", "/aline @input ALPINE", &[]);
+        engine.run_command(&rctx, "#c", "/filter -wwcg @input @output /^alp/i", &[]);
+        engine.load("alias rows { msg #c $window(@output).lines $line(@output,2) $filtered }");
+        assert_eq!(
+            engine.run_alias(&rctx, "#c", "rows", ""),
+            vec![Action::Send("PRIVMSG #c :2 ALPINE 2".into())]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2586,7 +4462,9 @@ mod tests {
         let engine = ScriptEngine::new();
         engine.run_command(&rctx, "#c", "/writeini cfg.ini User nick bob", &[]);
         engine.run_command(&rctx, "#c", "/writeini cfg.ini User host x.example", &[]);
-        engine.load("alias r { /msg #c $readini(cfg.ini, User, nick) [ $+ $ini(cfg.ini, User, 0) $+ ] }");
+        engine.load(
+            "alias r { /msg #c $readini(cfg.ini, User, nick) [ $+ $ini(cfg.ini, User, 0) $+ ] }",
+        );
         let actions = engine.run_alias(&rctx, "#c", "r", "");
         assert_eq!(actions, vec![Action::Send("PRIVMSG #c :bob [2]".into())]);
         // /remini removes a single item; $readini of it is then empty.
@@ -2594,6 +4472,82 @@ mod tests {
         engine.load("alias r2 { /msg #c [ $+ $readini(cfg.ini, User, host) $+ ] }");
         let actions = engine.run_alias(&rctx, "#c", "r2", "");
         assert_eq!(actions, vec![Action::Send("PRIVMSG #c :[]".into())]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_and_readini_pipe_switches_match_mirc_evaluation() {
+        let dir = std::env::temp_dir().join(format!("jirc-read-pipe-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("pipe.txt"), "$me | /msg #c read-tail $me\n").unwrap();
+        std::fs::write(
+            dir.join("pipe.ini"),
+            "[Data]\nvalue=$me | /msg #c ini-tail $me\n",
+        )
+        .unwrap();
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: dir.clone(),
+            state: std::sync::Arc::new(Default::default()),
+        };
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias read_plain { /msg #c $read(pipe.txt,n,1) }\n\
+             alias read_p { /msg #c $read(pipe.txt,p,1) }\n\
+             alias read_np { /msg #c $read(pipe.txt,np,1) }\n\
+             alias ini_plain { /msg #c $readini(pipe.ini,n,Data,value) }\n\
+             alias ini_p { /msg #c $readini(pipe.ini,p,Data,value) }\n\
+             alias ini_np { /msg #c $readini(pipe.ini,np,Data,value) }",
+        );
+
+        // Without `p`, a pipe returned by either identifier is ordinary data.
+        assert_eq!(
+            engine.run_alias(&rctx, "#c", "read_plain", ""),
+            vec![Action::Send(
+                "PRIVMSG #c :$me | /msg #c read-tail $me".into()
+            )]
+        );
+        assert_eq!(
+            engine.run_alias(&rctx, "#c", "ini_plain", ""),
+            vec![Action::Send(
+                "PRIVMSG #c :$me | /msg #c ini-tail $me".into()
+            )]
+        );
+
+        // `p` evaluates the returned value and makes its pipe structural.
+        assert_eq!(
+            engine.run_alias(&rctx, "#c", "read_p", ""),
+            vec![
+                Action::Send("PRIVMSG #c :me".into()),
+                Action::Send("PRIVMSG #c :read-tail me".into()),
+            ]
+        );
+        assert_eq!(
+            engine.run_alias(&rctx, "#c", "ini_p", ""),
+            vec![
+                Action::Send("PRIVMSG #c :me".into()),
+                Action::Send("PRIVMSG #c :ini-tail me".into()),
+            ]
+        );
+
+        // `n` keeps the value before the separator literal; `p` still executes
+        // the command after it, which then performs its own normal evaluation.
+        assert_eq!(
+            engine.run_alias(&rctx, "#c", "read_np", ""),
+            vec![
+                Action::Send("PRIVMSG #c :$me".into()),
+                Action::Send("PRIVMSG #c :read-tail me".into()),
+            ]
+        );
+        assert_eq!(
+            engine.run_alias(&rctx, "#c", "ini_np", ""),
+            vec![
+                Action::Send("PRIVMSG #c :$me".into()),
+                Action::Send("PRIVMSG #c :ini-tail me".into()),
+            ]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2668,9 +4622,14 @@ mod tests {
         };
         let engine = ScriptEngine::new();
         // recursive: *.txt under data/ = a,b,sub/c = 3; dirs = sub = 1.
-        engine.load("alias n { /msg #c files= $+ $findfile(data, *.txt, 0) dirs= $+ $finddir(data, *, 0) }");
+        engine.load(
+            "alias n { /msg #c files= $+ $findfile(data, *.txt, 0) dirs= $+ $finddir(data, *, 0) }",
+        );
         let actions = engine.run_alias(&rctx, "#c", "n", "");
-        assert_eq!(actions, vec![Action::Send("PRIVMSG #c :files=3 dirs=1".into())]);
+        assert_eq!(
+            actions,
+            vec![Action::Send("PRIVMSG #c :files=3 dirs=1".into())]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2713,7 +4672,10 @@ mod tests {
             network: "N",
             server: "s",
             data_dir: std::env::temp_dir(),
-            state: std::sync::Arc::new(StateSnapshot { away_time: 1_700_000_500, ..Default::default() }),
+            state: std::sync::Arc::new(StateSnapshot {
+                away_time: 1_700_000_500,
+                ..Default::default()
+            }),
         };
         engine.load("alias t { /msg #c $awaytime }");
         assert_eq!(
@@ -2789,6 +4751,7 @@ mod tests {
                 nicks: vec!["alice".into(), "bob".into()],
                 members: vec![],
                 bans: vec![],
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -2801,7 +4764,9 @@ mod tests {
         };
         let engine = ScriptEngine::new();
         // host1 members on #chan = {alice}; all #chan members = {alice, bob}.
-        engine.load("alias n { /msg #c $ialchan(*!*@host1.com,#chan,0) $+ / $+ $ialchan(*!*@*,#chan,0) }");
+        engine.load(
+            "alias n { /msg #c $ialchan(*!*@host1.com,#chan,0) $+ / $+ $ialchan(*!*@*,#chan,0) }",
+        );
         let actions = engine.run_alias(&rctx, "#c", "n", "");
         assert_eq!(actions, vec![Action::Send("PRIVMSG #c :1/2".into())]);
     }
@@ -2821,6 +4786,23 @@ mod tests {
         assert_eq!(
             engine2.run_alias(&ctx(), "#c", "up", ""),
             vec![Action::Send("PRIVMSG #c :AB".into())]
+        );
+    }
+
+    #[test]
+    fn regsub_output_variables_receive_text_and_return_match_count() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            r#"alias replace {
+              var %out = old
+              var %n = $regsub(a1 b2,/(\w)(\d)/g,\2\1,%out)
+              var %m = $regsubex(rx,ab,/(\w)/g,$upper(\t),&binary)
+              /msg #c %n $+ / $+ %out $+ / $+ %m $+ / $+ $bvar(&binary).text
+            }"#,
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "replace", ""),
+            vec![Action::Send("PRIVMSG #c :2/1a 2b/2/AB".into())]
         );
     }
 
@@ -2845,16 +4827,33 @@ mod tests {
         let engine = ScriptEngine::new();
         assert_eq!((engine.assign_cid("s1"), engine.assign_cid("s2")), (1, 2));
         assert_eq!(engine.assign_cid("s1"), 1); // idempotent — a reconnect keeps its number
+        assert_eq!(engine.cid_for("s1"), 1);
+        assert_eq!(engine.cid_for("missing"), 0);
+        assert_eq!(engine.connections_in_cid_order(), vec!["s1", "s2"]);
+        engine.set_connection_context("s2", "Network Two", "irc.two.test");
+        assert_eq!(
+            engine.connection_context("s2"),
+            Some(("Network Two".into(), "irc.two.test".into()))
+        );
         engine.set_active_conn("s2");
+        assert_eq!(engine.active_connection().as_deref(), Some("s2"));
 
         // $scon(0) = count, $scon(N) = Nth cid, $activecid = the active connection.
         assert_eq!(
-            engine.run_command(&ctx(), "#c", "/msg #c n=$scon(0) first=$scon(1) act=$activecid", &[]),
+            engine.run_command(
+                &ctx(),
+                "#c",
+                "/msg #c n=$scon(0) first=$scon(1) act=$activecid",
+                &[]
+            ),
             vec![Action::Send("PRIVMSG #c :n=2 first=1 act=2".into())]
         );
 
         // $cid is the *run's own* connection, read from the state snapshot.
-        let snap = crate::irc::state::StateSnapshot { server_id: "s2".into(), ..Default::default() };
+        let snap = crate::irc::state::StateSnapshot {
+            server_id: "s2".into(),
+            ..Default::default()
+        };
         let ctx2 = RunCtx {
             my_nick: "me",
             network: "Net",
@@ -2869,6 +4868,7 @@ mod tests {
 
         // Forgetting a connection drops it from $scon.
         engine.forget_cid("s1");
+        assert_eq!(engine.cid_for("s1"), 0);
         assert_eq!(
             engine.run_command(&ctx(), "#c", "/msg #c n=$scon(0)", &[]),
             vec![Action::Send("PRIVMSG #c :n=1".into())]
@@ -2883,7 +4883,12 @@ mod tests {
         engine.set_active_conn("s2");
         // $scid(0) = count, $scid(-1) = active cid, $scid(cid) = echo if it exists.
         assert_eq!(
-            engine.run_command(&ctx(), "#c", "/msg #c c=$scid(0) a=$scid(-1) v=$scid(2) x=$scid(9)", &[]),
+            engine.run_command(
+                &ctx(),
+                "#c",
+                "/msg #c c=$scid(0) a=$scid(-1) v=$scid(2) x=$scid(9)",
+                &[]
+            ),
             vec![Action::Send("PRIVMSG #c :c=2 a=2 v=2 x=".into())]
         );
     }
@@ -2899,7 +4904,10 @@ mod tests {
 
         // $activewid = the active window; $wid (in an event for #a) = that window.
         engine.load("on *:TEXT:*:#:{ /msg $chan wid=$wid active=$activewid }");
-        let snap = crate::irc::state::StateSnapshot { server_id: "s1".into(), ..Default::default() };
+        let snap = crate::irc::state::StateSnapshot {
+            server_id: "s1".into(),
+            ..Default::default()
+        };
         let ctx2 = RunCtx {
             my_nick: "me",
             network: "Net",
@@ -2933,15 +4941,24 @@ mod tests {
         // /scon N targets the Nth connection; the subcommand is carried raw to it.
         assert_eq!(
             engine.run_command(&ctx(), "#c", "/scon 2 /msg #c hi", &[]),
-            vec![Action::RunOn { server_id: "s2".into(), command: "/msg #c hi".into() }]
+            vec![Action::RunOn {
+                server_id: "s2".into(),
+                command: "/msg #c hi".into()
+            }]
         );
         // /scid targets by cid.
         assert_eq!(
             engine.run_command(&ctx(), "#c", "/scid 1 /msg #c yo", &[]),
-            vec![Action::RunOn { server_id: "s1".into(), command: "/msg #c yo".into() }]
+            vec![Action::RunOn {
+                server_id: "s1".into(),
+                command: "/msg #c yo".into()
+            }]
         );
         // An out-of-range selector produces nothing.
-        assert_eq!(engine.run_command(&ctx(), "#c", "/scon 9 /msg #c x", &[]), vec![]);
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", "/scon 9 /msg #c x", &[]),
+            vec![]
+        );
     }
 
     #[test]
@@ -2953,15 +4970,27 @@ mod tests {
              on *:EXIT:{ /echo -s exiting }",
         );
         let echoed = |acts: Vec<Action>, want: &str| {
-            acts.iter().any(|a| matches!(a, Action::Echo { text, .. } if text == want))
+            acts.iter()
+                .any(|a| matches!(a, Action::Echo { text, .. } if text == want))
         };
-        assert!(echoed(engine.dispatch_event(&ctx(), "START", EventVars::default()), "started"));
-        assert!(echoed(engine.dispatch_event(&ctx(), "UNLOAD", EventVars::default()), "unloading"));
-        assert!(echoed(engine.dispatch_event(&ctx(), "EXIT", EventVars::default()), "exiting"));
+        assert!(echoed(
+            engine.dispatch_event(&ctx(), "START", EventVars::default()),
+            "started"
+        ));
+        assert!(echoed(
+            engine.dispatch_event(&ctx(), "UNLOAD", EventVars::default()),
+            "unloading"
+        ));
+        assert!(echoed(
+            engine.dispatch_event(&ctx(), "EXIT", EventVars::default()),
+            "exiting"
+        ));
         // A script with no lifecycle handlers dispatches to nothing.
         let bare = ScriptEngine::new();
         bare.load("alias x { /echo hi }");
-        assert!(bare.dispatch_event(&ctx(), "START", EventVars::default()).is_empty());
+        assert!(bare
+            .dispatch_event(&ctx(), "START", EventVars::default())
+            .is_empty());
     }
 
     #[test]
@@ -2973,18 +5002,33 @@ mod tests {
              on *:OPEN:#:*:{ /echo -s opened chan $chan }",
         );
         let echoed = |acts: Vec<Action>, want: &str| {
-            acts.iter().any(|a| matches!(a, Action::Echo { text, .. } if text == want))
+            acts.iter()
+                .any(|a| matches!(a, Action::Echo { text, .. } if text == want))
         };
         // A query window (empty $chan so `?` matches; $target = the other party).
-        let q = EventVars { nick: "bob".into(), target: "bob".into(), ..Default::default() };
-        assert!(echoed(engine.dispatch_event(&ctx(), "OPEN", q.clone()), "opened query bob"));
+        let q = EventVars {
+            nick: "bob".into(),
+            target: "bob".into(),
+            ..Default::default()
+        };
+        assert!(echoed(
+            engine.dispatch_event(&ctx(), "OPEN", q.clone()),
+            "opened query bob"
+        ));
         // A channel window: `#` matches, `?` does not.
-        let c = EventVars { chan: "#c".into(), target: "#c".into(), ..Default::default() };
+        let c = EventVars {
+            chan: "#c".into(),
+            target: "#c".into(),
+            ..Default::default()
+        };
         let ca = engine.dispatch_event(&ctx(), "OPEN", c);
         assert!(echoed(ca.clone(), "opened chan #c"));
         assert!(!echoed(ca, "opened query #c"));
         // on CLOSE:? fires when a query closes.
-        assert!(echoed(engine.dispatch_event(&ctx(), "CLOSE", q), "closed query bob"));
+        assert!(echoed(
+            engine.dispatch_event(&ctx(), "CLOSE", q),
+            "closed query bob"
+        ));
     }
 
     #[test]
@@ -2995,7 +5039,11 @@ mod tests {
             "on *:NOTIFY:/msg #f $nick is online\n\
              on *:UNOTIFY:/msg #f $nick left",
         );
-        let vars = EventVars { nick: "alice".into(), target: "alice".into(), ..Default::default() };
+        let vars = EventVars {
+            nick: "alice".into(),
+            target: "alice".into(),
+            ..Default::default()
+        };
         assert_eq!(
             engine.dispatch_event(&ctx(), "NOTIFY", vars.clone()),
             vec![Action::Send("PRIVMSG #f :alice is online".into())]
@@ -3015,6 +5063,7 @@ mod tests {
                 nicks: vec!["alice".into(), "bob".into()],
                 members: vec![("bob".into(), "@".into()), ("alice".into(), "".into())],
                 bans: vec![],
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -3026,11 +5075,47 @@ mod tests {
             state: std::sync::Arc::new(snap),
         };
         let engine = ScriptEngine::new();
-        // $iif's condition is now evaluated like `if`, so isop/ison/… work.
-        engine.load("alias t { /msg #c $iif(bob isop #c,op,notop) $iif(alice isop #c,op,notop) }");
+        // $iif's condition is evaluated like `if`, including mIRC's infix
+        // negated operator spelling (`!isop`).
+        engine.load("alias t { /msg #c $iif(bob isop #c,op,notop) $iif(alice isop #c,op,notop) $iif(bob !isop #c,notop,op) $iif(alice !isop #c,notop,op) $iif($null !isop #c,notop,op) }");
         assert_eq!(
             engine.run_alias(&rctx, "#c", "t", ""),
-            vec![Action::Send("PRIVMSG #c :op notop".into())]
+            vec![Action::Send("PRIVMSG #c :op notop op notop notop".into())]
+        );
+    }
+
+    #[test]
+    fn i7_nickname_validation_supports_negated_isnum_range() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            r#"
+            alias t {
+              var %n = $remove($1,$chr(62),$chr(32),$cr,$lf)
+              if (($len(%n) !isnum 2-20) || (!$regex(%n,/^[A-Za-z][A-Za-z0-9_-]+$/))) { /msg #c invalid | return }
+              /msg #c valid %n
+            }
+            "#,
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", "Nick"),
+            vec![Action::Send("PRIVMSG #c :valid Nick".into())]
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", "A"),
+            vec![Action::Send("PRIVMSG #c :invalid".into())]
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", "1bad"),
+            vec![Action::Send("PRIVMSG #c :invalid".into())]
+        );
+
+        // i7 also uses `item !isin %list` where the list may be unset. The
+        // missing RHS remains an empty binary operand rather than becoming a
+        // malformed unary expression.
+        engine.load("alias t { var %listed | /msg #c $iif(. !isin %listed,not-listed,listed) $iif($null !isnum 2-20,out-of-range,in-range) }");
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :not-listed out-of-range".into())]
         );
     }
 
@@ -3053,7 +5138,9 @@ mod tests {
         // literal; /set does math too. Also exercises the no-`=` /var form.
         assert_eq!(
             engine.run_alias(&ctx(), "#c", "t", ""),
-            vec![Action::Send("PRIVMSG #c :3/65536/1/1 + 1 + 1/9 - 4/a + b/12".into())]
+            vec![Action::Send(
+                "PRIVMSG #c :3/65536/1/1 + 1 + 1/9 - 4/a + b/12".into()
+            )]
         );
     }
 
@@ -3114,6 +5201,71 @@ mod tests {
     }
 
     #[test]
+    fn eval_zero_keeps_the_first_argument_literal() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias t { set %value expanded | msg #c [ $+ $eval(%value,0) $+ ] [ $+ $eval(%value,1) $+ ] }",
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :[%value] [expanded]".into())]
+        );
+    }
+
+    #[test]
+    fn read_and_readini_evaluate_by_default_and_n_returns_plain_text() {
+        let name = format!("jirc-read-eval-{}.txt", std::process::id());
+        let ini_name = format!("jirc-read-eval-{}.ini", std::process::id());
+        let base = std::env::temp_dir();
+        std::fs::write(base.join(&name), "2\n%value\n$upper(done)\n").unwrap();
+        std::fs::write(
+            base.join(&ini_name),
+            "[section]\nevaluated=%value\nplain=$upper(done)\n",
+        )
+        .unwrap();
+        let engine = ScriptEngine::new();
+        engine.load(&format!(
+            "alias t {{ set %value expanded | msg #c $read({name},1) [ $+ $read({name},n,1) $+ ] $read({name},2) $readini({ini_name},section,evaluated) [ $+ $readini({ini_name},n,section,plain) $+ ] }}"
+        ));
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send(
+                "PRIVMSG #c :expanded [%value] DONE expanded [$upper(done)]".into()
+            )]
+        );
+        let _ = std::fs::remove_file(base.join(name));
+        let _ = std::fs::remove_file(base.join(ini_name));
+    }
+
+    #[test]
+    fn read_switch_headers_regex_unicode_and_line_endings_match_mirc() {
+        let id = std::process::id();
+        let header = format!("jirc-read-header-{id}.txt");
+        let regex = format!("jirc-read-regex-{id}.txt");
+        let unicode = format!("jirc-read-unicode-{id}.txt");
+        let endings = format!("jirc-read-endings-{id}.txt");
+        let base = std::env::temp_dir();
+        std::fs::write(base.join(&header), "1\nonly\n").unwrap();
+        std::fs::write(base.join(&regex), "Alpha\nBeta\n").unwrap();
+        std::fs::write(base.join(&unicode), "K rest\n").unwrap();
+        std::fs::write(base.join(&endings), "first\rsecond\0\rthird").unwrap();
+        let engine = ScriptEngine::new();
+        engine.load(&format!(
+            "alias t {{ msg #c random=$read({header},n) miss=[ $+ $read({header},n,99) $+ ] readn=$readn regex=$read({regex},rt,/^beta$/i) unicode=$read({unicode},st,k) cr=$read({endings},t,2) nul=[ $+ $read({endings},t,3) $+ ] }}"
+        ));
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send(
+                "PRIVMSG #c :random=only miss=[] readn=0 regex=Beta unicode=rest cr=second nul=[]"
+                    .into()
+            )]
+        );
+        for name in [header, regex, unicode, endings] {
+            let _ = std::fs::remove_file(base.join(name));
+        }
+    }
+
+    #[test]
     fn prop_and_unsafe() {
         let engine = ScriptEngine::new();
         engine.load(
@@ -3124,10 +5276,56 @@ mod tests {
              }\n\
              alias t { /msg #c $conv(5).double $conv(5).triple $conv(5) $unsafe(hi) }",
         );
-        // $prop is the `.property`; $unsafe is a passthrough.
+        // $prop is the `.property`; an ordinary safe `$unsafe` value displays
+        // unchanged after its one-level protection is consumed.
         assert_eq!(
             engine.run_alias(&ctx(), "#c", "t", ""),
             vec![Action::Send("PRIVMSG #c :10 15 5 hi".into())]
+        );
+    }
+
+    #[test]
+    fn unsafe_blocks_deferred_timer_injection_and_preserves_private_use_text() {
+        let engine = ScriptEngine::new();
+        let old_sentinels = "\u{E101}\u{E102}\u{E103}\u{E104}\u{E105}\u{E106}";
+        engine.load(&format!(
+            "alias literal {{ /msg #c {old_sentinels} $unsafe({old_sentinels}) }}\n\
+             alias safe {{ /timerwork 1 1 /msg #c $unsafe($1-) }}\n\
+             alias exposed {{ /timerwork 1 1 /msg #c $1- }}"
+        ));
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "literal", ""),
+            vec![Action::Send(format!(
+                "PRIVMSG #c :{old_sentinels} {old_sentinels}"
+            ))]
+        );
+
+        let payload = "$me | /msg #c injected";
+        let safe = engine.run_alias(&ctx(), "#c", "safe", payload).remove(0);
+        let safe_command = match safe {
+            Action::Timer { command, .. } => command,
+            other => panic!("expected safe timer action, got {other:?}"),
+        };
+        // `$unsafe` keeps both `$me` and the pipe literal through the timer's
+        // deferred parse, so attacker-controlled text remains one message.
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", &safe_command, &[]),
+            vec![Action::Send("PRIVMSG #c :$me | /msg #c injected".into())]
+        );
+
+        // The control demonstrates the deferred-evaluation threat `$unsafe`
+        // prevents: without it, the same payload evaluates and splits in two.
+        let exposed = engine.run_alias(&ctx(), "#c", "exposed", payload).remove(0);
+        let exposed_command = match exposed {
+            Action::Timer { command, .. } => command,
+            other => panic!("expected exposed timer action, got {other:?}"),
+        };
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", &exposed_command, &[]),
+            vec![
+                Action::Send("PRIVMSG #c :me".into()),
+                Action::Send("PRIVMSG #c :injected".into()),
+            ]
         );
     }
 
@@ -3174,7 +5372,7 @@ mod tests {
         let engine = ScriptEngine::new();
         engine.load(
             "on *:TEXT:!setup:#:{ auser 10 *!*@trusted.com }\n\
-             on 5:TEXT:!go:#:{ /msg #c ok5 }\n\
+             on 5:TEXT:!g*:#:{ /msg #c ok5 $matchkey $maddress }\n\
              on 50:TEXT:!go:#:{ /msg #c ok50 }",
         );
         let snap = StateSnapshot {
@@ -3201,8 +5399,213 @@ mod tests {
         // bob (level 10) triggers the `on 5:` handler but not `on 50:`.
         assert_eq!(
             engine.dispatch_event(&rctx, "TEXT", ev("!go")),
-            vec![Action::Send("PRIVMSG #c :ok5".into())]
+            vec![Action::Send("PRIVMSG #c :ok5 !g* *!*@trusted.com".into())]
         );
+    }
+
+    #[test]
+    fn highest_matching_event_level_is_selected_per_script_file() {
+        use crate::irc::state::StateSnapshot;
+
+        let engine = ScriptEngine::new();
+        engine.load_sources(&[
+            (
+                "one.mrc".into(),
+                "on *:TEXT:setup:#:auser 10 bob!*@*\n\
+                 on 1:TEXT:go:#:msg #c one-1\n\
+                 on 5:TEXT:go:#:msg #c one-5\n\
+                 on 9:TEXT:go:#:msg #c one-9"
+                    .into(),
+            ),
+            (
+                "two.mrc".into(),
+                "on 2:TEXT:go:#:msg #c two-2\n\
+                 on 7:TEXT:go:#:msg #c two-7"
+                    .into(),
+            ),
+        ]);
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(StateSnapshot {
+                ial: vec![("bob".into(), "bob!u@example.test".into())],
+                ..Default::default()
+            }),
+        };
+        let text = |body: &str| EventVars {
+            nick: "bob".into(),
+            chan: "#c".into(),
+            target: "#c".into(),
+            text: body.into(),
+            params: vec![body.into()],
+            ..Default::default()
+        };
+
+        engine.dispatch_event(&rctx, "TEXT", text("setup"));
+        assert_eq!(
+            engine.dispatch_event(&rctx, "TEXT", text("go")),
+            vec![
+                Action::Send("PRIVMSG #c :one-9".into()),
+                Action::Send("PRIVMSG #c :two-7".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn caret_and_ampersand_event_passes_follow_default_halt_state() {
+        let engine = ScriptEngine::new();
+        engine.load_sources(&[
+            (
+                "one.mrc".into(),
+                "on 1:TEXT:*:#:msg #c normal-one-$halted\n\
+                 on ^1:TEXT:*:#:{ msg #c before-$halted | haltdef | msg #c after-$halted }"
+                    .into(),
+            ),
+            (
+                "two.mrc".into(),
+                "on &1:TEXT:*:#:msg #c must-not-run\n\
+                 on 1:TEXT:*:#:msg #c normal-two"
+                    .into(),
+            ),
+        ]);
+        let vars = EventVars {
+            nick: "bob".into(),
+            chan: "#c".into(),
+            target: "#c".into(),
+            text: "hello".into(),
+            params: vec!["hello".into()],
+            ..Default::default()
+        };
+
+        let (actions, halted) = engine.dispatch_event_halt(&ctx(), "TEXT", vars);
+        assert!(halted);
+        assert_eq!(
+            actions,
+            vec![
+                Action::Send("PRIVMSG #c :before-$false".into()),
+                Action::Send("PRIVMSG #c :after-$true".into()),
+                Action::Send("PRIVMSG #c :normal-one-$true".into()),
+                Action::Send("PRIVMSG #c :normal-two".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn dollar_event_prefix_uses_regex_matchtext_with_colons() {
+        let engine = ScriptEngine::new();
+        engine.load("on $*:TEXT:/^foo:[0-9]+$/i:#:msg #c regex");
+        let vars = EventVars {
+            nick: "bob".into(),
+            chan: "#c".into(),
+            target: "#c".into(),
+            text: "FOO:42".into(),
+            params: vec!["FOO:42".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            engine.dispatch_event(&ctx(), "TEXT", vars),
+            vec![Action::Send("PRIVMSG #c :regex".into())]
+        );
+    }
+
+    #[test]
+    fn mirc_me_bang_and_own_op_event_gates() {
+        use crate::irc::state::{ChannelView, StateSnapshot};
+
+        let engine = ScriptEngine::new();
+        engine.load(
+            "on 1:JOIN:#:{ /msg #c any-$nick }
+             on !1:JOIN:#:{ /msg #c other-$nick }
+             on me:*:JOIN:#:{ /msg #c self-$nick }
+             on @1:JOIN:#:{ /msg #c ownop-$nick }",
+        );
+        let snap = StateSnapshot {
+            channels: vec![ChannelView {
+                name: "#c".into(),
+                nicks: vec!["me".into(), "bob".into()],
+                members: vec![("me".into(), "@".into()), ("bob".into(), String::new())],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(snap),
+        };
+        let join = |nick: &str| EventVars {
+            nick: nick.into(),
+            chan: "#c".into(),
+            target: "#c".into(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            engine.dispatch_event(&rctx, "JOIN", join("bob")),
+            vec![
+                Action::Send("PRIVMSG #c :any-bob".into()),
+                Action::Send("PRIVMSG #c :other-bob".into()),
+                Action::Send("PRIVMSG #c :ownop-bob".into()),
+            ]
+        );
+        assert_eq!(
+            engine.dispatch_event(&rctx, "JOIN", join("me")),
+            vec![
+                Action::Send("PRIVMSG #c :any-me".into()),
+                Action::Send("PRIVMSG #c :self-me".into()),
+                Action::Send("PRIVMSG #c :ownop-me".into()),
+            ]
+        );
+
+        let not_op = RunCtx {
+            state: std::sync::Arc::new(StateSnapshot {
+                channels: vec![ChannelView {
+                    name: "#c".into(),
+                    members: vec![("me".into(), String::new())],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..rctx
+        };
+        assert_eq!(
+            engine.dispatch_event(&not_op, "JOIN", join("bob")),
+            vec![
+                Action::Send("PRIVMSG #c :any-bob".into()),
+                Action::Send("PRIVMSG #c :other-bob".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn event_matchtext_variables_and_channel_lists_are_evaluated() {
+        let engine = ScriptEngine::new();
+        engine.load("on *:TEXT:%match:%where,#two:{ /msg #audit matched-$chan }");
+        engine.run_command(&ctx(), "", "/set %match *help*", &[]);
+        engine.run_command(&ctx(), "", "/set %where #one", &[]);
+        let text = |chan: &str, body: &str| EventVars {
+            nick: "bob".into(),
+            chan: chan.into(),
+            target: chan.into(),
+            text: body.into(),
+            params: body.split_whitespace().map(String::from).collect(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            engine.dispatch_event(&ctx(), "TEXT", text("#two", "please help me")),
+            vec![Action::Send("PRIVMSG #audit :matched-#two".into())]
+        );
+        assert!(engine
+            .dispatch_event(&ctx(), "TEXT", text("#three", "please help me"))
+            .is_empty());
+        assert!(engine
+            .dispatch_event(&ctx(), "TEXT", text("#one", "unrelated"))
+            .is_empty());
     }
 
     #[test]
@@ -3212,8 +5615,20 @@ mod tests {
         impl ScriptTimers for Fake {
             fn snapshot(&self) -> Vec<TimerInfo> {
                 vec![
-                    TimerInfo { name: "greet".into(), command: "/msg #c hi".into(), reps: 3, delay: 5 },
-                    TimerInfo { name: "poll".into(), command: "/who".into(), reps: 0, delay: 60 },
+                    TimerInfo {
+                        name: "greet".into(),
+                        command: "/msg #c hi".into(),
+                        reps: 3,
+                        delay: 5,
+                        ..Default::default()
+                    },
+                    TimerInfo {
+                        name: "poll".into(),
+                        command: "/who".into(),
+                        reps: 0,
+                        delay: 60,
+                        ..Default::default()
+                    },
                 ]
             }
         }
@@ -3339,6 +5754,7 @@ mod tests {
                 nicks: vec!["me".into(), "bob".into()],
                 members: vec![("me".into(), "@".into())],
                 bans: vec![],
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -3385,6 +5801,7 @@ mod tests {
                 nicks: vec!["me".into(), "vip".into()],
                 members: vec![("me".into(), "@".into())],
                 bans: vec![],
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -3464,13 +5881,25 @@ mod tests {
              alias t4 { if (foo isin foobar) { /msg #c $v1 in $v2 } }",
         );
         // The classic idiom: $iif(value, $v1, default) yields the value when truthy…
-        assert_eq!(engine.run_alias(&ctx(), "#c", "t1", ""), vec![Action::Send("PRIVMSG #c :hello".into())]);
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t1", ""),
+            vec![Action::Send("PRIVMSG #c :hello".into())]
+        );
         // …and the default when the value is empty.
-        assert_eq!(engine.run_alias(&ctx(), "#c", "t2", ""), vec![Action::Send("PRIVMSG #c :none".into())]);
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t2", ""),
+            vec![Action::Send("PRIVMSG #c :none".into())]
+        );
         // A comparison sets both operands.
-        assert_eq!(engine.run_alias(&ctx(), "#c", "t3", ""), vec![Action::Send("PRIVMSG #c :3-3".into())]);
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t3", ""),
+            vec![Action::Send("PRIVMSG #c :3-3".into())]
+        );
         // $v1/$v2 also come from an `if` comparison (here a binary word operator).
-        assert_eq!(engine.run_alias(&ctx(), "#c", "t4", ""), vec![Action::Send("PRIVMSG #c :foo in foobar".into())]);
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t4", ""),
+            vec![Action::Send("PRIVMSG #c :foo in foobar".into())]
+        );
     }
 
     #[test]
@@ -3588,8 +6017,14 @@ mod tests {
     #[test]
     fn submenu_arg_parse() {
         use super::parse_submenu_arg;
-        assert_eq!(parse_submenu_arg("$submenu($animal($1))").as_deref(), Some("$animal($1)"));
-        assert_eq!(parse_submenu_arg("  $SubMenu($x($1)) ").as_deref(), Some("$x($1)"));
+        assert_eq!(
+            parse_submenu_arg("$submenu($animal($1))").as_deref(),
+            Some("$animal($1)")
+        );
+        assert_eq!(
+            parse_submenu_arg("  $SubMenu($x($1)) ").as_deref(),
+            Some("$x($1)")
+        );
         assert_eq!(parse_submenu_arg("Plain:cmd"), None);
     }
 
@@ -3597,8 +6032,14 @@ mod tests {
     fn style_marker_split() {
         use super::split_style_marker;
         let m = crate::script::eval::STYLE_MARK;
-        assert_eq!(split_style_marker(&format!("{m}3 Both")), (true, true, " Both"));
-        assert_eq!(split_style_marker(&format!("  {m}2 Off")), (false, true, " Off"));
+        assert_eq!(
+            split_style_marker(&format!("{m}3 Both")),
+            (true, true, " Both")
+        );
+        assert_eq!(
+            split_style_marker(&format!("  {m}2 Off")),
+            (false, true, " Off")
+        );
         assert_eq!(split_style_marker("Plain"), (false, false, "Plain"));
         // A bare marker (no digit) is dropped, no style applied.
         assert_eq!(split_style_marker(&format!("{m} x")), (false, false, " x"));
@@ -3608,7 +6049,9 @@ mod tests {
     fn break_and_continue() {
         // /break exits the loop: msgs 1, 2 then breaks at 3.
         let engine = ScriptEngine::new();
-        engine.load("alias b { set %i 0 | while (%i < 5) { inc %i | if (%i == 3) break | msg #c %i } }");
+        engine.load(
+            "alias b { set %i 0 | while (%i < 5) { inc %i | if (%i == 3) break | msg #c %i } }",
+        );
         assert_eq!(
             engine.run_alias(&ctx(), "#c", "b", ""),
             vec![
@@ -3618,7 +6061,9 @@ mod tests {
         );
         // /continue skips the first two iterations: msgs 3, 4, 5.
         let engine2 = ScriptEngine::new();
-        engine2.load("alias c { set %i 0 | while (%i < 5) { inc %i | if (%i < 3) continue | msg #c %i } }");
+        engine2.load(
+            "alias c { set %i 0 | while (%i < 5) { inc %i | if (%i < 3) continue | msg #c %i } }",
+        );
         assert_eq!(
             engine2.run_alias(&ctx(), "#c", "c", ""),
             vec![
@@ -3647,10 +6092,57 @@ mod tests {
         );
         // /bwrite + /bread roundtrip through the sandbox.
         let engine3 = ScriptEngine::new();
-        engine3.load("alias t { bset &v 1 65 66 67 | bwrite jirc_bin_rt.bin 1 -1 &v | bread jirc_bin_rt.bin 1 3 &w | msg #c $bvar(&w,1,3) }");
+        engine3.load("alias t { bset &v 1 65 66 67 | bwrite -c jirc_bin_rt.bin 0 -1 &v | bread jirc_bin_rt.bin 0 3 &w | msg #c $bvar(&w,1,3) }");
         assert_eq!(
             engine3.run_alias(&ctx(), "#c", "t", ""),
             vec![Action::Send("PRIVMSG #c :65 66 67".into())]
+        );
+
+        // Numeric views honour mIRC's host/network byte orders, and text
+        // searches are caseless unless `.textcs` is requested.
+        let engine4 = ScriptEngine::new();
+        engine4.load(
+            "alias t { bset &v 1 12 34 56 78 119 97 118 87 65 86 | msg #c $bvar(&v,1).word $bvar(&v,1).nword $bvar(&v,1).long $bvar(&v,1).nlong $bfind(&v,5,WAV).text $bfind(&v,5,WAV).textcs $bfind(&v,5,/wav/ig,rx).regex }",
+        );
+        assert_eq!(
+            engine4.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send(
+                "PRIVMSG #c :8716 3106 1312301580 203569230 5 8 2".into()
+            )]
+        );
+    }
+
+    #[test]
+    fn binary_files_and_variables_follow_mirc_offsets_and_lifetime() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias t {
+                bwrite -tc mirc_offsets.bin 0 -1 ABC
+                bread mirc_offsets.bin 1 1 &at1
+                bwrite mirc_offsets.bin 1 1 Z
+                bread mirc_offsets.bin 0 3 &whole
+                bset &tail 1 0 255
+                bwrite mirc_offsets.bin -1 -1 &tail
+                fopen -o fh mirc_fwrite.bin
+                fwrite -b fh &tail
+                fclose fh
+                bread mirc_fwrite.bin 0 2 &fhread
+                bset &find 1 88 87 65 86 89
+                bset &nul 1 65 0 66
+                msg #c at1=$bvar(&at1,1) whole=$bvar(&whole,1,3).text fh=$bvar(&fhread,1,2) find=$bfind(&find,1,87 65 86) nul=[ $+ $bvar(&nul,1,3).text $+ ]
+            }
+            alias after { msg #c [ $+ $bvar(&whole,0) $+ ] }",
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send(
+                "PRIVMSG #c :at1=66 whole=AZC fh=0 255 find=2 nul=[A]".into()
+            )]
+        );
+        // &binvars are destroyed when the outer routine finishes.
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "after", ""),
+            vec![Action::Send("PRIVMSG #c :[]".into())]
         );
     }
 
@@ -3664,8 +6156,21 @@ mod tests {
         assert_eq!(
             actions,
             vec![
-                Action::SockOpen { name: "bot".into(), host: "irc.example.org".into(), port: 6667, tls: true },
-                Action::SockWrite { name: "bot".into(), data: b"NICK x\r\n".to_vec() },
+                Action::SockOpen {
+                    name: "bot".into(),
+                    host: "irc.example.org".into(),
+                    port: 6667,
+                    tls: true,
+                    accept_invalid: false,
+                    bind_ip: String::new(),
+                    nodelay: false,
+                    ip_version: 0,
+                    reservation_id: 0,
+                },
+                Action::SockWrite {
+                    name: "bot".into(),
+                    data: b"NICK x\r\n".to_vec()
+                },
                 Action::SockClose { name: "bot".into() },
             ]
         );
@@ -3679,19 +6184,41 @@ mod tests {
         let engine = ScriptEngine::new();
         engine.load("alias go { /socklisten -d 127.0.0.1 lsn }");
         let actions = engine.run_alias(&ctx(), "#c", "go", "");
-        assert_eq!(actions, vec![Action::SockListen { name: "lsn".into() }]);
+        assert_eq!(
+            actions,
+            vec![Action::SockListen {
+                name: "lsn".into(),
+                listener_id: 0,
+            }]
+        );
     }
 
     #[test]
     fn server_command_emits_connect_action() {
         // `/server [-m] <host> <port> [pass]` — a script connecting the native
-        // client (e.g. a local bridge). Switches are ignored; host/port/pass carry.
+        // client (e.g. a local bridge). `-m` requests a new server window.
         let engine = ScriptEngine::new();
-        engine.load("alias go { /server -m 127.0.0.1 50641 mykey }");
-        let actions = engine.run_alias(&ctx(), "#c", "go", "");
+        engine.load(
+            "alias new { /server -m 127.0.0.1 50641 mykey }\n\
+             alias reuse { /server 127.0.0.1 50642 otherkey }",
+        );
         assert_eq!(
-            actions,
-            vec![Action::Server { host: "127.0.0.1".into(), port: 50641, pass: "mykey".into() }]
+            engine.run_alias(&ctx(), "#c", "new", ""),
+            vec![Action::Server {
+                host: "127.0.0.1".into(),
+                port: 50641,
+                pass: "mykey".into(),
+                new_window: true,
+            }]
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "reuse", ""),
+            vec![Action::Server {
+                host: "127.0.0.1".into(),
+                port: 50642,
+                pass: "otherkey".into(),
+                new_window: false,
+            }]
         );
     }
 
@@ -3741,6 +6268,45 @@ mod tests {
     }
 
     #[test]
+    fn i7n_decode_preserves_escaped_and_high_bytes() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias i7n_decode {\n\
+             var %input = $1-, %out, %i = 1\n\
+             while (%i <= $len(%input)) {\n\
+             var %char = $mid(%input,%i,1), %byte\n\
+             if (%char == $chr(92)) {\n\
+             inc %i\n\
+             if (%i > $len(%input)) return\n\
+             var %esc = $mid(%input,%i,1)\n\
+             if (%esc == 0) var %byte = 0\n\
+             elseif (%esc == t) var %byte = 9\n\
+             elseif (%esc == $chr(92)) var %byte = 92\n\
+             else return\n\
+             }\n\
+             else var %byte = $asc(%char)\n\
+             var %out = $+(%out,$iif($len(%out),$chr(32)),%byte)\n\
+             inc %i\n\
+             }\n\
+             return %out\n\
+             }\n\
+             alias t {\n\
+             var %bs = $chr(92)\n\
+             var %w = $+(GKSSP,%bs,0,%bs,0,%bs,0,$chr(3),%bs,0,%bs,0,%bs,0,$chr(2),%bs,0,%bs,0,%bs,0,$chr(200),$chr(150),$chr(77),$chr(88),$chr(99),$chr(111),$chr(222),$chr(133))\n\
+             /msg #c len= $len(%w) dec= $i7n_decode(%w)\n\
+             }",
+        );
+        let actions = engine.run_alias(&ctx(), "#c", "t", "");
+        assert_eq!(
+            actions,
+            vec![Action::Send(
+                "PRIVMSG #c :len= 33 dec= 71 75 83 83 80 0 0 0 3 0 0 0 2 0 0 0 200 150 77 88 99 111 222 133"
+                    .into()
+            )]
+        );
+    }
+
+    #[test]
     fn sockread_binvar_preserves_exact_bytes() {
         // `sockread &binvar` delivers the line's exact bytes — including a null and
         // high bytes (0xC3, 0xFF) that a UTF-8 round-trip would corrupt. This is
@@ -3758,7 +6324,153 @@ mod tests {
         let actions = engine.dispatch_event(&ctx(), "SOCKREAD", vars);
         assert_eq!(
             actions,
-            vec![Action::Send("PRIVMSG #c :len 3 a 0 b 195 d 255 br 3".into())]
+            vec![Action::Send(
+                "PRIVMSG #c :len 3 a 0 b 195 d 255 br 3".into()
+            )]
+        );
+    }
+
+    #[test]
+    fn captured_irc7_gkssp_challenge_produces_auth_reply() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            r#"
+            alias -l i7n_authreply {
+              var %gkid = $upper($1), %raw = $2, %mark = $bfind(%raw,1,$+($chr(32),S,$chr(32),:))
+              if (!%mark) return
+              var %bytes = $i7n_decode(%raw,$calc(%mark + 4))
+              if ($numtok(%bytes,32) != 24) return
+              if ($gettok(%bytes,1-8,32) != 71 75 83 83 80 0 0 0) return
+              if ($gettok(%bytes,10-12,32) != 0 0 0) return
+              if ($gettok(%bytes,13-16,32) != 2 0 0 0) return
+              var %version = $gettok(%bytes,9,32)
+              if (!$istok(3 4,%version,32)) return
+              var %hmac = $i7n_hmac($gettok(%bytes,17-24,32)), %guid = $i7n_guidwire(%gkid)
+              if ((!$regex(%hmac,/^[0-9A-F]{32}$/)) || (!$regex(%guid,/^[0-9A-F]{32}$/))) return
+              return $i7n_escape(71 75 83 83 80 0 0 0 %version 0 0 0 3 0 0 0 $i7n_hexbytes(%hmac) $i7n_hexbytes(%guid))
+            }
+            alias -l i7n_decode {
+              var %input = $1, %i = $2, %end = $bvar(%input,0), %out
+              while (%i <= %end) {
+                var %byte = $bvar(%input,%i)
+                if (%byte == 92) {
+                  inc %i
+                  if (%i > %end) return
+                  var %esc = $bvar(%input,%i)
+                  if (%esc == 48) var %byte = 0
+                  elseif (%esc == 116) var %byte = 9
+                  elseif (%esc == 110) var %byte = 10
+                  elseif (%esc == 114) var %byte = 13
+                  elseif (%esc == 98) var %byte = 32
+                  elseif (%esc == 99) var %byte = 44
+                  elseif (%esc == 92) var %byte = 92
+                  else return
+                }
+                var %out = $+(%out,$iif($len(%out),$chr(32)),%byte)
+                inc %i
+              }
+              return %out
+            }
+            alias -l i7n_hmac {
+              bunset &hmac
+              bset &hmac 1 $1-
+              bset &hmac 9 $i7n_serialize(irc.irc7.com)
+              var %hex = $hmac(&hmac,SRFMKSJANDRESKKC,md5,1)
+              bunset &hmac
+              return $upper(%hex)
+            }
+            alias -l i7n_guidwire {
+              var %hex = $upper($1)
+              return $+($mid(%hex,7,2),$mid(%hex,5,2),$mid(%hex,3,2),$mid(%hex,1,2),$mid(%hex,11,2),$mid(%hex,9,2),$mid(%hex,15,2),$mid(%hex,13,2),$mid(%hex,17))
+            }
+            alias -l i7n_hexbytes {
+              var %hex = $upper($1), %out, %i = 1
+              while (%i <= $len(%hex)) { var %out = $+(%out,$iif($len(%out),$chr(32)),$base($mid(%hex,%i,2),16,10)) | inc %i 2 }
+              return %out
+            }
+            alias -l i7n_escape {
+              var %out, %i = 1
+              while (%i <= $numtok($1-,32)) { var %out = %out $+ $i7n_byteesc($gettok($1-,%i,32)) | inc %i }
+              return %out
+            }
+            alias -l i7n_byteesc {
+              if ($1 == 0) return \0
+              if ($1 == 9) return \t
+              if ($1 == 10) return \n
+              if ($1 == 13) return \r
+              if ($1 == 32) return \b
+              if ($1 == 44) return \c
+              if ($1 == 92) return $str($chr(92),2)
+              return $chr($1)
+            }
+            alias -l i7n_serialize { return $regsubex($1-,/(*UTF8)(.)/g,$asc(\1) $+ $chr(32)) }
+            on *:SOCKREAD:bot:{
+              bunset &line
+              sockread -n &line
+              var %reply = $i7n_authreply(01110001111010101100000110111000,&line)
+              bunset &out
+              bset &out 1 $i7n_serialize(AUTH,GateKeeper,S,$+(:,%reply))
+              bset &out $calc($bvar(&out,0) + 1) 13 10
+              sockwrite bot &out
+            }
+            "#,
+        );
+        // Fresh challenge captured from irc.irc7.com. The final eight bytes are
+        // deliberately invalid UTF-8 and must survive the socket/binvar path.
+        let line =
+            b"AUTH GateKeeper S :GKSSP\\0\\0\\0\x03\\0\\0\\0\x02\\0\\0\\0f\x8b\xb0\xd5\xfa!Fk";
+        let vars = EventVars {
+            chan: "bot".into(),
+            target: "bot".into(),
+            sock_bytes: line.to_vec(),
+            ..Default::default()
+        };
+        let expected_hex = "4155544820476174654b65657065722053203a474b5353505c305c305c30035c305c305c30035c305c305c3080b07828e658d4292ba4705fbd055c6e0b015c30110110111010115c305c30011011105c300d0a";
+        let expected = (0..expected_hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&expected_hex[i..i + 2], 16).unwrap())
+            .collect();
+        assert_eq!(
+            engine.dispatch_event(&ctx(), "SOCKREAD", vars),
+            vec![Action::SockWrite {
+                name: "bot".into(),
+                data: expected
+            }]
+        );
+    }
+
+    #[test]
+    fn sockread_text_then_binary_does_not_duplicate_the_same_data() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "on *:SOCKREAD:bot:{ sockread %line | sockread &raw | /msg #c text %line binary $bvar(&raw,0) br $sockbr }",
+        );
+        let vars = EventVars {
+            chan: "bot".into(),
+            target: "bot".into(),
+            text: "PING".into(),
+            sock_bytes: b"PING".to_vec(),
+            ..Default::default()
+        };
+        assert_eq!(
+            engine.dispatch_event(&ctx(), "SOCKREAD", vars),
+            vec![Action::Send("PRIVMSG #c :text PING binary 0 br 0".into())]
+        );
+    }
+
+    #[test]
+    fn sockerr_reflects_the_current_socket_event() {
+        let engine = ScriptEngine::new();
+        engine.load("on *:SOCKOPEN:bot:{ /msg #c error $sockerr }");
+        let vars = EventVars {
+            chan: "bot".into(),
+            target: "bot".into(),
+            sock_error: 10061,
+            ..Default::default()
+        };
+        assert_eq!(
+            engine.dispatch_event(&ctx(), "SOCKOPEN", vars),
+            vec![Action::Send("PRIVMSG #c :error 10061".into())]
         );
     }
 
@@ -3766,7 +6478,11 @@ mod tests {
     fn sockread_only_fires_for_matching_name() {
         let engine = ScriptEngine::new();
         engine.load("on *:SOCKREAD:bot:{ /msg #c hit }");
-        let other = EventVars { chan: "other".into(), target: "other".into(), ..Default::default() };
+        let other = EventVars {
+            chan: "other".into(),
+            target: "other".into(),
+            ..Default::default()
+        };
         assert!(engine.dispatch_event(&ctx(), "SOCKREAD", other).is_empty());
     }
 
@@ -3779,7 +6495,296 @@ mod tests {
         let actions = engine.run_alias(&ctx(), "", "t", "");
         assert_eq!(
             actions,
-            vec![Action::SockWrite { name: "sk".into(), data: vec![72, 105, 33] }]
+            vec![Action::SockWrite {
+                name: "sk".into(),
+                data: vec![72, 105, 33]
+            }]
+        );
+    }
+
+    #[test]
+    fn sockwrite_honours_mirc_binary_count_and_newline_rules() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias t {
+                bset &v 1 72 105 33
+                sockwrite -n sk &v
+                sockwrite -b sk 2 &v
+                sockwrite -n sk $+(PING,$crlf)
+                sockwrite -nt sk &v
+            }",
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "t", ""),
+            vec![
+                Action::SockWrite {
+                    name: "sk".into(),
+                    data: b"Hi!".to_vec()
+                },
+                Action::SockWrite {
+                    name: "sk".into(),
+                    data: b"Hi".to_vec()
+                },
+                Action::SockWrite {
+                    name: "sk".into(),
+                    data: b"PING\r\n".to_vec()
+                },
+                Action::SockWrite {
+                    name: "sk".into(),
+                    data: b"&v\r\n".to_vec()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn sockopen_dash_d_consumes_the_bind_address() {
+        let engine = ScriptEngine::new();
+        engine.load("alias t { sockopen -d 127.0.0.1 bot example.org 80 }");
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "t", ""),
+            vec![Action::SockOpen {
+                name: "bot".into(),
+                host: "example.org".into(),
+                port: 80,
+                tls: false,
+                accept_invalid: false,
+                bind_ip: "127.0.0.1".into(),
+                nodelay: false,
+                ip_version: 0,
+                reservation_id: 0,
+            }]
+        );
+    }
+
+    #[test]
+    fn webview_commands_produce_managed_browser_actions() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias t {\n\
+               webview -o @auth passport-a 980 720 about:blank IRC7 Passport Login |\n\
+               webview -n @auth https://api.irc7.com/api/auth/login |\n\
+               webview -k @auth https://www.irc7.com/ |\n\
+               webview -f @auth |\n\
+               webview -c @auth\n\
+             }",
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "t", ""),
+            vec![
+                Action::WebviewOpen {
+                    name: "@auth".into(),
+                    profile: "passport-a".into(),
+                    width: 980,
+                    height: 720,
+                    url: "about:blank".into(),
+                    title: "IRC7 Passport Login".into(),
+                },
+                Action::WebviewNavigate {
+                    name: "@auth".into(),
+                    url: "https://api.irc7.com/api/auth/login".into(),
+                },
+                Action::WebviewCookies {
+                    name: "@auth".into(),
+                    url: "https://www.irc7.com/".into(),
+                },
+                Action::WebviewFocus {
+                    name: "@auth".into(),
+                },
+                Action::WebviewClose {
+                    name: "@auth".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn webview_identifier_reads_cached_manager_snapshot() {
+        struct FakeWebviews;
+        impl crate::script::eval::ScriptWebviews for FakeWebviews {
+            fn snapshot(&self, _: &str) -> Vec<crate::script::eval::WebviewInfo> {
+                vec![crate::script::eval::WebviewInfo {
+                    name: "@auth".into(),
+                    profile: "passport-a".into(),
+                    status: "ready".into(),
+                    url: "https://www.irc7.com/".into(),
+                }]
+            }
+        }
+
+        let engine = ScriptEngine::new();
+        engine.set_webviews(std::sync::Arc::new(FakeWebviews));
+        engine.load(
+            "alias t { echo -s count=$webview(0) name=$webview(@AUTH) status=$webview(@auth).status profile=$webview(@auth).profile url=$webview(@auth).url }",
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "t", ""),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text:
+                    "count=1 name=@auth status=ready profile=passport-a url=https://www.irc7.com/"
+                        .into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn webview_event_matches_name_and_preserves_cookie_value() {
+        let engine = ScriptEngine::new();
+        engine.load("on *:WEBVIEW:@auth:{ echo -s event=$1 name=$2 value=$3- target=$target }");
+        let vars = EventVars {
+            chan: "@auth".into(),
+            target: "@auth".into(),
+            text: "cookie ticket abc=def==".into(),
+            params: vec!["cookie".into(), "ticket".into(), "abc=def==".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            engine.dispatch_event(&ctx(), "WEBVIEW", vars),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "event=cookie name=ticket value=abc=def== target=@auth".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn native_i7_updater_commits_and_selects_complete_credentials() {
+        fn updater_ctx(data_dir: std::path::PathBuf) -> RunCtx<'static> {
+            RunCtx {
+                my_nick: "me",
+                network: "Net",
+                server: "irc.example.org",
+                data_dir,
+                state: std::sync::Arc::new(Default::default()),
+            }
+        }
+
+        fn webview_event(params: &[&str]) -> EventVars {
+            EventVars {
+                chan: "i7update".into(),
+                target: "i7update".into(),
+                text: params.join(" "),
+                params: params.iter().map(|value| (*value).to_string()).collect(),
+                ..Default::default()
+            }
+        }
+
+        fn finish_credentials(
+            engine: &ScriptEngine,
+            rctx: &RunCtx<'_>,
+            ticket: &str,
+            profile: &str,
+        ) -> Vec<Action> {
+            engine.dispatch_event(
+                rctx,
+                "WEBVIEW",
+                webview_event(&["cookie", "ticket", ticket]),
+            );
+            engine.dispatch_event(
+                rctx,
+                "WEBVIEW",
+                webview_event(&["cookie", "profile", profile]),
+            );
+            engine.dispatch_event(rctx, "WEBVIEW", webview_event(&["cookies_done"]))
+        }
+
+        let data_dir =
+            std::env::temp_dir().join(format!("jirc-i7updater-explicit-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let rctx = updater_ctx(data_dir.clone());
+        let engine = ScriptEngine::new();
+        engine.load(include_str!("../../../docs/examples/i7updater.mrc"));
+        assert!(engine.has_alias("i7update"));
+
+        let actions = engine.run_alias(&rctx, "", "i7update", "PassportOne pick client");
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            Action::WebviewOpen {
+                name,
+                profile,
+                url,
+                ..
+            } if name == "i7update" && profile == "passportone" && url == "about:blank"
+        )));
+
+        let opened = EventVars {
+            chan: "i7update".into(),
+            target: "i7update".into(),
+            text: "opened".into(),
+            params: vec!["opened".into()],
+            ..Default::default()
+        };
+        let actions = engine.dispatch_event(&rctx, "WEBVIEW", opened);
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            Action::WebviewNavigate { name, url }
+                if name == "i7update" && url == "https://login.live.com/logout.srf"
+        )));
+
+        finish_credentials(&engine, &rctx, "ticket-one", "profile-one");
+        let settings = std::fs::read_to_string(data_dir.join("settings.ini")).unwrap();
+        assert_eq!(
+            ini::read(&settings, "settings", "curpp").as_deref(),
+            Some("PassportOne")
+        );
+        assert_eq!(
+            ini::read(&settings, "pp.PassportOne", "ticket").as_deref(),
+            Some("ticket-one")
+        );
+        assert_eq!(
+            ini::read(&settings, "pp.PassportOne", "profile").as_deref(),
+            Some("profile-one")
+        );
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        // With no explicit target, infer client only when it is the sole
+        // registered role missing a selection; preserve the existing bot.
+        let inferred_dir =
+            std::env::temp_dir().join(format!("jirc-i7updater-inferred-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&inferred_dir).unwrap();
+        std::fs::write(
+            inferred_dir.join("settings.ini"),
+            "[settings]\nmode=registered\nbotmode=registered\nbotpp=ExistingBot\n",
+        )
+        .unwrap();
+        let inferred_ctx = updater_ctx(inferred_dir.clone());
+        let inferred = ScriptEngine::new();
+        inferred.load(include_str!("../../../docs/examples/i7updater.mrc"));
+        inferred.run_alias(&inferred_ctx, "", "i7update", "PassportTwo");
+        finish_credentials(&inferred, &inferred_ctx, "ticket-two", "profile-two");
+
+        let settings = std::fs::read_to_string(inferred_dir.join("settings.ini")).unwrap();
+        assert_eq!(
+            ini::read(&settings, "settings", "curpp").as_deref(),
+            Some("PassportTwo")
+        );
+        assert_eq!(
+            ini::read(&settings, "settings", "botpp").as_deref(),
+            Some("ExistingBot")
+        );
+        let _ = std::fs::remove_dir_all(&inferred_dir);
+    }
+
+    #[test]
+    fn sockudp_parses_bind_port_binary_count_and_keep_switch() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias t { bset &packet 1 1 2 3 | sockudp -kbnd 127.0.0.1 datagram 4567 127.0.0.2 9000 2 &packet }",
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "t", ""),
+            vec![Action::SockUdp {
+                name: "datagram".into(),
+                bind_ip: "127.0.0.1".into(),
+                local_port: 4567,
+                dest_ip: "127.0.0.2".into(),
+                dest_port: 9000,
+                data: vec![1, 2],
+                keep: true,
+                dual_stack: false,
+                reservation_id: 0,
+            }]
         );
     }
 
@@ -3789,8 +6794,16 @@ mod tests {
         let snap = StateSnapshot {
             nick: "me".into(),
             channels: vec![
-                ChannelView { name: "#a".into(), nicks: vec!["me".into(), "bob".into()], ..Default::default() },
-                ChannelView { name: "#b".into(), nicks: vec!["me".into()], ..Default::default() },
+                ChannelView {
+                    name: "#a".into(),
+                    nicks: vec!["me".into(), "bob".into()],
+                    ..Default::default()
+                },
+                ChannelView {
+                    name: "#b".into(),
+                    nicks: vec!["me".into()],
+                    ..Default::default()
+                },
             ],
             ..Default::default()
         };
@@ -3821,7 +6834,11 @@ mod tests {
         engine.load("dialog g {\n title \"Hi\"\n edit name\n}\nalias o { /dialog g }");
         let actions = engine.run_alias(&ctx(), "#c", "o", "");
         match &actions[..] {
-            [Action::DialogOpen { name, title, controls }] => {
+            [Action::DialogOpen {
+                name,
+                title,
+                controls,
+            }] => {
                 assert_eq!(name, "g");
                 assert_eq!(title, "Hi");
                 assert_eq!(controls.len(), 1);
@@ -3834,9 +6851,8 @@ mod tests {
     #[test]
     fn dialog_event_reads_values_and_acts() {
         let engine = ScriptEngine::new();
-        engine.load(
-            "on *:DIALOG:g:{ if ($1 == send) { /msg #c hi $did(g, name) | /dialog -c g } }",
-        );
+        engine
+            .load("on *:DIALOG:g:{ if ($1 == send) { /msg #c hi $did(g, name) | /dialog -c g } }");
         let mut vals = std::collections::HashMap::new();
         vals.insert("name".to_string(), "bob".to_string());
         let vars = EventVars {
@@ -3886,7 +6902,45 @@ mod tests {
             actions,
             vec![Action::Echo {
                 target: "#c".into(),
-                text: "a=~bob@host.example.com m2=*!*bob@host.example.com m3=*!*@host.example.com c=1 n=bob".into(),
+                text: "a=~bob@host.example.com m2=*!*bob@host.example.com m3=*!*@host.example.com c=1 n=bob!~bob@host.example.com".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn ial_rich_properties_marks_and_enabled_state() {
+        use crate::irc::state::{IalView, StateSnapshot};
+        let snap = StateSnapshot {
+            ial_enabled: false,
+            ial: vec![("bob".into(), "Bob!user@host.example".into())],
+            ial_info: vec![IalView {
+                nick: "Bob".into(),
+                address: "Bob!user@host.example".into(),
+                account: "bob-account".into(),
+                away: Some(true),
+                gecos: "Bob Example".into(),
+                id: "42".into(),
+                marks: vec![
+                    ("default".into(), "trusted".into()),
+                    ("note".into(), "friend".into()),
+                ],
+            }],
+            ..Default::default()
+        };
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(snap),
+        };
+        let engine = ScriptEngine::new();
+        engine.load("alias t { echo enabled=$ial account=$ial(Bob).account away=$ial(Bob).away mark=$ial(Bob).mark count=$ialmark(Bob,0) name=$ialmark(Bob,2).name note=$ialmark(Bob,note) }");
+        assert_eq!(
+            engine.run_alias(&rctx, "#c", "t", ""),
+            vec![Action::Echo {
+                target: "#c".into(),
+                text: "enabled=$false account=bob-account away=$true mark=trusted count=2 name=note note=friend".into(),
             }]
         );
     }
@@ -3935,13 +6989,16 @@ mod tests {
     #[test]
     fn list_operators_use_channel_state() {
         use crate::irc::state::{ChannelView, StateSnapshot};
+        let mut isupport = crate::irc::state::Isupport::default();
+        isupport.parse_token("PREFIX=(qov).@+");
         let snap = StateSnapshot {
             nick: "me".into(),
-            isupport: Default::default(),
+            isupport,
             channels: vec![ChannelView {
                 name: "#a".into(),
-                nicks: vec!["op".into(), "voiced".into(), "plain".into()],
+                nicks: vec!["owner".into(), "op".into(), "voiced".into(), "plain".into()],
                 members: vec![
+                    ("owner".into(), ".".into()),
                     ("op".into(), "@".into()),
                     ("voiced".into(), "+".into()),
                     ("plain".into(), String::new()),
@@ -3962,7 +7019,11 @@ mod tests {
         engine.load(
             "on *:TEXT:*:#:{
               if (op isop #a) { /echo op-is-op }
+              if (owner isowner #a) { /echo owner-is-owner }
+              if (owner !isowner #a) { /echo should-not-fire-owner }
               if (!plain isop #a) { /echo plain-not-op }
+              if (plain !isop #a) { /echo plain-infix-not-op }
+              if (op !isop #a) { /echo should-not-fire-negated }
               if (voiced isvoice #a) { /echo voiced-ok }
               if (plain isreg #a) { /echo plain-reg }
               if (op ison #a) { /echo ison-ok }
@@ -3989,7 +7050,173 @@ mod tests {
             .collect();
         assert_eq!(
             echoed,
-            vec!["op-is-op", "plain-not-op", "voiced-ok", "plain-reg", "ison-ok", "ischan-ok", "bitand"]
+            vec![
+                "op-is-op",
+                "owner-is-owner",
+                "plain-not-op",
+                "plain-infix-not-op",
+                "voiced-ok",
+                "plain-reg",
+                "ison-ok",
+                "ischan-ok",
+                "bitand"
+            ]
+        );
+    }
+
+    #[test]
+    fn state_identifiers_use_casemapping_statusmsg_and_rich_member_data() {
+        use crate::irc::state::{ChannelView, IalView, StateSnapshot};
+        let mut isupport = crate::irc::state::Isupport::default();
+        isupport.parse_token("PREFIX=(qov).@+");
+        isupport.parse_token("CHANTYPES=#");
+        isupport.parse_token("STATUSMSG=@+");
+        let last_activity = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            .saturating_sub(12);
+        let snap = StateSnapshot {
+            nick: "Me".into(),
+            isupport,
+            channels: vec![ChannelView {
+                name: "#Room^".into(),
+                topic: "Welcome".into(),
+                mode: "+kln secret 25".into(),
+                key: "secret".into(),
+                limit: "25".into(),
+                nicks: vec!["User^".into(), "Plain".into()],
+                members: vec![("User^".into(), "@".into()), ("Plain".into(), "".into())],
+                member_activity: vec![("User^".into(), last_activity)],
+                bans: vec![],
+            }],
+            ial: vec![("user~".into(), "User^!ident@host.test".into())],
+            ial_info: vec![IalView {
+                nick: "user~".into(),
+                address: "User^!ident@host.test".into(),
+                account: "account-name".into(),
+                away: Some(true),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let rctx = RunCtx {
+            my_nick: "Me",
+            network: "Net",
+            server: "s",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(snap),
+        };
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias inspect {
+               echo chan=$chan(@#ROOM~) topic=$chan(@#ROOM~).topic mode=$chan(@#ROOM~).mode key=$chan(@#ROOM~).key limit=$chan(@#ROOM~).limit status=$chan(@#ROOM~).status
+               echo nick=$nick(@#ROOM~,USER~) pnick=$nick(@#ROOM~,USER~).pnick prefix=$nick(@#ROOM~,USER~).prefix nmode=$nick(@#ROOM~,USER~).mode away=$nick(@#ROOM~,USER~).away account=$nick(@#ROOM~,USER~).account ops=$nick(@#ROOM~,0,O) regs=$nick(@#ROOM~,0,r)
+               echo addr=$address(USER~) ial=$ial(USER~) ialchan=$ialchan(USER~,@#ROOM~,1).pnick
+               if (USER~ isop @#ROOM~) echo state-op
+               if ($nick(@#ROOM~,USER~).idle isnum 10-20) echo idle-ok
+             }
+             on *:TEXT:*:@#ROOM~:{ echo target-match }",
+        );
+        assert_eq!(
+            engine.run_alias(&rctx, "#Room^", "inspect", ""),
+            vec![
+                Action::Echo {
+                    target: "#Room^".into(),
+                    text: "chan=#Room^ topic=Welcome mode=+kln secret 25 key=secret limit=25 status=joined".into(),
+                },
+                Action::Echo {
+                    target: "#Room^".into(),
+                    text: "nick=User^ pnick=@User^ prefix=@ nmode=o away=$true account=account-name ops=1 regs=1".into(),
+                },
+                Action::Echo {
+                    target: "#Room^".into(),
+                    text: "addr=ident@host.test ial=User^!ident@host.test ialchan=@User^".into(),
+                },
+                Action::Echo {
+                    target: "#Room^".into(),
+                    text: "state-op".into(),
+                },
+                Action::Echo {
+                    target: "#Room^".into(),
+                    text: "idle-ok".into(),
+                },
+            ]
+        );
+
+        let event = EventVars {
+            nick: "User^".into(),
+            chan: "#room~".into(),
+            target: "#room~".into(),
+            text: "hello".into(),
+            params: vec!["hello".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            engine.dispatch_event(&rctx, "TEXT", event),
+            vec![Action::Echo {
+                target: "#room~".into(),
+                text: "target-match".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn updatenl_switches_departure_handlers_from_old_to_updated_state() {
+        use crate::irc::state::{ChannelView, StateSnapshot};
+        let updated = StateSnapshot {
+            channels: vec![ChannelView {
+                name: "#c".into(),
+                nicks: vec!["me".into()],
+                members: vec![("me".into(), String::new())],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let old = StateSnapshot {
+            channels: vec![ChannelView {
+                name: "#c".into(),
+                nicks: vec!["me".into(), "Bob".into()],
+                members: vec![("me".into(), String::new()), ("Bob".into(), "@".into())],
+                ..Default::default()
+            }],
+            ial: vec![("bob".into(), "Bob!u@host".into())],
+            ..Default::default()
+        }
+        .with_pending_nicklist_update(updated);
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(old),
+        };
+        let engine = ScriptEngine::new();
+        engine.load(
+            "on *:PART:#:{
+               echo before=$nick(#c,0):$ial(Bob)
+               updatenl
+               echo after=$nick(#c,0):$ial(Bob)
+             }",
+        );
+        let event = EventVars {
+            nick: "Bob".into(),
+            chan: "#c".into(),
+            target: "#c".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            engine.dispatch_event(&rctx, "PART", event),
+            vec![
+                Action::Echo {
+                    target: "#c".into(),
+                    text: "before=2:Bob!u@host".into(),
+                },
+                Action::Echo {
+                    target: "#c".into(),
+                    text: "after=1:".into(),
+                },
+            ]
         );
     }
 
@@ -4099,39 +7326,173 @@ mod tests {
         );
     }
 
+    #[test]
+    fn hash_commands_join_dynamic_item_before_splitting_arguments() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            r"alias t {
+                var %suffix = %#The\bLobby
+                hadd -m h state. $+ %suffix ready
+                hinc h count. $+ %suffix 2
+                echo before=$hget(h,state. $+ %suffix) count=$hget(h,count. $+ %suffix)
+                hdel h state. $+ %suffix
+                echo after=$hget(h,state. $+ %suffix)
+            }",
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![
+                Action::Echo {
+                    target: "#c".into(),
+                    text: r"before=ready count=2".into(),
+                },
+                Action::Echo {
+                    target: "#c".into(),
+                    text: "after=".into()
+                },
+            ]
+        );
+    }
+
     #[derive(Default)]
     struct FakeSockets {
         listened: std::sync::Mutex<Vec<(String, u16)>>,
+        listen_options: std::sync::Mutex<Vec<(bool, bool)>>,
         accepted: std::sync::Mutex<Vec<String>>,
+        accept_options: std::sync::Mutex<Vec<bool>>,
         marks: std::sync::Mutex<HashMap<String, String>>,
         ports: std::sync::Mutex<HashMap<String, u16>>,
+        read_options: std::sync::Mutex<Vec<crate::script::eval::SocketReadOptions>>,
+        read_result: std::sync::Mutex<Option<crate::script::eval::SocketReadResult>>,
+        read_error: std::sync::Mutex<Option<i32>>,
+        write_result: std::sync::Mutex<Option<crate::script::eval::SocketWriteResult>>,
+        writes: std::sync::Mutex<Vec<Vec<u8>>>,
+        send_queued: std::sync::Mutex<usize>,
+        starttls: std::sync::Mutex<Vec<String>>,
     }
     impl ScriptSockets for FakeSockets {
-        fn listen(&self, name: &str, port: u16) -> Option<u16> {
+        fn reserve_open(
+            &self,
+            name: &str,
+            _host: &str,
+            port: u16,
+            _tls: bool,
+            _bind_ip: &str,
+        ) -> Option<Result<u64, i32>> {
+            self.ports.lock().unwrap().insert(name.into(), port);
+            Some(Ok(77))
+        }
+        fn reserve_udp(
+            &self,
+            name: &str,
+            _bind_ip: &str,
+            local_port: u16,
+            _dest_ip: &str,
+            _dest_port: u16,
+        ) -> Option<Result<u64, i32>> {
+            let mut ports = self.ports.lock().unwrap();
+            if ports.contains_key(name) {
+                Some(Ok(0))
+            } else {
+                ports.insert(name.into(), local_port);
+                Some(Ok(78))
+            }
+        }
+        fn listen(
+            &self,
+            _bind_ip: &str,
+            name: &str,
+            port: u16,
+            _nodelay: bool,
+            _dual_stack: bool,
+        ) -> Option<Result<u16, i32>> {
             let p = if port == 0 { 54321 } else { port };
             self.ports.lock().unwrap().insert(name.into(), p);
             self.listened.lock().unwrap().push((name.into(), port));
-            Some(p)
+            self.listen_options
+                .lock()
+                .unwrap()
+                .push((_nodelay, _dual_stack));
+            Some(Ok(p))
         }
-        fn accept(&self, name: &str, _listener: &str) -> bool {
+        fn accept(&self, name: &str, _listener: &str, _nodelay: bool) -> Option<i32> {
             self.accepted.lock().unwrap().push(name.into());
-            true
+            self.accept_options.lock().unwrap().push(_nodelay);
+            Some(0)
         }
-        fn set_mark(&self, name: &str, mark: &str) {
+        fn close(&self, _pattern: &str) -> Option<i32> {
+            Some(0)
+        }
+        fn set_mark(&self, name: &str, mark: &str) -> Option<i32> {
             self.marks.lock().unwrap().insert(name.into(), mark.into());
+            Some(0)
         }
-        fn rename(&self, _: &str, _: &str) {}
-        fn pause(&self, _: &str, _: bool) {}
+        fn rename(&self, _: &str, _: &str) -> Option<i32> {
+            Some(0)
+        }
+        fn pause(&self, _: &str, _: bool) -> Option<i32> {
+            Some(0)
+        }
+        fn write(&self, name: &str, data: &[u8]) -> Option<crate::script::eval::SocketWriteResult> {
+            let result = self.write_result.lock().unwrap().clone();
+            if result.as_ref().is_some_and(|result| result.error == 0) {
+                // A successful synchronous write implies the fake socket exists,
+                // matching the production manager's `$sock(name)` enumeration.
+                self.ports
+                    .lock()
+                    .unwrap()
+                    .entry(name.to_string())
+                    .or_insert(0);
+                *self.send_queued.lock().unwrap() += data.len();
+                self.writes.lock().unwrap().push(data.to_vec());
+            }
+            result
+        }
+        fn starttls(&self, name: &str) -> Option<i32> {
+            self.starttls.lock().unwrap().push(name.to_string());
+            Some(0)
+        }
+        fn read(
+            &self,
+            _: &str,
+            options: crate::script::eval::SocketReadOptions,
+        ) -> Option<Result<crate::script::eval::SocketReadResult, i32>> {
+            self.read_options.lock().unwrap().push(options);
+            if let Some(error) = self.read_error.lock().unwrap().take() {
+                Some(Err(error))
+            } else {
+                self.read_result.lock().unwrap().take().map(Ok)
+            }
+        }
         fn exists(&self, name: &str) -> bool {
             self.ports.lock().unwrap().contains_key(name)
                 || self.marks.lock().unwrap().contains_key(name)
         }
+        fn matching_names(&self, pattern: &str) -> Vec<String> {
+            let mut names: Vec<String> = self.ports.lock().unwrap().keys().cloned().collect();
+            names.extend(self.marks.lock().unwrap().keys().cloned());
+            names.sort();
+            names.dedup();
+            names.retain(|name| wildcard_match(pattern, name));
+            names
+        }
         fn prop(&self, name: &str, property: &str) -> String {
             match property {
-                "port" => {
-                    self.ports.lock().unwrap().get(name).map(|p| p.to_string()).unwrap_or_default()
-                }
-                "mark" => self.marks.lock().unwrap().get(name).cloned().unwrap_or_default(),
+                "port" => self
+                    .ports
+                    .lock()
+                    .unwrap()
+                    .get(name)
+                    .map(|p| p.to_string())
+                    .unwrap_or_default(),
+                "mark" => self
+                    .marks
+                    .lock()
+                    .unwrap()
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_default(),
+                "sq" => self.send_queued.lock().unwrap().to_string(),
                 "status" => {
                     if self.ports.lock().unwrap().contains_key(name) {
                         "listening".into()
@@ -4165,13 +7526,412 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(echoed, vec!["port=54321 mark=hi there st=listening ex=relay no="]);
+        assert_eq!(
+            echoed,
+            vec!["port=54321 mark=hi there st=listening ex=relay no="]
+        );
         // /socklisten binds (recorded) and queues the accept-loop start.
         assert!(actions
             .iter()
-            .any(|a| matches!(a, Action::SockListen { name } if name == "relay")));
-        assert_eq!(*fake.listened.lock().unwrap(), vec![("relay".to_string(), 0u16)]);
+            .any(|a| matches!(a, Action::SockListen { name, .. } if name == "relay")));
+        assert_eq!(
+            *fake.listened.lock().unwrap(),
+            vec![("relay".to_string(), 0u16)]
+        );
         assert_eq!(*fake.accepted.lock().unwrap(), vec!["conn".to_string()]);
+    }
+
+    #[test]
+    fn socket_nodelay_and_dual_stack_switches_reach_the_backend() {
+        let engine = ScriptEngine::new();
+        let fake = std::sync::Arc::new(FakeSockets::default());
+        engine.set_sockets(fake.clone());
+        engine.load(
+            "alias t { var %listen_opts = -nu | var %accept_opts = -n | socklisten %listen_opts relay | sockaccept %accept_opts conn }",
+        );
+
+        let actions = engine.run_alias(&ctx(), "", "t", "");
+        assert!(actions
+            .iter()
+            .any(|action| matches!(action, Action::SockListen { name, .. } if name == "relay")));
+        assert_eq!(*fake.listen_options.lock().unwrap(), vec![(true, true)]);
+        assert_eq!(*fake.accept_options.lock().unwrap(), vec![true]);
+    }
+
+    #[test]
+    fn sockopen_is_visible_to_state_commands_in_the_same_handler() {
+        let engine = ScriptEngine::new();
+        let fake = std::sync::Arc::new(FakeSockets::default());
+        engine.set_sockets(fake);
+        engine.load(
+            "alias t { sockopen pending example.test 80 | sockmark pending hello | /echo -a ex=$sock(pending) mark=$sock(pending).mark }",
+        );
+
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "t", ""),
+            vec![
+                Action::SockOpen {
+                    name: "pending".into(),
+                    host: "example.test".into(),
+                    port: 80,
+                    tls: false,
+                    accept_invalid: false,
+                    bind_ip: String::new(),
+                    nodelay: false,
+                    ip_version: 0,
+                    reservation_id: 77,
+                },
+                Action::Echo {
+                    target: "(status)".into(),
+                    text: "ex=pending mark=hello".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn sockopen_tls_invalid_certificate_switches_are_preserved() {
+        let engine = ScriptEngine::new();
+        engine.load("alias t { sockopen -es secure example.test 6697 }");
+
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "t", ""),
+            vec![Action::SockOpen {
+                name: "secure".into(),
+                host: "example.test".into(),
+                port: 6697,
+                tls: true,
+                accept_invalid: true,
+                bind_ip: String::new(),
+                nodelay: false,
+                ip_version: 0,
+                reservation_id: 0,
+            }]
+        );
+    }
+
+    #[test]
+    fn sockopen_dash_t_upgrades_the_existing_socket_without_reopening_it() {
+        let engine = ScriptEngine::new();
+        let fake = std::sync::Arc::new(FakeSockets::default());
+        engine.set_sockets(fake.clone());
+        engine.load("alias t { sockopen -t mail }");
+
+        assert!(engine.run_alias(&ctx(), "", "t", "").is_empty());
+        assert_eq!(*fake.starttls.lock().unwrap(), vec!["mail".to_string()]);
+    }
+
+    #[test]
+    fn sock_wildcard_count_and_nth_name() {
+        let engine = ScriptEngine::new();
+        let fake = std::sync::Arc::new(FakeSockets::default());
+        engine.set_sockets(fake);
+        engine.load(
+            "alias t { socklisten i7.zeta | socklisten b7.other | socklisten i7.alpha | /echo count=$sock(I7.*,0) default=$sock(i7.*) first=$sock(i7.*,1) second=$sock(i7.*,2) missing=[$sock(i7.*,3)] status=$sock(i7.*).status }",
+        );
+        let actions = engine.run_alias(&ctx(), "#c", "t", "");
+        let echoed: Vec<&str> = actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::Echo { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            echoed,
+            vec!["count=2 default=i7.alpha first=i7.alpha second=i7.zeta missing=[] status=listening"]
+        );
+    }
+
+    #[test]
+    fn socket_commands_validate_switches_and_reset_sockerr_on_success() {
+        let engine = ScriptEngine::new();
+        let fake = std::sync::Arc::new(FakeSockets::default());
+        engine.set_sockets(fake);
+        engine.load(
+            "alias t { sockwrite -z relay nope | /echo -a first=$sockerr | sockmark relay ok | /echo -a second=$sockerr }",
+        );
+
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "t", ""),
+            vec![
+                Action::Echo {
+                    target: "(status)".into(),
+                    text: "first=10022".into(),
+                },
+                Action::Echo {
+                    target: "(status)".into(),
+                    text: "second=0".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn sockudp_expands_switch_variables_and_preserves_dual_stack() {
+        let engine = ScriptEngine::new();
+        engine.load("alias send { var %opts = -uk | sockudp %opts packet 127.0.0.1 9000 hi }");
+
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "send", ""),
+            vec![Action::SockUdp {
+                name: "packet".into(),
+                bind_ip: String::new(),
+                local_port: 0,
+                dest_ip: "127.0.0.1".into(),
+                dest_port: 9000,
+                data: b"hi".to_vec(),
+                keep: true,
+                dual_stack: true,
+                reservation_id: 0,
+            }]
+        );
+    }
+
+    #[test]
+    fn sockwrite_treats_an_unset_binvar_as_empty_binary_data() {
+        let engine = ScriptEngine::new();
+        let fake = std::sync::Arc::new(FakeSockets::default());
+        *fake.write_result.lock().unwrap() = Some(crate::script::eval::SocketWriteResult {
+            error: 0,
+            failures: Vec::new(),
+        });
+        engine.set_sockets(fake.clone());
+        engine.load("alias send { sockwrite relay &missing }");
+
+        assert!(engine.run_alias(&ctx(), "", "send", "").is_empty());
+        assert_eq!(*fake.writes.lock().unwrap(), vec![Vec::<u8>::new()]);
+    }
+
+    #[test]
+    fn sockwrite_binary_count_expands_variables() {
+        let engine = ScriptEngine::new();
+        let fake = std::sync::Arc::new(FakeSockets::default());
+        *fake.write_result.lock().unwrap() = Some(crate::script::eval::SocketWriteResult {
+            error: 0,
+            failures: Vec::new(),
+        });
+        engine.set_sockets(fake);
+        engine.load(
+            "alias send { var %opts = -b | var %bytes = 3 | sockwrite %opts relay %bytes abcdef | /echo -a sq=$sock(relay).sq err=$sockerr }",
+        );
+
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "send", ""),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "sq=3 err=0".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn sockwrite_updates_sq_and_sockerr_before_the_next_script_line() {
+        const MISSING_SOCKET: i32 = 10_038;
+        let engine = ScriptEngine::new();
+        let fake = std::sync::Arc::new(FakeSockets::default());
+        *fake.write_result.lock().unwrap() = Some(crate::script::eval::SocketWriteResult {
+            error: 0,
+            failures: Vec::new(),
+        });
+        engine.set_sockets(fake.clone());
+        engine
+            .load("alias send { sockwrite relay abc | /echo -a sq=$sock(relay).sq err=$sockerr }");
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "send", ""),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "sq=3 err=0".into(),
+            }]
+        );
+
+        *fake.write_result.lock().unwrap() = Some(crate::script::eval::SocketWriteResult {
+            error: MISSING_SOCKET,
+            failures: Vec::new(),
+        });
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "send", ""),
+            vec![
+                Action::SockError {
+                    kind: "SOCKWRITE".into(),
+                    name: "relay".into(),
+                    error: MISSING_SOCKET,
+                },
+                Action::Echo {
+                    target: "(status)".into(),
+                    text: format!("sq=3 err={MISSING_SOCKET}"),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn sockwrite_failure_queues_one_event_per_concrete_socket() {
+        const MISSING_SOCKET: i32 = 10_038;
+        const CONNECTION_RESET: i32 = 10_054;
+        let engine = ScriptEngine::new();
+        let fake = std::sync::Arc::new(FakeSockets::default());
+        *fake.write_result.lock().unwrap() = Some(crate::script::eval::SocketWriteResult {
+            error: MISSING_SOCKET,
+            failures: vec![
+                ("relay.one".into(), MISSING_SOCKET),
+                ("relay.two".into(), CONNECTION_RESET),
+            ],
+        });
+        engine.set_sockets(fake);
+        engine.load("alias send { sockwrite relay.* abc | /echo -a err=$sockerr }");
+
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "send", ""),
+            vec![
+                Action::SockError {
+                    kind: "SOCKWRITE".into(),
+                    name: "relay.one".into(),
+                    error: MISSING_SOCKET,
+                },
+                Action::SockError {
+                    kind: "SOCKWRITE".into(),
+                    name: "relay.two".into(),
+                    error: CONNECTION_RESET,
+                },
+                Action::Echo {
+                    target: "(status)".into(),
+                    text: format!("err={MISSING_SOCKET}"),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn sockread_error_preserves_the_destination_and_resets_sockbr() {
+        const CONNECTION_RESET: i32 = 10_054;
+        let engine = ScriptEngine::new();
+        let fake = std::sync::Arc::new(FakeSockets::default());
+        *fake.read_error.lock().unwrap() = Some(CONNECTION_RESET);
+        engine.set_sockets(fake);
+        engine.load(
+            "alias read { set %dest keep | sockread %dest | /echo -a dest=%dest br=$sockbr err=$sockerr }",
+        );
+
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "read", ""),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: format!("dest=keep br=0 err={CONNECTION_RESET}"),
+            }]
+        );
+    }
+
+    #[test]
+    fn sockread_expands_binary_byte_count_but_not_destination() {
+        let engine = ScriptEngine::new();
+        let fake = std::sync::Arc::new(FakeSockets::default());
+        *fake.read_result.lock().unwrap() = Some(crate::script::eval::SocketReadResult {
+            data: vec![1, 2, 3],
+            bytes_read: 3,
+        });
+        engine.set_sockets(fake.clone());
+        engine.load(
+            "on *:SOCKREAD:bot:{ sockread %bytes &raw | /msg #c len $bvar(&raw,0) br $sockbr }",
+        );
+        engine.run_command(&ctx(), "", "/set %bytes 3", &[]);
+        let vars = EventVars {
+            chan: "bot".into(),
+            target: "bot".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            engine.dispatch_event(&ctx(), "SOCKREAD", vars),
+            vec![Action::Send("PRIVMSG #c :len 3 br 3".into())]
+        );
+        assert_eq!(
+            *fake.read_options.lock().unwrap(),
+            vec![crate::script::eval::SocketReadOptions {
+                binary: true,
+                force: false,
+                line: false,
+                max_bytes: 3,
+            }]
+        );
+    }
+
+    #[test]
+    fn i7_names_relay_preserves_full_active_353_and_followup_chunk() {
+        let engine = ScriptEngine::new();
+        let fake = std::sync::Arc::new(FakeSockets::default());
+        engine.set_sockets(fake);
+        engine.load(
+            r#"
+            alias -l i7n_chan {
+              if ($left($1,3) == i7.) return $mid($1,4)
+              if ($left($1,2) == $+($chr(37),$chr(35))) return $1
+            }
+            alias -l i7n_trail {
+              var %p = $pos($1-,$+($chr(32),:),1)
+              if (%p) return $mid($1-,$calc(%p + 2))
+            }
+            alias -l i7n_nameitem {
+              var %item = $1
+              if ($left(%item,1) == :) var %item = $mid(%item,2)
+              if ($chr(44) isin %item) return $gettok(%item,-1,44)
+              return %item
+            }
+            alias -l i7n_name {
+              var %n = $i7n_nameitem($1)
+              while ($istok(. @ +,$left(%n,1),32)) var %n = $mid(%n,2)
+              return %n
+            }
+            on *:SOCKREAD:i7.*:{
+              bunset &line
+              sockread -n &line
+              if ($sockbr == 0) return
+              var %line = $bvar(&line).text
+              var %pfx = $iif($left(%line,1) == :,2,1), %cmd = $upper($gettok(%line,%pfx,32))
+              if (%cmd == 353) {
+                var %chan = $i7n_chan($sockname), %names = $i7n_trail(%line), %i = 1
+                var %out
+                while (%i <= $numtok(%names,32)) {
+                  var %item = $i7n_nameitem($gettok(%names,%i,32)), %name = $i7n_name(%item), %flag = $left(%item,1)
+                  if (%item != $null) var %out = $iif(%out,%out %item,%item)
+                  inc %i
+                }
+                if ($sock(mIRC.local)) sockwrite -n mIRC.local $gettok(%line,1-5,32) : $+ %out
+              }
+            }
+            "#,
+        );
+        engine.run_command(&ctx(), "", "/sockmark mIRC.local live", &[]);
+
+        let line = r":TK2CHATCHATA01 353 >guest = %#The\bLobby :+Sky +xpulse .Admin_Sky Sockbot4820 Skyxo @>QuirkyOtter88 .Sysop_Liam >User9711-rs Snue >HappyWombat61 SnueJr @>guest";
+        let fire = |line: &str| {
+            let vars = EventVars {
+                chan: r"i7.%#The\bLobby".into(),
+                target: r"i7.%#The\bLobby".into(),
+                params: line.split_whitespace().map(String::from).collect(),
+                text: line.into(),
+                sock_bytes: line.as_bytes().to_vec(),
+                ..Default::default()
+            };
+            engine.dispatch_event(&ctx(), "SOCKREAD", vars)
+        };
+        assert_eq!(
+            fire(line),
+            vec![Action::SockWrite {
+                name: "mIRC.local".into(),
+                data: format!("{line}\r\n").into_bytes(),
+            }]
+        );
+
+        let chunk = r":TK2CHATCHATA01 353 >guest = %#The\bLobby :1,x,+Alpha 2,x,Beta 3,x,.Owner 4,x,@Host 5,x,Regular";
+        let expected =
+            r":TK2CHATCHATA01 353 >guest = %#The\bLobby :+Alpha Beta .Owner @Host Regular";
+        assert_eq!(
+            fire(chunk),
+            vec![Action::SockWrite {
+                name: "mIRC.local".into(),
+                data: format!("{expected}\r\n").into_bytes(),
+            }]
+        );
     }
 
     #[test]
@@ -4191,10 +7951,44 @@ mod tests {
         engine.run_command(&rctx, "#c", "/hsave seen seen.txt", &[]);
 
         let engine2 = ScriptEngine::new();
-        engine2.run_command(&rctx, "#c", "/hload seen seen.txt", &[]);
-        engine2.load("alias r { /msg #c $hget(seen, bob) and $hfind(seen, a*, 1) }");
+        engine2.run_command(&rctx, "#c", "/hload -m seen seen.txt", &[]);
+        engine2.load("alias r { /msg #c $hget(seen, bob) and $hfind(seen, a*, 1, w) }");
         let actions = engine2.run_alias(&rctx, "#c", "r", "");
-        assert_eq!(actions, vec![Action::Send("PRIVMSG #c :20 and alice".into())]);
+        assert_eq!(
+            actions,
+            vec![Action::Send("PRIVMSG #c :20 and alice".into())]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hash_binary_roundtrip_slots_case_and_find_modes() {
+        let dir = std::env::temp_dir().join(format!("jirc-hbin-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: dir.clone(),
+            state: std::sync::Arc::new(Default::default()),
+        };
+        let writer = ScriptEngine::new();
+        writer.load(
+            "alias save { hmake Binary 17 | bset &source 1 65 0 66 13 10 255 | hadd -b binary Payload &source | hsave -b BINARY values.dat }",
+        );
+        writer.run_alias(&rctx, "#c", "save", "");
+
+        let reader = ScriptEngine::new();
+        reader.load(
+            "alias remember { hadd -m found $1 yes | if ($1 == Beta) halt }
+             alias load { hload -bm17 binary values.dat | var %n = $hget(BINARY,pAyLoAd,&out) | hadd binary Alpha one | hadd binary Beta two | var %matches = $hfind(binary,*,0,w,remember $1-) | msg #c $hget(binary).size $+ / $+ %n $+ / $+ $bvar(&out,1,6) $+ / $+ $hfind(binary,a*,1,w) $+ / $+ $hfind(binary,two,1,n).data $+ / $+ %matches $+ / $+ $hget(found,alpha) $+ / $+ $hget(found,payload) }",
+        );
+        assert_eq!(
+            reader.run_alias(&rctx, "#c", "load", ""),
+            vec![Action::Send(
+                "PRIVMSG #c :17/6/65 0 66 13 10 255/Alpha/Beta/2/yes/".into()
+            )]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -4261,11 +8055,234 @@ mod tests {
         );
 
         // /hinc and /hdec on a numeric hash item
-        engine.load("alias t { hinc c hits 5 | hinc c hits | hdec c hits 2 | /msg #c $hget(c,hits) }");
+        engine.load(
+            "alias t { hinc c hits 5 | hinc c hits | hdec c hits 2 | /msg #c $hget(c,hits) }",
+        );
         assert_eq!(
             engine.run_alias(&ctx(), "#c", "t", ""),
             vec![Action::Send("PRIVMSG #c :4".into())]
         );
+    }
+
+    #[test]
+    fn routine_local_vars_shadow_nested_aliases_and_do_not_leak() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias inner { var %value = inner | /msg #c inner=%value local=$var(%value,1).local }\n\
+             alias outer { set %value global | var %value = outer | /msg #c before=%value local=$var(%value,1).local | inner | /msg #c after=%value }\n\
+             alias leak { var %only = temporary | inc %only | /msg #c %only }\n\
+             alias unset_local { set %unset.global global | var %unset.global = local | var %unset.a = a | var %unset.b = b | unset %unset.global | unset %unset.* | /msg #c exact=%unset.global count=$var(%unset.*,0) }\n\
+             alias clear_local { set %clear.global global | var %clear.local = local | unsetall | /msg #c globals=[ $+ %clear.global $+ ] locals=$var(%clear.local,0) }",
+        );
+
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "outer", ""),
+            vec![
+                Action::Send("PRIVMSG #c :before=outer local=$true".into()),
+                Action::Send("PRIVMSG #c :inner=inner local=$true".into()),
+                Action::Send("PRIVMSG #c :after=outer".into()),
+            ]
+        );
+        // The nested frame restored the caller's local, and the outer frame was
+        // then discarded to reveal the persistent `/set` value underneath it.
+        assert_eq!(
+            engine.run_command(
+                &ctx(),
+                "#c",
+                "/echo -a value=%value local=$var(%value,1).local",
+                &[],
+            ),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "value=global local=$false".into(),
+            }]
+        );
+
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "leak", ""),
+            vec![Action::Send("PRIVMSG #c :1".into())]
+        );
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", "/echo -a only=[ $+ %only $+ ]", &[]),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "only=[]".into()
+            }]
+        );
+        assert!(!engine.inner.lock().unwrap().vars.contains_key("only"));
+
+        // Ordinary /unset removes the nearest local declaration first. A
+        // wildcard likewise clears the nearest matching frame without deleting
+        // the global value that becomes visible underneath it.
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "unset_local", ""),
+            vec![Action::Send("PRIVMSG #c :exact=global count=1".into())]
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "clear_local", ""),
+            vec![Action::Send("PRIVMSG #c :globals=[] locals=0".into())]
+        );
+        let g = engine.inner.lock().unwrap();
+        assert!(!g.vars.contains_key("clear.global"));
+        assert!(!g.var_expiry.contains_key("clear.global"));
+    }
+
+    #[test]
+    fn timed_variables_expire_and_overwrites_manage_lifetimes() {
+        let engine = ScriptEngine::new();
+
+        // /inc and /dec can replace/preserve the lifetime of a global value.
+        engine.run_command(&ctx(), "#c", "/set -u30 %temp one", &[]);
+        let original = {
+            let g = engine.inner.lock().unwrap();
+            assert_eq!(g.vars.get("temp").map(String::as_str), Some("one"));
+            *g.var_expiry.get("temp").expect("/set -uN lifetime")
+        };
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", "/echo -a $var(%temp,1).secs", &[]),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "30".into()
+            }]
+        );
+
+        engine.run_command(&ctx(), "#c", "/inc -k %temp 1", &[]);
+        {
+            let g = engine.inner.lock().unwrap();
+            assert_eq!(g.var_expiry.get("temp"), Some(&original));
+        }
+        // Setting the variable again without -k or -uN cancels its old timer.
+        engine.run_command(&ctx(), "#c", "/set %temp replacement", &[]);
+        assert!(!engine.inner.lock().unwrap().var_expiry.contains_key("temp"));
+
+        engine.run_command(&ctx(), "#c", "/set -u30 %temp expired", &[]);
+        engine.run_command(&ctx(), "#c", "/set -u30 %wild.a a", &[]);
+        engine.run_command(&ctx(), "#c", "/set -u30 %wild.b b", &[]);
+        engine.run_command(&ctx(), "#c", "/unset %wild.*", &[]);
+        {
+            let g = engine.inner.lock().unwrap();
+            assert!(!g.var_expiry.keys().any(|name| name.starts_with("wild.")));
+            assert!(!g.vars.keys().any(|name| name.starts_with("wild.")));
+        }
+
+        // Expiry is lazy: the next execution/identifier boundary removes an
+        // elapsed value. Exercise a real one-second monotonic lifetime.
+        engine.run_command(&ctx(), "#c", "/set -u1 %temp expired", &[]);
+        std::thread::sleep(std::time::Duration::from_millis(1_100));
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", "/echo -a [ $+ %temp $+ ]", &[]),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "[]".into()
+            }]
+        );
+        assert!(!engine.inner.lock().unwrap().vars.contains_key("temp"));
+
+        // Other assignment commands follow the same overwrite rule. A socket
+        // read must not leave an older timer attached to the newly-read value.
+        engine.run_command(&ctx(), "#c", "/set -u30 %line old", &[]);
+        engine.load("on *:SOCKREAD:reader:{ sockread %line }");
+        engine.dispatch_event(
+            &ctx(),
+            "SOCKREAD",
+            EventVars {
+                chan: "reader".into(),
+                target: "reader".into(),
+                text: "fresh".into(),
+                sock_bytes: b"fresh".to_vec(),
+                ..Default::default()
+            },
+        );
+        {
+            let g = engine.inner.lock().unwrap();
+            assert_eq!(g.vars.get("line").map(String::as_str), Some("fresh"));
+            assert!(!g.var_expiry.contains_key("line"));
+        }
+
+        // -u0 remains visible inside this invocation, then disappears as the
+        // outer alias finishes.
+        engine.load("alias zero { set -u0 %once visible | /msg #c %once }");
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "zero", ""),
+            vec![Action::Send("PRIVMSG #c :visible".into())]
+        );
+        assert!(!engine.inner.lock().unwrap().vars.contains_key("once"));
+    }
+
+    #[test]
+    fn timed_hash_items_expire_and_deletes_clear_metadata() {
+        let engine = ScriptEngine::new();
+        engine.run_command(&ctx(), "#c", "/hadd -mu30 cache item 4", &[]);
+        let original = {
+            let g = engine.inner.lock().unwrap();
+            *g.hash_expiry
+                .get(&("cache".into(), "item".into()))
+                .expect("/hadd -uN lifetime")
+        };
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", "/echo -a $hget(cache,item).unset", &[]),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "30".into()
+            }]
+        );
+
+        engine.run_command(&ctx(), "#c", "/hinc -k cache item 2", &[]);
+        {
+            let g = engine.inner.lock().unwrap();
+            assert_eq!(
+                g.hash_expiry.get(&("cache".into(), "item".into())),
+                Some(&original)
+            );
+            assert_eq!(g.hashes["cache"]["item"], "6");
+        }
+        // An ordinary overwrite cancels the existing lifetime.
+        engine.run_command(&ctx(), "#c", "/hadd cache item permanent", &[]);
+        assert!(!engine
+            .inner
+            .lock()
+            .unwrap()
+            .hash_expiry
+            .contains_key(&("cache".into(), "item".into())));
+
+        engine.run_command(&ctx(), "#c", "/hadd -u30 cache wild.a a", &[]);
+        engine.run_command(&ctx(), "#c", "/hadd -u30 cache wild.b b", &[]);
+        engine.run_command(&ctx(), "#c", "/hdel -w cache wild.*", &[]);
+        {
+            let g = engine.inner.lock().unwrap();
+            assert!(!g
+                .hash_expiry
+                .keys()
+                .any(|(table, item)| table == "cache" && item.starts_with("wild.")));
+        }
+
+        engine.run_command(&ctx(), "#c", "/hinc -u1 cache count 1", &[]);
+        std::thread::sleep(std::time::Duration::from_millis(1_100));
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", "/echo -a [ $+ $hget(cache,count) $+ ]", &[]),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "[]".into()
+            }]
+        );
+
+        engine.load("alias zero { hadd -u0 cache once value | /msg #c $hget(cache,once) }");
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "zero", ""),
+            vec![Action::Send("PRIVMSG #c :value".into())]
+        );
+        assert!(!engine.inner.lock().unwrap().hashes["cache"].contains_key("once"));
+
+        // Table-level deletion must not leave orphaned expiry records.
+        engine.run_command(&ctx(), "#c", "/hadd -u30 cache other value", &[]);
+        engine.run_command(&ctx(), "#c", "/hfree -w ca*", &[]);
+        assert!(!engine
+            .inner
+            .lock()
+            .unwrap()
+            .hash_expiry
+            .keys()
+            .any(|(table, _)| table == "cache"));
     }
 
     #[test]
@@ -4336,8 +8353,16 @@ mod tests {
         let snap = StateSnapshot {
             nick: "me".into(),
             channels: vec![
-                ChannelView { name: "#a".into(), nicks: vec!["me".into(), "bob".into()], ..Default::default() },
-                ChannelView { name: "#b".into(), nicks: vec!["me".into()], ..Default::default() },
+                ChannelView {
+                    name: "#a".into(),
+                    nicks: vec!["me".into(), "bob".into()],
+                    ..Default::default()
+                },
+                ChannelView {
+                    name: "#b".into(),
+                    nicks: vec!["me".into()],
+                    ..Default::default()
+                },
             ],
             ial: vec![("bob".into(), "bob!user@host.example.com".into())],
             ..Default::default()
@@ -4403,6 +8428,67 @@ mod tests {
     }
 
     #[test]
+    fn haltdef_does_not_halt_the_running_routine() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias def { echo -a before | haltdef | echo -a after }
+             alias hard { echo -a before | halt | echo -a after }",
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "def", ""),
+            vec![
+                Action::Echo {
+                    target: "(status)".into(),
+                    text: "before".into()
+                },
+                Action::Echo {
+                    target: "(status)".into(),
+                    text: "after".into()
+                },
+            ]
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "hard", ""),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "before".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn drive_event_reports_default_display_suppression() {
+        let engine = ScriptEngine::new();
+        engine.load("on ^*:TEXT:*:#:{ echo before | haltdef | echo after }");
+        let event = UiEvent::Message {
+            server_id: "s".into(),
+            kind: MessageKind::Privmsg,
+            from: Some("bob".into()),
+            target: "#c".into(),
+            text: "hidden".into(),
+            time: None,
+        };
+        let (actions, suppressed) = drive_event_halt(&engine, &ctx(), &event);
+        assert!(suppressed);
+        assert_eq!(
+            actions,
+            vec![
+                Action::Echo {
+                    target: "#c".into(),
+                    text: "before".into()
+                },
+                Action::Echo {
+                    target: "#c".into(),
+                    text: "after".into()
+                },
+            ]
+        );
+
+        engine.load("on *:TEXT:*:#:{ halt }");
+        assert!(!drive_event_halt(&engine, &ctx(), &event).1);
+    }
+
+    #[test]
     fn input_event_fires_on_own_text() {
         let engine = ScriptEngine::new();
         engine.load("on *:INPUT:#:{ /msg $chan you said $1- }");
@@ -4415,7 +8501,10 @@ mod tests {
             ..Default::default()
         };
         let actions = engine.dispatch_event(&ctx(), "INPUT", vars);
-        assert_eq!(actions, vec![Action::Send("PRIVMSG #c :you said hi there".into())]);
+        assert_eq!(
+            actions,
+            vec![Action::Send("PRIVMSG #c :you said hi there".into())]
+        );
     }
 
     #[test]
@@ -4445,6 +8534,47 @@ mod tests {
     }
 
     #[test]
+    fn batched_per_mode_events_fire_in_argument_order() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "on *:OP:#:{ /msg $chan op $opnick }\n\
+             on *:VOICE:#:{ /msg $chan voice $vnick }\n\
+             on *:DEHELP:#:{ /msg $chan dehelp $hnick }",
+        );
+        let ev = UiEvent::Mode {
+            server_id: "s".into(),
+            target: "#c".into(),
+            modes: "+ov-h bob alice carol".into(),
+            by: Some("setter".into()),
+        };
+        assert_eq!(
+            drive_event(&engine, &ctx(), &ev),
+            vec![
+                Action::Send("PRIVMSG #c :op bob".into()),
+                Action::Send("PRIVMSG #c :voice alice".into()),
+                Action::Send("PRIVMSG #c :dehelp carol".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn batched_mode_events_skip_other_parameter_modes_without_shifting_nicks() {
+        let isupport = crate::irc::state::Isupport::default();
+        assert_eq!(
+            split_mode_events("+klov secret 50 bob alice", &isupport),
+            vec![("OP", "bob".to_string()), ("VOICE", "alice".to_string()),]
+        );
+        assert_eq!(
+            split_mode_events("+o bob -v alice +b *!*@evil.host", &isupport),
+            vec![
+                ("OP", "bob".to_string()),
+                ("DEVOICE", "alice".to_string()),
+                ("BAN", "*!*@evil.host".to_string()),
+            ]
+        );
+    }
+
+    #[test]
     fn mode_event_fires_with_setter() {
         let engine = ScriptEngine::new();
         engine.load("on *:MODE:#:{ /msg $chan $nick set $1- }");
@@ -4455,15 +8585,16 @@ mod tests {
             by: Some("op".into()),
         };
         let actions = drive_event(&engine, &ctx(), &ev);
-        assert_eq!(actions, vec![Action::Send("PRIVMSG #test :op set +o bob".into())]);
+        assert_eq!(
+            actions,
+            vec![Action::Send("PRIVMSG #test :op set +o bob".into())]
+        );
     }
 
     #[test]
     fn rawmode_and_usermode_events() {
         let engine = ScriptEngine::new();
-        engine.load(
-            "on *:RAWMODE:#:{ /msg $chan raw $1- }\non *:USERMODE:{ /msg me umode $1- }",
-        );
+        engine.load("on *:RAWMODE:#:{ /msg $chan raw $1- }\non *:USERMODE:{ /msg me umode $1- }");
         // A channel mode fires on RAWMODE (and on MODE, no handler here).
         let ch = UiEvent::Mode {
             server_id: "s".into(),
@@ -4503,7 +8634,9 @@ mod tests {
         let actions = drive_event(&engine, &ctx(), &ev);
         assert_eq!(
             actions,
-            vec![Action::Send("PRIVMSG #test :victim was kicked by op (bye)".into())]
+            vec![Action::Send(
+                "PRIVMSG #test :victim was kicked by op (bye)".into()
+            )]
         );
     }
 
@@ -4543,12 +8676,164 @@ mod tests {
         assert_eq!(
             actions,
             vec![Action::Timer {
-                name: String::new(),
+                name: "1".into(),
                 reps: 3,
                 interval_ms: 5000,
+                start_at: None,
                 command: "/msg #c tick".into(),
                 target: "#c".into(),
+                offline: false,
+                catch_up: false,
+                ordered: false,
+                milliseconds: false,
+                high_resolution: false,
+                dynamic: false,
+                source: "<memory>".into(),
             }]
+        );
+    }
+
+    #[test]
+    fn timer_auto_names_and_ltimer_are_visible_in_the_creating_routine() {
+        let engine = ScriptEngine::new();
+        engine.load("alias t { /timer 1 5 /noop | /timer 1 5 /noop | /msg #c $ltimer }");
+        let actions = engine.run_alias(&ctx(), "#c", "t", "");
+        assert!(matches!(&actions[0], Action::Timer { name, .. } if name == "1"));
+        assert!(matches!(&actions[1], Action::Timer { name, .. } if name == "2"));
+        assert_eq!(actions[2], Action::Send("PRIVMSG #c :2".into()));
+    }
+
+    #[test]
+    fn timer_callback_exposes_caller_and_ctimer() {
+        let engine = ScriptEngine::new();
+        assert_eq!(
+            engine.run_timer_command(
+                &ctx(),
+                "#c",
+                "/msg #c $caller $ctimer",
+                "timers.mrc",
+                "work",
+            ),
+            vec![Action::Send("PRIVMSG #c :timer work".into())]
+        );
+    }
+
+    #[test]
+    fn named_timer_query_targets_only_that_timer() {
+        let engine = ScriptEngine::new();
+        engine.load("alias q { /timerwork }");
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "q", ""),
+            vec![Action::TimerList {
+                target: "#c".into(),
+                name: "work".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn timer_switches_wall_clock_and_deferred_capture_match_mirc() {
+        let engine = ScriptEngine::new();
+        engine.load_sources(&[(
+            "timers.mrc".into(),
+            "alias make { var %captured = created | /timerwork -chodi 14:30 0 250 /msg #c %captured $!time }".into(),
+        )]);
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "make", ""),
+            vec![Action::Timer {
+                name: "work".into(),
+                reps: 0,
+                interval_ms: 250,
+                start_at: Some("14:30".into()),
+                command: "/msg #c created $time".into(),
+                target: "#c".into(),
+                offline: true,
+                catch_up: true,
+                ordered: true,
+                milliseconds: true,
+                high_resolution: true,
+                dynamic: true,
+                source: "timers.mrc".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn timer_control_switches_and_wildcards_produce_manager_actions() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias stop { /timer3? off }\n\
+             alias exec { /timershow* -e }\n\
+             alias pause { /timerwork -p }\n\
+             alias freeze { /timerwork -P }\n\
+             alias resume { /timerwork -r }",
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "stop", ""),
+            vec![Action::TimerStop { name: "3?".into() }]
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "exec", ""),
+            vec![Action::TimerExecute {
+                name: "show*".into()
+            }]
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "pause", ""),
+            vec![Action::TimerPause {
+                name: "work".into(),
+                countdown: false,
+            }]
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "freeze", ""),
+            vec![Action::TimerPause {
+                name: "work".into(),
+                countdown: true,
+            }]
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "resume", ""),
+            vec![Action::TimerResume {
+                name: "work".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn timer_online_dialog_reset_switch_is_an_intentional_ui_noop() {
+        let engine = ScriptEngine::new();
+        // mIRC's -z0/-z1/-z2 reset counters in its Online Timer dialog. jIRC
+        // has no equivalent native dialog or total-time counter, so this must
+        // not be mistaken for a request to create or control a script timer.
+        engine.load("alias reset { /timer -z0 | /timer -z1 | /timer -z2 }");
+        assert!(engine.run_alias(&ctx(), "", "reset", "").is_empty());
+    }
+
+    #[test]
+    fn deferred_timer_command_keeps_file_local_alias_context() {
+        let engine = ScriptEngine::new();
+        engine.load_sources(&[
+            (
+                "one.mrc".into(),
+                "alias -l localonly { /msg #c one }\nalias make { /timerwork 1 1 /localonly }"
+                    .into(),
+            ),
+            (
+                "two.mrc".into(),
+                "alias -l localonly { /msg #c two }".into(),
+            ),
+        ]);
+        let action = engine.run_alias(&ctx(), "#c", "make", "").remove(0);
+        let (command, source) = match action {
+            Action::Timer {
+                command, source, ..
+            } => (command, source),
+            other => panic!("expected timer action, got {other:?}"),
+        };
+        assert_eq!(
+            engine.run_command_from_source(&ctx(), "#c", &command, &[], &source),
+            vec![Action::Send("PRIVMSG #c :one".into())]
         );
     }
 
@@ -4563,7 +8848,13 @@ mod tests {
     #[test]
     fn scripted_privmsg_echoes_locally() {
         match self_echo("s1", "me", "PRIVMSG #c :hi there") {
-            Some(UiEvent::Message { from, target, text, kind, .. }) => {
+            Some(UiEvent::Message {
+                from,
+                target,
+                text,
+                kind,
+                ..
+            }) => {
                 assert_eq!(from.as_deref(), Some("me"));
                 assert_eq!(target, "#c");
                 assert_eq!(text, "hi there");
@@ -4583,7 +8874,10 @@ mod tests {
             "alias t { /set %i 0 | :top | /inc %i | /echo %i | if (%i < 3) { /goto top } | /echo done }",
         );
         let actions = engine.run_alias(&ctx(), "#c", "t", "");
-        let echo = |t: &str| Action::Echo { target: "#c".into(), text: t.into() };
+        let echo = |t: &str| Action::Echo {
+            target: "#c".into(),
+            text: t.into(),
+        };
         assert_eq!(actions, vec![echo("1"), echo("2"), echo("3"), echo("done")]);
     }
 
@@ -4601,8 +8895,16 @@ mod tests {
                 name: "foo".into(),
                 reps: 2,
                 interval_ms: 1000,
+                start_at: None,
                 command: "/msg #c tick".into(),
                 target: "#c".into(),
+                offline: false,
+                catch_up: false,
+                ordered: false,
+                milliseconds: false,
+                high_resolution: false,
+                dynamic: false,
+                source: "<memory>".into(),
             }]
         );
         assert_eq!(
@@ -4626,6 +8928,193 @@ mod tests {
                 target: "#c".into(),
                 text: "done3".into()
             }]
+        );
+    }
+
+    #[test]
+    fn dcc_chat_and_file_events_expose_mirc_context() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "on 1:CHAT:*help*:{ msg =$nick direct reply }\n\
+             on 1:OPEN:=:*:{ echo -s opened $target }\n\
+             on 1:FILERCVD:*.zip:{ echo -s got $filename from $nick }",
+        );
+        let chat = EventVars {
+            nick: "bob".into(),
+            target: "=bob".into(),
+            text: "please help me".into(),
+            params: vec!["please".into(), "help".into(), "me".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            engine.dispatch_event(&ctx(), "CHAT", chat),
+            vec![Action::Send("PRIVMSG =bob :direct reply".into())]
+        );
+        let open = EventVars {
+            nick: "bob".into(),
+            target: "=bob".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            engine.dispatch_event(&ctx(), "OPEN", open),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "opened =bob".into(),
+            }]
+        );
+        let file = EventVars {
+            nick: "bob".into(),
+            text: "archive.zip".into(),
+            filename: "C:\\dcc\\archive.zip".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            engine.dispatch_event(&ctx(), "FILERCVD", file),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "got C:\\dcc\\archive.zip from bob".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn dcc_command_is_client_local_not_a_raw_irc_line() {
+        let engine = ScriptEngine::new();
+        engine.load("alias p { dcc passive on }");
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "p", ""),
+            vec![Action::Dcc {
+                args: "passive on".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn play_command_creates_a_local_queue_action_with_script_origin() {
+        let engine = ScriptEngine::new();
+        engine.load_sources(&[(
+            "one.mrc".into(),
+            "alias go { play -e #room lines.txt 25 }".into(),
+        )]);
+        assert_eq!(
+            engine.run_alias(&ctx(), "#current", "go", ""),
+            vec![Action::Play {
+                args: "-e #room lines.txt 25".into(),
+                current_target: "#current".into(),
+                remote: false,
+                source: "one.mrc".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn play_identifiers_report_queue_and_deferred_target() {
+        struct FakePlay;
+        impl crate::script::eval::ScriptPlay for FakePlay {
+            fn snapshot(&self) -> Vec<crate::script::eval::PlayInfo> {
+                vec![
+                    crate::script::eval::PlayInfo {
+                        target: "#a".into(),
+                        status: "playing".into(),
+                        filename: "a.txt".into(),
+                        ..Default::default()
+                    },
+                    crate::script::eval::PlayInfo {
+                        target: "#b".into(),
+                        status: "queued".into(),
+                        filename: "b.txt".into(),
+                        ..Default::default()
+                    },
+                    crate::script::eval::PlayInfo {
+                        target: "#a".into(),
+                        status: "paused".into(),
+                        filename: "c.txt".into(),
+                        ..Default::default()
+                    },
+                ]
+            }
+        }
+
+        let engine = ScriptEngine::new();
+        engine.set_play(std::sync::Arc::new(FakePlay));
+        engine.load(
+            "alias inspect { echo -a $play(0) $play(1) $play(#a,0) $play(#a,2).status $play(2).fname }",
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "#current", "inspect", ""),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "3 #a 2 paused b.txt".into(),
+            }]
+        );
+        assert_eq!(
+            engine.run_play_command(&ctx(), "#current", "echo -a $pnick", "", "#dest"),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "#dest".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn play_alias_retains_file_local_alias_resolution() {
+        let engine = ScriptEngine::new();
+        engine.load_sources(&[
+            (
+                "one.mrc".into(),
+                "alias -l item { msg #c one-$pnick-$1- }".into(),
+            ),
+            (
+                "two.mrc".into(),
+                "alias -l item { msg #c two-$pnick-$1- }".into(),
+            ),
+        ]);
+        assert_eq!(
+            engine.run_play_alias(
+                &ctx(),
+                "#current",
+                "item",
+                "hello world",
+                "one.mrc",
+                "#dest",
+            ),
+            vec![Action::Send("PRIVMSG #c :one-#dest-hello world".into())]
+        );
+    }
+
+    #[test]
+    fn custom_identifier_iif_v1_and_style_work_in_popup_labels() {
+        let engine = ScriptEngine::new();
+        engine.load_sources(&[(
+            "i7.mrc".into(),
+            r#"
+alias -l i7n_addrnick {
+  var %selected = $snick($active,1)
+  if ($1 == 0) { return %selected }
+  if ($1 == 1) { return %selected }
+  if ($1 == 3) { return Carol }
+}
+menu nicklist {
+  $iif($i7n_addrnick(0) != $null,$style(2) $v1,$style(2) GateKeeper lookup pending):noop
+  $style(2) $i7n_addrnick(1):noop
+  $iif($i7n_addrnick(2) != $null,$style(2) $v1):noop
+  $iif($i7n_addrnick(3) != $null,$style(2) $v1):noop
+}
+"#
+            .into(),
+        )]);
+
+        let items = engine.popups_evaluated(&ctx(), "nicklist", "Guest", "#room");
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| (item.label.as_str(), item.disabled, item.command.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Guest", true, "noop"),
+                ("Guest", true, "noop"),
+                ("Carol", true, "noop"),
+            ]
         );
     }
 }

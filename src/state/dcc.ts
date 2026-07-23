@@ -1,6 +1,6 @@
 // Pending incoming DCC offers, kept so the user can accept them later (via
 // `/dcc get <nick>` or the request dialog).
-type Offer = { nick: string; ip: string; port: number };
+type Offer = { nick: string; ip: string; port: number; token?: number };
 type FileOffer = Offer & { filename: string; size: number };
 
 const chats = new Map<string, Offer>();

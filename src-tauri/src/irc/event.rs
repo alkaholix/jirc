@@ -36,28 +36,21 @@ pub enum MessageKind {
 
 /// Events sent to the frontend. Serialized as `{ "type": "...", ... }`.
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum UiEvent {
     /// TCP connection established (before registration completes).
-    Connected {
-        server_id: String,
-    },
+    Connected { server_id: String },
     /// Registration completed (RPL_WELCOME received); `nick` is confirmed.
-    Registered {
-        server_id: String,
-        nick: String,
-    },
+    Registered { server_id: String, nick: String },
     /// Connection closed.
-    Disconnected {
-        server_id: String,
-        reason: String,
-    },
+    Disconnected { server_id: String, reason: String },
     /// We were just granted channel ownership (`+q` on our own nick) — the client
     /// provisions IRCX owner/host keys + access for the channel.
-    OwnerGranted {
-        server_id: String,
-        channel: String,
-    },
+    OwnerGranted { server_id: String, channel: String },
     /// Someone else removed our channel ownership (`-q` on our own nick) — the
     /// client runs takeover protection (reclaim owner with the stored key,
     /// clear the owner access list, kick `by`).
@@ -157,6 +150,10 @@ pub enum UiEvent {
         chan_types: String,
         /// Prefix characters, highest rank first (e.g. "~&@%+" or ".@+").
         prefixes: String,
+        /// `ascii`, `rfc1459`, or `strict-rfc1459`.
+        case_mapping: String,
+        /// Channel-status message prefixes (e.g. `@+`).
+        status_msg: String,
     },
     /// A formatted WHOIS reply block.
     Whois {
@@ -172,9 +169,7 @@ pub enum UiEvent {
         topic: String,
     },
     /// End of a LIST/LISTX reply.
-    ListEnd {
-        server_id: String,
-    },
+    ListEnd { server_id: String },
     /// You were invited to a channel.
     Invite {
         server_id: String,
@@ -191,10 +186,7 @@ pub enum UiEvent {
         controls: Vec<crate::script::ast::DialogControl>,
     },
     /// Close a dialog.
-    DialogClose {
-        server_id: String,
-        name: String,
-    },
+    DialogClose { server_id: String, name: String },
     /// Mutate a dialog control (`op` = set/add/clear).
     DialogSet {
         server_id: String,
@@ -210,10 +202,7 @@ pub enum UiEvent {
         icon: String,
     },
     /// Your own away state changed (RPL_NOWAWAY / RPL_UNAWAY).
-    SelfAway {
-        server_id: String,
-        away: bool,
-    },
+    SelfAway { server_id: String, away: bool },
 
     // ---- IRCX (Phase 1b) ----
     /// Result of enabling/querying IRCX (numeric 800).
@@ -235,10 +224,7 @@ pub enum UiEvent {
         reason: Option<String>,
     },
     /// End of an ACCESS listing (numeric 805).
-    IrcxAccessEnd {
-        server_id: String,
-        object: String,
-    },
+    IrcxAccessEnd { server_id: String, object: String },
     /// A single object property value (numeric 818).
     IrcxProp {
         server_id: String,
@@ -247,10 +233,7 @@ pub enum UiEvent {
         value: String,
     },
     /// End of a PROP listing (numeric 819).
-    IrcxPropEnd {
-        server_id: String,
-        object: String,
-    },
+    IrcxPropEnd { server_id: String, object: String },
     /// A whisper (channel-scoped private message visible only to targets).
     Whisper {
         server_id: String,
@@ -259,10 +242,7 @@ pub enum UiEvent {
         text: String,
     },
     /// A protocol/connection error string.
-    Error {
-        server_id: String,
-        message: String,
-    },
+    Error { server_id: String, message: String },
     /// Local text echoed by a script (`/echo`) into a target buffer.
     Echo {
         server_id: String,
@@ -273,9 +253,11 @@ pub enum UiEvent {
     /// A script ran `/server <host> <port> [pass]` — the frontend opens a server
     /// window and starts the native connection (used by local bridges/proxies).
     ScriptServer {
+        server_id: String,
         host: String,
         port: u16,
         pass: String,
+        new_window: bool,
     },
 
     // ---- Script-driven custom windows (@window) ----
@@ -287,10 +269,7 @@ pub enum UiEvent {
         title: String,
     },
     /// Close a custom window.
-    WindowClose {
-        server_id: String,
-        name: String,
-    },
+    WindowClose { server_id: String, name: String },
     /// A line operation on a custom window: `op` = add/insert/replace/delete/clear.
     WindowLine {
         server_id: String,
@@ -315,16 +294,15 @@ pub enum UiEvent {
         text: String,
     },
     /// A DCC chat connection closed.
-    DccChatClosed {
-        server_id: String,
-        id: String,
-    },
+    DccChatClosed { server_id: String, id: String },
     /// An incoming DCC CHAT offer the user can accept (connect to `ip:port`).
     DccChatOffer {
         server_id: String,
         nick: String,
         ip: String,
         port: u16,
+        /// mIRC passive DCC token (port is zero for an initial passive offer).
+        token: Option<u64>,
     },
     /// An incoming DCC SEND (file) offer the user can accept to download.
     DccFileOffer {
@@ -334,6 +312,8 @@ pub enum UiEvent {
         ip: String,
         port: u16,
         size: u64,
+        /// mIRC passive DCC token (port is zero for an initial passive offer).
+        token: Option<u64>,
     },
     /// Progress/state of a DCC file transfer, for the transfers UI. `status` is
     /// `active`/`done`/`error`; `kind` is `recv`/`send`.
@@ -349,10 +329,7 @@ pub enum UiEvent {
     },
     /// Our own host as the server sees it (from a USERHOST reply), for the DCC
     /// IP auto-detect.
-    DccLocalHost {
-        server_id: String,
-        host: String,
-    },
+    DccLocalHost { server_id: String, host: String },
 }
 
 #[cfg(test)]
@@ -378,5 +355,27 @@ mod tests {
         };
         let json = serde_json::to_string(&topic).unwrap();
         assert!(json.contains("\"setBy\":\"op\""), "{json}");
+
+        let script_server = UiEvent::ScriptServer {
+            server_id: "local".into(),
+            host: "127.0.0.1".into(),
+            port: 6667,
+            pass: String::new(),
+            new_window: false,
+        };
+        let json = serde_json::to_string(&script_server).unwrap();
+        assert!(json.contains("\"serverId\":\"local\""), "{json}");
+        assert!(json.contains("\"newWindow\":false"), "{json}");
+
+        let isupport = UiEvent::Isupport {
+            server_id: "s1".into(),
+            chan_types: "#&".into(),
+            prefixes: "@+".into(),
+            case_mapping: "rfc1459".into(),
+            status_msg: "@+".into(),
+        };
+        let json = serde_json::to_string(&isupport).unwrap();
+        assert!(json.contains("\"caseMapping\":\"rfc1459\""), "{json}");
+        assert!(json.contains("\"statusMsg\":\"@+\""), "{json}");
     }
 }

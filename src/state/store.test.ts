@@ -15,7 +15,7 @@ vi.mock("../lib/api", () => ({
 vi.mock("../lib/notify", () => ({ notify: vi.fn() }));
 
 import { api } from "../lib/api";
-import { useStore, bufferKey, STATUS } from "./store";
+import { useStore, bufferKey, ircCasefold, serverBufferKey, STATUS } from "./store";
 import { useSettings } from "./settings";
 
 const SID = "s1";
@@ -35,10 +35,80 @@ describe("connection lifecycle", () => {
   });
 });
 
+describe("IRC casemapping", () => {
+  it("implements RFC1459, strict RFC1459, and ASCII folding", () => {
+    expect(ircCasefold("Nick[\\^", "rfc1459")).toBe("nick{|~");
+    expect(ircCasefold("Nick[\\^", "strict-rfc1459")).toBe("nick{|^");
+    expect(ircCasefold("Nick[\\^", "ascii")).toBe("nick[\\^");
+  });
+
+  it("uses ASCII identity after the server advertises it", () => {
+    useStore.getState().handleEvent({
+      type: "isupport",
+      serverId: SID,
+      chanTypes: "#&",
+      prefixes: "~&@%+",
+      caseMapping: "ascii",
+      statusMsg: "@+",
+    });
+    expect(serverBufferKey(SID, "Nick[")).not.toBe(serverBufferKey(SID, "nick{"));
+  });
+});
+
 describe("channel routing", () => {
+  it("routes STATUSMSG targets into the bare channel buffer", () => {
+    const s = useStore.getState();
+    s.handleEvent({
+      type: "isupport",
+      serverId: SID,
+      chanTypes: "#&",
+      prefixes: "~&@%+",
+      caseMapping: "rfc1459",
+      statusMsg: "@+",
+    });
+    s.handleEvent({
+      type: "message",
+      serverId: SID,
+      kind: "notice",
+      from: "op",
+      target: "@#Room",
+      text: "operators only",
+      time: null,
+    });
+
+    const state = useStore.getState();
+    expect(state.buffers[bufferKey(SID, "#room")]?.lines.at(-1)?.text).toBe("operators only");
+    expect(state.buffers[bufferKey(SID, "@#room")]).toBeUndefined();
+  });
+
+  it("uses the advertised casemapping for channel buffer identity", () => {
+    const s = useStore.getState();
+    s.handleEvent({ type: "join", serverId: SID, channel: "#Room[", nick: "someone" });
+    s.handleEvent({
+      type: "message",
+      serverId: SID,
+      kind: "privmsg",
+      from: "someone",
+      target: "#room{",
+      text: "same RFC1459 channel",
+      time: null,
+    });
+
+    const channels = Object.values(useStore.getState().buffers).filter((b) => b.kind === "channel");
+    expect(channels).toHaveLength(1);
+    expect(channels[0].lines.at(-1)?.text).toBe("same RFC1459 channel");
+  });
+
   it("routes a % (IRCX) channel message to that channel window", () => {
     const s = useStore.getState();
-    s.handleEvent({ type: "isupport", serverId: SID, chanTypes: "%#", prefixes: "~&@%+" });
+    s.handleEvent({
+      type: "isupport",
+      serverId: SID,
+      chanTypes: "%#",
+      prefixes: "~&@%+",
+      caseMapping: "rfc1459",
+      statusMsg: "@+",
+    });
     s.handleEvent({
       type: "message",
       serverId: SID,
@@ -149,7 +219,14 @@ describe("channel membership", () => {
   it("sorts by server-advertised prefixes (IRCX .@+)", () => {
     useStore
       .getState()
-      .handleEvent({ type: "isupport", serverId: SID, chanTypes: "#&", prefixes: ".@+" });
+      .handleEvent({
+        type: "isupport",
+        serverId: SID,
+        chanTypes: "#&",
+        prefixes: ".@+",
+        caseMapping: "rfc1459",
+        statusMsg: "@+",
+      });
     useStore.getState().handleEvent({ type: "join", serverId: SID, channel: "#x", nick: "me" });
     useStore.getState().handleEvent({
       type: "names",
@@ -188,6 +265,13 @@ describe("channel membership", () => {
     useStore.getState().handleEvent({ type: "part", serverId: SID, channel: "#x", nick: "bob", reason: null });
     const members = useStore.getState().buffers[bufferKey(SID, "#x")].members;
     expect(members.map((m) => m.nick)).not.toContain("bob");
+  });
+
+  it("matches RFC1459-equivalent nick spellings in membership events", () => {
+    const s = useStore.getState();
+    s.handleEvent({ type: "join", serverId: SID, channel: "#x", nick: "User[" });
+    s.handleEvent({ type: "part", serverId: SID, channel: "#x", nick: "user{", reason: null });
+    expect(useStore.getState().buffers[bufferKey(SID, "#x")].members).toEqual([]);
   });
 });
 
