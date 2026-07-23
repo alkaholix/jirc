@@ -263,6 +263,8 @@ pub enum Action {
     DefineAlias {
         name: String,
         command: Option<String>,
+        file: Option<String>,
+        local: bool,
     },
     /// Fire `on SIGNAL` handlers matching `name` (`/signal`); `params` become `$1-`.
     Signal {
@@ -791,6 +793,8 @@ pub struct Runtime<'a> {
     pub halted: bool,
     pub steps: u32,
     pub depth: u32,
+    /// Active alias names; mIRC aliases cannot recurse directly or indirectly.
+    pub alias_stack: Vec<String>,
     /// Value set by `/return`, consumed when an alias is used as `$identifier`.
     pub ret: Option<String>,
     /// Pending `/goto` target, bubbled up until a body containing the label
@@ -1170,7 +1174,8 @@ impl<'a> Runtime<'a> {
                 let saved_show = self.show;
                 self.caller = "command";
                 self.show = !silent;
-                let ret = self.call_alias_in_source(&body, params, &source, source_line);
+                let ret =
+                    self.call_named_alias_in_source(lname, &body, params, &source, source_line);
                 self.vars.insert(RESULT_KEY.to_string(), ret);
                 self.caller = saved;
                 self.show = saved_show;
@@ -1493,17 +1498,40 @@ impl<'a> Runtime<'a> {
             }
             "parseline" => self.cmd_parseline(raw_args),
             "alias" => {
-                // `/alias <name> <command>` adds/replaces; `/alias <name>` (no
-                // command) removes. Single-line only. The command is stored
-                // unexpanded (identifiers resolve when the alias runs). A leading
-                // [filename] arg (mIRC) isn't supported — jIRC has one script set.
-                let raw = raw_args.trim();
-                let (name, command) = match raw.split_once(char::is_whitespace) {
-                    Some((n, c)) => (n.to_string(), Some(c.trim().to_string())),
-                    None => (raw.to_string(), None),
+                // `/alias [-l] [filename] <name> [command]`. The definition is
+                // evaluated once; `$!name` stores `$name` for invocation time.
+                let mut rest = raw_args.trim();
+                let mut local = false;
+                if rest
+                    .split_whitespace()
+                    .next()
+                    .is_some_and(|word| word.eq_ignore_ascii_case("-l"))
+                {
+                    local = true;
+                    rest = rest
+                        .split_once(char::is_whitespace)
+                        .map(|(_, tail)| tail.trim_start())
+                        .unwrap_or("");
+                }
+                let (first, tail) = take_file_arg(rest).unwrap_or_default();
+                let filename_form = first.to_ascii_lowercase().ends_with(".mrc")
+                    || first.to_ascii_lowercase().ends_with(".txt");
+                let (file, name, command_tail) = if filename_form {
+                    let (name, command_tail) = take_file_arg(tail).unwrap_or_default();
+                    (Some(first), name, command_tail)
+                } else {
+                    (None, first, tail)
                 };
+                let name = name.trim_start_matches('/').to_string();
+                let command =
+                    (!command_tail.trim().is_empty()).then(|| self.expand(command_tail.trim()));
                 if !name.is_empty() {
-                    self.actions.push(Action::DefineAlias { name, command });
+                    self.actions.push(Action::DefineAlias {
+                        name,
+                        command,
+                        file,
+                        local,
+                    });
                 }
             }
             "inc" => self.cmd_incdec(raw_args, 1),
@@ -1994,6 +2022,27 @@ impl<'a> Runtime<'a> {
         self.ret = saved_ret;
         // Restore the caller's halt state, but let a non-return /halt bubble up.
         self.halted = saved_halted || (halted_in_alias && !returned);
+        result
+    }
+
+    pub fn call_named_alias_in_source(
+        &mut self,
+        name: &str,
+        body: &[Stmt],
+        params: Vec<String>,
+        source: &str,
+        source_line: usize,
+    ) -> String {
+        if self
+            .alias_stack
+            .iter()
+            .any(|active| active.eq_ignore_ascii_case(name))
+        {
+            return String::new();
+        }
+        self.alias_stack.push(name.to_string());
+        let result = self.call_alias_in_source(body, params, source, source_line);
+        self.alias_stack.pop();
         result
     }
 
@@ -2638,7 +2687,8 @@ impl<'a> Runtime<'a> {
                 let mut at = sorted.len();
                 while at > 0 {
                     let cmp = self
-                        .call_alias_in_source(
+                        .call_named_alias_in_source(
+                            &alias,
                             &definition.body,
                             vec![line.clone(), sorted[at - 1].clone()],
                             &definition.source,

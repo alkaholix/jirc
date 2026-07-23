@@ -449,6 +449,7 @@ impl ScriptEngine {
             halted: false,
             steps: 0,
             depth: 0,
+            alias_stack: Vec::new(),
             ret: None,
             goto: None,
             data_dir: ctx.data_dir.clone(),
@@ -511,6 +512,7 @@ impl ScriptEngine {
             halted: false,
             steps: 0,
             depth: 0,
+            alias_stack: vec![alias.name.clone()],
             ret: None,
             goto: None,
             data_dir: ctx.data_dir.clone(),
@@ -713,6 +715,7 @@ impl ScriptEngine {
             halted: false,
             steps: 0,
             depth: 0,
+            alias_stack: Vec::new(),
             ret: None,
             goto: None,
             data_dir: ctx.data_dir.clone(),
@@ -945,6 +948,7 @@ impl ScriptEngine {
                         halted: false,
                         steps: 0,
                         depth: 0,
+                        alias_stack: Vec::new(),
                         ret: None,
                         goto: None,
                         data_dir: ctx.data_dir.clone(),
@@ -1687,7 +1691,15 @@ fn alias_line_defines(line: &str, name: &str) -> bool {
     line.trim_start()
         .strip_prefix("alias ")
         .map(|rest| {
-            rest.trim_start()
+            let mut words = rest.trim_start().split_whitespace();
+            let first = words.next().unwrap_or("");
+            let candidate = if first.eq_ignore_ascii_case("-l") {
+                words.next().unwrap_or("")
+            } else {
+                first
+            };
+            candidate
+                .trim_start_matches('/')
                 .split([' ', '\t', '{'])
                 .next()
                 .unwrap_or("")
@@ -1697,11 +1709,18 @@ fn alias_line_defines(line: &str, name: &str) -> bool {
 }
 
 /// Adds/replaces (`command` = Some) or removes (`command` = None) a single-line
-/// runtime alias (`/alias`) in `_runtime.mrc`, then recompiles so it takes effect.
-/// That file sorts first, so a runtime alias overrides a same-named one elsewhere.
-fn update_runtime_alias(app: &AppHandle, name: &str, command: Option<&str>) {
+/// runtime alias (`/alias`) in `_runtime.mrc` or the requested script file, then
+/// recompiles so it takes effect.
+fn update_runtime_alias(
+    app: &AppHandle,
+    name: &str,
+    command: Option<&str>,
+    file: Option<&str>,
+    local: bool,
+) {
     let Ok(dir) = scripts_dir(app) else { return };
-    let path = dir.join("_runtime.mrc");
+    let stem = file.map(script_stem).unwrap_or_else(|| "_runtime".into());
+    let path = dir.join(format!("{stem}.mrc"));
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let mut lines: Vec<String> = existing
         .lines()
@@ -1709,7 +1728,10 @@ fn update_runtime_alias(app: &AppHandle, name: &str, command: Option<&str>) {
         .map(String::from)
         .collect();
     if let Some(cmd) = command {
-        lines.push(format!("alias {name} {{ {cmd} }}"));
+        lines.push(format!(
+            "alias {}{name} {{ {cmd} }}",
+            if local { "-l " } else { "" }
+        ));
     }
     let mut out = lines.join("\n");
     if !out.is_empty() {
@@ -2063,8 +2085,13 @@ fn apply_actions_depth(
                     }
                 }
             }
-            Action::DefineAlias { name, command } => {
-                update_runtime_alias(app, &name, command.as_deref());
+            Action::DefineAlias {
+                name,
+                command,
+                file,
+                local,
+            } => {
+                update_runtime_alias(app, &name, command.as_deref(), file.as_deref(), local);
             }
             Action::Autojoin { .. } => {
                 // Only meaningful at connect time, where the connection task
@@ -3594,6 +3621,30 @@ mod tests {
     }
 
     #[test]
+    fn aliases_cannot_recurse_directly_or_indirectly() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias direct { msg #c before | direct | msg #c after }\n\
+             alias first { msg #c first | second }\n\
+             alias second { msg #c second | first }",
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "direct", ""),
+            vec![
+                Action::Send("PRIVMSG #c :before".into()),
+                Action::Send("PRIVMSG #c :after".into()),
+            ]
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "first", ""),
+            vec![
+                Action::Send("PRIVMSG #c :first".into()),
+                Action::Send("PRIVMSG #c :second".into()),
+            ]
+        );
+    }
+
+    #[test]
     fn bare_hash_resolves_to_current_channel() {
         let engine = ScriptEngine::new();
         engine.load("alias t { /msg # hello }");
@@ -3867,19 +3918,45 @@ mod tests {
     #[test]
     fn alias_command_emits_define_then_remove() {
         let engine = ScriptEngine::new();
-        // `/alias <name> <cmd>` defines (command stored unexpanded); `/alias <name>`
-        // alone removes.
+        // `/alias <name> <cmd>` defines (evaluating once); `/alias <name>` removes.
         engine.load("alias mk { alias greet /msg # hi $nick | alias greet }");
         assert_eq!(
             engine.run_alias(&ctx(), "#c", "mk", ""),
             vec![
                 Action::DefineAlias {
                     name: "greet".into(),
-                    command: Some("/msg # hi $nick".into()),
+                    command: Some("/msg #c hi me".into()),
+                    file: None,
+                    local: false,
                 },
                 Action::DefineAlias {
                     name: "greet".into(),
                     command: None,
+                    file: None,
+                    local: false,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn alias_command_accepts_local_filename_and_slash_forms() {
+        let engine = ScriptEngine::new();
+        engine.load("alias mk { alias -l helpers.mrc /local /echo $!1 | alias aliases.mrc /gone }");
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "mk", ""),
+            vec![
+                Action::DefineAlias {
+                    name: "local".into(),
+                    command: Some("/echo $1".into()),
+                    file: Some("helpers.mrc".into()),
+                    local: true,
+                },
+                Action::DefineAlias {
+                    name: "gone".into(),
+                    command: None,
+                    file: Some("aliases.mrc".into()),
+                    local: false,
                 },
             ]
         );

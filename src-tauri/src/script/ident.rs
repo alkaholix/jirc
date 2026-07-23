@@ -2275,7 +2275,13 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 let saved_prop = rt.vars.insert(PROP_KEY.to_string(), prop.to_string());
                 rt.caller = "identifier";
                 rt.show = true;
-                let result = rt.call_alias_in_source(&body, args.to_vec(), &source, source_line);
+                let result = rt.call_named_alias_in_source(
+                    other,
+                    &body,
+                    args.to_vec(),
+                    &source,
+                    source_line,
+                );
                 rt.vars
                     .insert(super::eval::RESULT_KEY.to_string(), result.clone());
                 rt.caller = saved;
@@ -4383,6 +4389,7 @@ mod tests {
             halted: false,
             steps: 0,
             depth: 0,
+            alias_stack: Vec::new(),
             ret: None,
             goto: None,
             data_dir: std::env::temp_dir(),
@@ -4702,6 +4709,7 @@ mod tests {
             halted: false,
             steps: 0,
             depth: 0,
+            alias_stack: Vec::new(),
             ret: None,
             goto: None,
             data_dir: dir.clone(),
@@ -4842,6 +4850,7 @@ mod tests {
             halted: false,
             steps: 0,
             depth: 0,
+            alias_stack: Vec::new(),
             ret: None,
             goto: None,
             data_dir: std::env::temp_dir(),

@@ -213,6 +213,33 @@ function App() {
     applyChatFont(chatFont, chatFontSize);
   }, [chatFont, chatFontSize]);
 
+  // mIRC function-key aliases: F1, sF2 (Shift), cF3 (Control), etc.
+  useEffect(() => {
+    const onFunctionKey = (event: KeyboardEvent) => {
+      if (!/^F(?:[1-9]|1[0-2])$/.test(event.key) || event.altKey || event.metaKey) return;
+      const buffer = useStore.getState().active
+        ? useStore.getState().buffers[useStore.getState().active!]
+        : undefined;
+      if (!buffer) return;
+      const server = useStore.getState().servers[buffer.serverId];
+      if (!server) return;
+      const alias = `${event.ctrlKey ? "c" : ""}${event.shiftKey ? "s" : ""}${event.key}`;
+      event.preventDefault();
+      api
+        .scriptRunAlias(
+          buffer.serverId,
+          buffer.name === STATUS ? "" : buffer.name,
+          server.nick,
+          server.name,
+          alias,
+          ""
+        )
+        .catch(() => {});
+    };
+    window.addEventListener("keydown", onFunctionKey);
+    return () => window.removeEventListener("keydown", onFunctionKey);
+  }, []);
+
   // Keep the backend DCC config (advertised IP + listen-port range) in sync.
   useEffect(() => {
     api.dccConfigure(dccIp, dccPortFrom, dccPortTo, dccPassive).catch(() => {});
