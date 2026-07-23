@@ -213,6 +213,13 @@ export const api = {
   /** Tell the engine which window/connection is focused ($active/$activecid). */
   scriptSetActive: (name: string, serverId: string) =>
     invoke("script_set_active", { name, serverId }),
+  scriptSetClientWindowState: (label: string, focused: boolean, appState: string) =>
+    invoke("script_set_client_window_state", { label, focused, appState }),
+  scriptSetClientPreferences: (
+    darkMode: boolean,
+    notifyList: string[],
+    notifyOnline: string[]
+  ) => invoke("script_set_client_preferences", { darkMode, notifyList, notifyOnline }),
   /** Register/unregister a window with the engine so it gets a `$wid`. */
   scriptWindowOpen: (serverId: string, name: string) =>
     invoke("script_window_open", { serverId, name }),

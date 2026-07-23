@@ -142,6 +142,8 @@ pub fn run() {
             script::users_auto_add,
             script::users_auto_remove,
             script::script_set_active,
+            script::script_set_client_window_state,
+            script::script_set_client_preferences,
             script::script_window_open,
             script::script_window_close,
             script::script_popups,

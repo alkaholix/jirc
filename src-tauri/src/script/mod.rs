@@ -88,6 +88,8 @@ struct Inner {
     conns: ConnReg,
     /// Numeric window-id registry for `$wid`/`$activewid`.
     wins: WinReg,
+    /// Native windows that currently report focus, for `$appactive`.
+    focused_windows: std::collections::HashSet<String>,
 }
 
 impl Inner {
@@ -111,6 +113,7 @@ impl Inner {
             active: String::new(),
             conns: ConnReg::default(),
             wins: WinReg::default(),
+            focused_windows: std::collections::HashSet::new(),
         }
     }
 }
@@ -364,6 +367,46 @@ impl ScriptEngine {
     /// Records which window is active (for `$activewid`).
     pub fn set_active_win(&self, server_id: &str, name: &str) {
         self.inner.lock().unwrap().wins.set_active(server_id, name);
+    }
+
+    pub fn set_client_window_state(&self, label: &str, focused: bool, app_state: &str) {
+        let mut inner = self.inner.lock().unwrap();
+        if focused {
+            inner.focused_windows.insert(label.to_string());
+        } else {
+            inner.focused_windows.remove(label);
+        }
+        let app_active = !inner.focused_windows.is_empty();
+        inner.vars.insert(
+            eval::CLIENT_APP_ACTIVE_KEY.into(),
+            if app_active { "$true" } else { "$false" }.into(),
+        );
+        if label == "main" {
+            inner
+                .vars
+                .insert(eval::CLIENT_APP_STATE_KEY.into(), app_state.to_string());
+        }
+    }
+
+    pub fn set_client_preferences(
+        &self,
+        dark_mode: bool,
+        notify_list: Vec<String>,
+        notify_online: Vec<String>,
+    ) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.vars.insert(
+            eval::CLIENT_DARK_MODE_KEY.into(),
+            if dark_mode { "$true" } else { "$false" }.into(),
+        );
+        inner.vars.insert(
+            eval::CLIENT_NOTIFY_LIST_KEY.into(),
+            notify_list.join("\u{1f}"),
+        );
+        inner.vars.insert(
+            eval::CLIENT_NOTIFY_ONLINE_KEY.into(),
+            notify_online.join("\u{1f}"),
+        );
     }
 
     /// Compiles the combined source of all loaded script files.
@@ -2917,6 +2960,31 @@ pub fn script_set_active(engine: State<'_, ScriptEngine>, name: String, server_i
     engine.set_active_win(&server_id, &name);
 }
 
+/// Records native-window and UI preference state used by client identifiers.
+#[tauri::command]
+pub fn script_set_client_window_state(
+    engine: State<'_, ScriptEngine>,
+    label: String,
+    focused: bool,
+    app_state: String,
+) {
+    let app_state = match app_state.as_str() {
+        "minimized" | "maximized" | "full" | "normal" | "hidden" | "tray" => app_state,
+        _ => "normal".into(),
+    };
+    engine.set_client_window_state(&label, focused, &app_state);
+}
+
+#[tauri::command]
+pub fn script_set_client_preferences(
+    engine: State<'_, ScriptEngine>,
+    dark_mode: bool,
+    notify_list: Vec<String>,
+    notify_online: Vec<String>,
+) {
+    engine.set_client_preferences(dark_mode, notify_list, notify_online);
+}
+
 /// The UI opened a window/buffer — assign its `$wid` and fire `on OPEN`.
 #[tauri::command]
 pub fn script_window_open(app: AppHandle, server_id: String, name: String) {
@@ -3515,6 +3583,43 @@ mod tests {
             data_dir: std::env::temp_dir(),
             state: std::sync::Arc::new(Default::default()),
         }
+    }
+
+    #[test]
+    fn client_state_and_notify_identifiers_follow_frontend_state() {
+        let engine = ScriptEngine::new();
+        engine.set_client_window_state("main", true, "maximized");
+        engine.set_client_preferences(true, vec!["Alice".into(), "Bob".into()], vec!["bob".into()]);
+        engine.load(
+            "alias inspect { echo -a $appactive $appstate $darkmode $notify $notify(0) $notify(1) $notify(bob) $notify(Alice).ison $notify(Bob).ison }",
+        );
+
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "inspect", ""),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "$true maximized $true $true 2 Alice 2 $false $true".into(),
+            }]
+        );
+
+        engine.set_client_window_state("detached-one", true, "normal");
+        engine.set_client_window_state("main", false, "normal");
+        engine.load("alias active { echo -a $appactive $appstate }");
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "active", ""),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "$true normal".into(),
+            }]
+        );
+        engine.set_client_window_state("detached-one", false, "hidden");
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "active", ""),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "$false normal".into(),
+            }]
+        );
     }
 
     #[test]

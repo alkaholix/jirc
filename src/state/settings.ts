@@ -111,14 +111,20 @@ export const useSettings = create<SettingsState>((set) => ({
     }),
 }));
 
-/** Applies the chosen theme to the document root. */
-export function applyTheme(theme: Theme) {
-  const resolved =
+/** Resolves the chosen theme to the colours currently shown by the client. */
+export function resolveTheme(theme: Theme): "dark" | "light" {
+  return (
     theme === "system"
       ? window.matchMedia("(prefers-color-scheme: light)").matches
         ? "light"
         : "dark"
-      : theme;
+      : theme
+  );
+}
+
+/** Applies the chosen theme to the document root. */
+export function applyTheme(theme: Theme) {
+  const resolved = resolveTheme(theme);
   document.documentElement.dataset.theme = resolved;
 }
 

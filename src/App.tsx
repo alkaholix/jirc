@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { api, IrcEvent, ServerProfile } from "./lib/api";
@@ -26,10 +26,16 @@ import { promptDialog } from "./state/prompt";
 import { routeDialogEvent } from "./state/dialogs";
 import { routeNickIconEvent } from "./state/nickIcons";
 import { routeAwayEvent } from "./state/away";
-import { pollNotify, routeNotifyEvent } from "./state/notify";
+import { pollNotify, routeNotifyEvent, useNotify } from "./state/notify";
 import { routeUrlEvent } from "./state/urlGrabber";
 import { routeModeEvent } from "./state/channelModes";
-import { applyTheme, applyCustomCss, applyChatFont, useSettings } from "./state/settings";
+import {
+  applyTheme,
+  resolveTheme,
+  applyCustomCss,
+  applyChatFont,
+  useSettings,
+} from "./state/settings";
 import { scriptServerAutoReconnect } from "./lib/profileValidation";
 import { routeToolbarEvent } from "./state/toolbar";
 import { ScriptToolbar } from "./components/ScriptToolbar";
@@ -40,6 +46,51 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 const ScriptDialog = lazy(() =>
   import("./components/ScriptDialog").then((module) => ({ default: module.ScriptDialog }))
 );
+
+function useClientWindowState() {
+  const tauriWindow = "__TAURI_INTERNALS__" in window ? getCurrentWindow() : null;
+
+  useEffect(() => {
+    if (!tauriWindow) return;
+    let stopped = false;
+
+    const report = async (focused: boolean) => {
+      const [minimized, maximized, fullscreen, visible] = await Promise.all([
+        tauriWindow.isMinimized(),
+        tauriWindow.isMaximized(),
+        tauriWindow.isFullscreen(),
+        tauriWindow.isVisible(),
+      ]);
+      if (stopped) return;
+      const appState = !visible
+        ? "hidden"
+        : minimized
+          ? "minimized"
+          : fullscreen
+            ? "full"
+            : maximized
+              ? "maximized"
+              : "normal";
+      await api.scriptSetClientWindowState(tauriWindow.label, focused, appState);
+    };
+    const onFocus = () => void report(true);
+    const onBlur = () => void report(false);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("blur", onBlur);
+    const unlistenResize = tauriWindow.onResized(() => void report(document.hasFocus()));
+    void report(document.hasFocus());
+
+    return () => {
+      stopped = true;
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("blur", onBlur);
+      void unlistenResize.then((unlisten) => unlisten());
+      void api.scriptSetClientWindowState(tauriWindow.label, false, "hidden");
+    };
+  }, [tauriWindow?.label]);
+
+  return tauriWindow;
+}
 
 function ScriptEditorDialog(props: { onClose: () => void; standalone?: boolean }) {
   return (
@@ -57,6 +108,12 @@ function MainApp() {
   const [autoJoinOpen, setAutoJoinOpen] = useState(false);
   const [detachedKey] = useState(() => thisWindowBufferKey());
   const theme = useSettings((s) => s.theme);
+  const notifyList = useSettings((s) => s.notifyList);
+  const notifyByServer = useNotify((s) => s.online);
+  const notifyOnline = useMemo(
+    () => [...new Set(Object.values(notifyByServer).flat())],
+    [notifyByServer]
+  );
   const customCss = useSettings((s) => s.customCss);
   const layout = useSettings((s) => s.layout);
   const chatFont = useSettings((s) => s.chatFont);
@@ -215,7 +272,10 @@ function MainApp() {
 
   useEffect(() => {
     applyTheme(theme);
-  }, [theme]);
+    api
+      .scriptSetClientPreferences(resolveTheme(theme) === "dark", notifyList, notifyOnline)
+      .catch(() => {});
+  }, [theme, notifyList, notifyOnline]);
 
   useEffect(() => {
     applyCustomCss(customCss);
@@ -422,8 +482,7 @@ function MainApp() {
 }
 
 function App() {
-  const tauriWindow =
-    "__TAURI_INTERNALS__" in window ? getCurrentWindow() : null;
+  const tauriWindow = useClientWindowState();
   if (tauriWindow?.label === "script-editor") {
     return (
       <ScriptEditorDialog

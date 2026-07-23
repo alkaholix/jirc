@@ -695,6 +695,8 @@ goes to the server.</div>
   <tr><td><code>$chan</code></td><td>the channel</td></tr>
   <tr><td><code>$target</code></td><td>the channel or query the event is about</td></tr>
   <tr><td><code>$active</code></td><td>the name of the window you have focused</td></tr>
+  <tr><td><code>$appactive</code> · <code>$appstate</code></td><td>whether any jIRC window is focused · main-window state (<code>normal</code>, <code>minimized</code>, <code>maximized</code>, <code>full</code>, or <code>hidden</code>)</td></tr>
+  <tr><td><code>$darkmode</code></td><td><code>$true</code> when jIRC's resolved theme is dark</td></tr>
   <tr><td><code>$cid</code> · <code>$activecid</code></td><td>this connection's number · the focused window's connection</td></tr>
   <tr><td><code>$scon(0)</code> · <code>$scon(N)</code></td><td>number of connections · the Nth connection's <code>$cid</code></td></tr>
   <tr><td><code>$wid</code> · <code>$activewid</code></td><td>this window's id · the focused window's id</td></tr>
@@ -704,6 +706,7 @@ goes to the server.</div>
   <tr><td><code>$cmdline</code></td><td>arguments passed when jIRC was launched</td></tr>
   <tr><td><code>$network</code></td><td>network name</td></tr>
   <tr><td><code>$server</code></td><td>server host</td></tr>
+  <tr><td><code>$notify</code> · <code>$notify(0)</code> · <code>$notify(N/nick)</code></td><td>notify-list enabled state, count, Nth nick, or nick position; properties: <code>.ison</code>, <code>.addr</code></td></tr>
   <tr><td><code>$time</code> · <code>$date</code> · <code>$ctime</code></td><td>current time / date / unix seconds</td></tr>
   <tr><td><code>$true</code> · <code>$false</code> · <code>$null</code></td><td>constants</td></tr>
 </table>

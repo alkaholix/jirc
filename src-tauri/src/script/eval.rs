@@ -310,6 +310,11 @@ pub const LASTINPUT_KEY: &str = "\u{0}lastinput";
 pub const LTIMER_KEY: &str = "\u{0}ltimer";
 /// Number of lines selected by the most recent `/filter` command.
 pub const FILTERED_KEY: &str = "\u{0}filtered";
+pub const CLIENT_APP_ACTIVE_KEY: &str = "\u{0}client-app-active";
+pub const CLIENT_APP_STATE_KEY: &str = "\u{0}client-app-state";
+pub const CLIENT_DARK_MODE_KEY: &str = "\u{0}client-dark-mode";
+pub const CLIENT_NOTIFY_LIST_KEY: &str = "\u{0}client-notify-list";
+pub const CLIENT_NOTIFY_ONLINE_KEY: &str = "\u{0}client-notify-online";
 
 /// Lifetime attached to a variable or hash item by mIRC's `-uN` switch.
 /// `Instant` keeps expiry independent of wall-clock changes; `EndOfRun` is

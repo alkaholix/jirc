@@ -726,6 +726,88 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "matchkey" => rt.event.match_key.clone(),
         "maddress" => rt.event.matched_address.clone(),
         "network" => rt.network.to_string(),
+        "appactive" => rt
+            .vars
+            .get(super::eval::CLIENT_APP_ACTIVE_KEY)
+            .cloned()
+            .unwrap_or_else(|| "$false".into()),
+        "appstate" => rt
+            .vars
+            .get(super::eval::CLIENT_APP_STATE_KEY)
+            .cloned()
+            .unwrap_or_else(|| "normal".into()),
+        "darkmode" => rt
+            .vars
+            .get(super::eval::CLIENT_DARK_MODE_KEY)
+            .cloned()
+            .unwrap_or_else(|| "$false".into()),
+        "notify" => {
+            let list = rt
+                .vars
+                .get(super::eval::CLIENT_NOTIFY_LIST_KEY)
+                .map(|value| {
+                    value
+                        .split('\u{1f}')
+                        .filter(|nick| !nick.is_empty())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let online = rt
+                .vars
+                .get(super::eval::CLIENT_NOTIFY_ONLINE_KEY)
+                .map(|value| value.split('\u{1f}').collect::<Vec<_>>())
+                .unwrap_or_default();
+
+            if args.is_empty() {
+                bool_str(!list.is_empty()).to_string()
+            } else {
+                let selector = a(0);
+                let property = prop.to_ascii_lowercase();
+                if selector == "0" {
+                    list.len().to_string()
+                } else {
+                    let numeric = selector.parse::<usize>().ok();
+                    let index = numeric
+                        .filter(|number| *number > 0 && *number <= list.len())
+                        .map(|number| number - 1)
+                        .or_else(|| {
+                            list.iter()
+                                .position(|nick| nick.eq_ignore_ascii_case(&selector))
+                        });
+
+                    if property.is_empty() {
+                        if numeric.is_some() {
+                            index
+                                .and_then(|position| list.get(position).copied())
+                                .unwrap_or_default()
+                                .to_string()
+                        } else {
+                            index.map(|position| position + 1).unwrap_or(0).to_string()
+                        }
+                    } else if let Some(position) = index {
+                        let nick = list[position];
+                        match property.as_str() {
+                            "ison" => bool_str(
+                                online
+                                    .iter()
+                                    .any(|online_nick| online_nick.eq_ignore_ascii_case(nick)),
+                            )
+                            .to_string(),
+                            "addr" => rt
+                                .state
+                                .ial
+                                .iter()
+                                .find(|(known_nick, _)| known_nick.eq_ignore_ascii_case(nick))
+                                .map(|(_, address)| address.clone())
+                                .unwrap_or_default(),
+                            _ => String::new(),
+                        }
+                    } else {
+                        String::new()
+                    }
+                }
+            }
+        }
         "server" => rt.server.to_string(),
         "cmdline" => process_command_line(std::env::args_os().skip(1)),
         "portable" => std::env::current_exe()

@@ -12,6 +12,23 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🪟 26.7.58 — Client-state scripting identifiers
+
+### Added
+- `$appactive` reports whether any jIRC window is focused, while `$appstate`
+  reports the main window as `normal`, `minimized`, `maximized`, `full`, or
+  `hidden`.
+- `$darkmode` follows the theme actually displayed by jIRC, including the
+  resolved operating-system theme when Settings uses `system`.
+- `$notify`, `$notify(0)`, `$notify(N/nick)`, `.ison`, and `.addr` expose the
+  configured notify list and its current ISON-backed online state.
+
+### Verified
+- Focused scripting tests, complete non-live Rust suite, frontend tests and
+  production builds.
+
+---
+
 ## 🧭 26.7.57 — Sandboxed path comparison
 
 ### Added
