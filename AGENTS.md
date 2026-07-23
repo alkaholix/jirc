@@ -32,6 +32,19 @@ feature set. Speaks standard IRC (RFC 1459/2812 + some IRCv3) and **IRCX**.
 - **Philosophy:** fast and simple. Prefer JSON over INI, avoid heavy abstractions,
   keep the protocol logic pure and unit-tested.
 
+## Permanent cross-platform non-goals
+
+jIRC is designed for Windows, macOS, and Linux. Do **not** propose or implement
+the following Windows-only mIRC extension APIs:
+
+- native DLL loading/calls (`/dll`, `$dll`, `$dllcall`);
+- COM/ActiveX automation (`$com`, `$comcall`, `$comval`, `/com*`);
+- DDE (`$dde`, `$ddename`, `$isdde`, `/dde`, `/ddeserver`).
+
+These are intentionally omitted, not missing work. Cross-platform replacements
+belong in jIRC's safe script commands, managed WebViews, sockets, script-defined
+UI, or a future sandboxed plugin API.
+
 ## Commands
 
 ```bash
