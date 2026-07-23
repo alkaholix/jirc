@@ -5128,7 +5128,7 @@ mod tests {
     fn custom_window_lines() {
         let engine = ScriptEngine::new();
         engine.load(
-            "alias n { /window @list | /aline @list one | /aline @list two | /rline @list 1 ONE | /msg #c $window(@list).lines $+ / $+ $line(@list,1) $+ / $+ $line(@list,2) }",
+            "alias n { /window @list | /aline @list one | /aline @list two | /rline @list 1 ONE | /sline @list 2 | /msg #c $window(@list).lines $+ / $+ $line(@list,1) $+ / $+ $line(@list,2) $+ / $+ $line(@list,2).state $+ / $+ $sline(@list,1) $+ / $+ $sline(@list,1).ln }",
         );
         let actions = engine.run_alias(&ctx(), "#c", "n", "");
         // The window ops also emit WindowOpen/WindowLine actions; check the /msg.
@@ -5139,7 +5139,14 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(sends, vec!["PRIVMSG #c :2/ONE/two"]);
+        assert_eq!(sends, vec!["PRIVMSG #c :2/ONE/two/1/two/2"]);
+
+        let edit = engine.run_command(&ctx(), "#c", "/window -e @input", &[]);
+        assert!(edit.iter().any(|action| matches!(
+            action,
+            Action::WindowOpen { name, kind, .. }
+                if name == "@input" && kind == "editbox"
+        )));
     }
 
     #[test]

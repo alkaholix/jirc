@@ -6,7 +6,7 @@
 //! also push `Action`s that `apply_actions` turns into `UiEvent`s so the frontend
 //! can mirror/render the window. Line positions are **1-based** (mIRC convention).
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 /// The display kind of a custom window (the default listbox also renders plain
 /// text lines).
@@ -32,6 +32,8 @@ pub struct Window {
     pub kind: WindowKind,
     pub title: String,
     pub lines: Vec<String>,
+    /// One-based selected line numbers for listbox windows.
+    pub selected: BTreeSet<usize>,
 }
 
 #[derive(Default)]
@@ -50,6 +52,7 @@ impl WindowStore {
             kind,
             title: title.to_string(),
             lines: Vec::new(),
+            selected: BTreeSet::new(),
         });
     }
 
@@ -77,6 +80,11 @@ impl WindowStore {
         if let Some(w) = self.windows.get_mut(&key(name)) {
             let idx = n.saturating_sub(1).min(w.lines.len());
             w.lines.insert(idx, text.to_string());
+            w.selected = w
+                .selected
+                .iter()
+                .map(|line| if *line >= idx + 1 { line + 1 } else { *line })
+                .collect();
         }
     }
 
@@ -94,6 +102,19 @@ impl WindowStore {
         if let Some(w) = self.windows.get_mut(&key(name)) {
             if let Some(i) = n.checked_sub(1).filter(|&i| i < w.lines.len()) {
                 w.lines.remove(i);
+                w.selected = w
+                    .selected
+                    .iter()
+                    .filter_map(|line| {
+                        if *line == i + 1 {
+                            None
+                        } else if *line > i + 1 {
+                            Some(line - 1)
+                        } else {
+                            Some(*line)
+                        }
+                    })
+                    .collect();
             }
         }
     }
@@ -102,7 +123,38 @@ impl WindowStore {
     pub fn clear(&mut self, name: &str) {
         if let Some(w) = self.windows.get_mut(&key(name)) {
             w.lines.clear();
+            w.selected.clear();
         }
+    }
+
+    /// `/sline` — select, add, or remove a one-based listbox line.
+    pub fn select(&mut self, name: &str, n: usize, add: bool, remove: bool) {
+        if let Some(w) = self.windows.get_mut(&key(name)) {
+            if !add && !remove {
+                w.selected.clear();
+            }
+            if n == 0 || n > w.lines.len() {
+                return;
+            }
+            if remove {
+                w.selected.remove(&n);
+            } else {
+                w.selected.insert(n);
+            }
+        }
+    }
+
+    pub fn selected_count(&self, name: &str) -> usize {
+        self.get(name).map_or(0, |w| w.selected.len())
+    }
+
+    pub fn selected_line(&self, name: &str, n: usize) -> Option<usize> {
+        self.get(name)
+            .and_then(|w| w.selected.iter().nth(n.saturating_sub(1)).copied())
+    }
+
+    pub fn is_selected(&self, name: &str, n: usize) -> bool {
+        self.get(name).is_some_and(|w| w.selected.contains(&n))
     }
 
     /// `$line(@w,N)` — the Nth line (1-based).
@@ -141,11 +193,16 @@ mod tests {
         assert_eq!(s.count("@list"), 3);
         assert_eq!(s.line("@list", 2), "two");
         s.rline("@list", 2, "TWO");
+        s.select("@list", 2, false, false);
+        assert!(s.is_selected("@list", 2));
+        assert_eq!(s.selected_line("@list", 1), Some(2));
         assert_eq!(s.line("@list", 2), "TWO");
         s.iline("@list", 1, "zero");
+        assert!(s.is_selected("@list", 3));
         assert_eq!(s.line("@list", 1), "zero");
         assert_eq!(s.count("@list"), 4);
         s.dline("@list", 1); // remove "zero"
+        assert!(s.is_selected("@list", 2));
         assert_eq!(s.line("@list", 1), "one");
         s.clear("@list");
         assert_eq!(s.count("@list"), 0);

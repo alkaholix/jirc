@@ -12,6 +12,24 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🪟 26.7.60 — Interactive custom windows
+
+### Added
+- `/window -e @name` now renders a real editbox while listbox and picture
+  windows no longer show an inappropriate chat input.
+- Custom listbox rows can be selected with the mouse; Ctrl/Cmd-click adds to
+  the selection.
+- `/sline`, `$sline(@name,N)`, `$sline(...).ln`, and
+  `$line(@name,N).state` expose and control the same one-based selection state.
+- Insert, delete, and clear operations keep script and visible selections in
+  sync.
+
+### Verified
+- Focused custom-window engine/store tests, complete frontend and non-live Rust
+  suites, production frontend build, and full Tauri release build.
+
+---
+
 ## 🎨 26.7.59 — Selectable mSL editor themes
 
 ### Added

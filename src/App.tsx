@@ -412,7 +412,9 @@ function MainApp() {
               <div className="main-body">
                 <div className="chat-pane">
                   <MessageList buffer={active} />
-                  <InputBar buffer={active} />
+                  {(active.kind !== "window" || active.windowKind === "editbox") && (
+                    <InputBar buffer={active} />
+                  )}
                 </div>
                 {active.kind === "channel" && <NickList buffer={active} />}
                 <ScriptPanels />

@@ -182,6 +182,20 @@ export function MessageList({ buffer }: { buffer: Buffer }) {
     setMenu(null);
   };
 
+  const selectWindowLine = (line: number, add: boolean) => {
+    if (buffer.kind !== "window" || buffer.windowKind !== "listbox") return;
+    api
+      .scriptRunCommand(
+        buffer.serverId,
+        buffer.name,
+        server?.nick ?? "",
+        server?.name ?? "",
+        "sline",
+        `${add ? "-a " : ""}${buffer.name} ${line}`
+      )
+      .catch(() => {});
+  };
+
   return (
     <div className="messages-wrap">
       {searchOpen && (
@@ -206,6 +220,9 @@ export function MessageList({ buffer }: { buffer: Buffer }) {
       <div className="messages" ref={parentRef} onScroll={onScroll} onContextMenu={openMenu}>
         <div style={{ height: virtualizer.getTotalSize(), position: "relative", width: "100%" }}>
           {virtualizer.getVirtualItems().map((vi) => {
+            const lineNumber = vi.index + 1;
+            const selected =
+              buffer.kind === "window" && (buffer.windowSelected ?? []).includes(lineNumber);
             const cls = matchSet.has(vi.index)
               ? vi.index === current
                 ? " match current"
@@ -216,8 +233,13 @@ export function MessageList({ buffer }: { buffer: Buffer }) {
                 key={vi.key}
                 data-index={vi.index}
                 ref={virtualizer.measureElement}
-                className={`msg-row${cls}`}
+                className={`msg-row${cls}${selected ? " window-selected" : ""}${
+                  buffer.kind === "window" && buffer.windowKind === "listbox"
+                    ? " window-list-row"
+                    : ""
+                }`}
                 style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${vi.start}px)` }}
+                onClick={(event) => selectWindowLine(lineNumber, event.ctrlKey || event.metaKey)}
               >
                 <LineRow line={lines[vi.index]} showTime={showTimestamps} selfColor={selfColor} />
               </div>

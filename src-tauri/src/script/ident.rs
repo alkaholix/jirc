@@ -1570,7 +1570,33 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         // $line(@name, N) — the Nth line of a custom window (1-based).
         "line" => {
             let n: usize = a(1).trim().parse().unwrap_or(0);
-            rt.windows.line(&a(0), n)
+            if n == 0 {
+                rt.windows.count(&a(0)).to_string()
+            } else if prop == "state" {
+                if rt.windows.is_selected(&a(0), n) {
+                    "1"
+                } else {
+                    "0"
+                }
+                .to_string()
+            } else {
+                rt.windows.line(&a(0), n)
+            }
+        }
+        // `$sline(@name,N)` — selected text/count; `.ln` is its source line.
+        "sline" => {
+            let name = a(0);
+            let n: usize = a(1).trim().parse().unwrap_or(0);
+            if n == 0 {
+                rt.windows.selected_count(&name).to_string()
+            } else if prop == "ln" {
+                rt.windows.selected_line(&name, n).unwrap_or(0).to_string()
+            } else {
+                rt.windows
+                    .selected_line(&name, n)
+                    .map(|line| rt.windows.line(&name, line))
+                    .unwrap_or_default()
+            }
         }
         // $replacex (single-pass, non-recursive replace of from/to pairs).
         "replacex" | "replacexcs" => {

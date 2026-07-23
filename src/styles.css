@@ -468,6 +468,16 @@ select {
 .msg-row.match.current {
   background: rgba(224, 175, 104, 0.32);
 }
+.window-list-row {
+  cursor: default;
+  user-select: none;
+}
+.window-list-row:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.msg-row.window-selected {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
 .messages {
   flex: 1;
   min-height: 0;

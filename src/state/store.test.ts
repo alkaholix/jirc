@@ -370,14 +370,23 @@ describe("custom @windows", () => {
     add("three");
     expect(winLines("@w")).toEqual(["one", "two", "three"]);
 
+    s.handleEvent({ type: "windowLine", serverId: SID, name: "@w", op: "select", n: 2, text: "" });
+    s.handleEvent({ type: "windowLine", serverId: SID, name: "@w", op: "selectAdd", n: 3, text: "" });
+    expect(useStore.getState().buffers[bufferKey(SID, "@w")]?.windowSelected).toEqual([2, 3]);
+
     s.handleEvent({ type: "windowLine", serverId: SID, name: "@w", op: "replace", n: 2, text: "TWO" });
     expect(winLines("@w")).toEqual(["one", "TWO", "three"]);
 
     s.handleEvent({ type: "windowLine", serverId: SID, name: "@w", op: "insert", n: 1, text: "zero" });
     expect(winLines("@w")).toEqual(["zero", "one", "TWO", "three"]);
+    expect(useStore.getState().buffers[bufferKey(SID, "@w")]?.windowSelected).toEqual([3, 4]);
 
     s.handleEvent({ type: "windowLine", serverId: SID, name: "@w", op: "delete", n: 1, text: "" });
     expect(winLines("@w")).toEqual(["one", "TWO", "three"]);
+    expect(useStore.getState().buffers[bufferKey(SID, "@w")]?.windowSelected).toEqual([2, 3]);
+
+    s.handleEvent({ type: "windowLine", serverId: SID, name: "@w", op: "deselect", n: 2, text: "" });
+    expect(useStore.getState().buffers[bufferKey(SID, "@w")]?.windowSelected).toEqual([3]);
 
     s.handleEvent({ type: "windowLine", serverId: SID, name: "@w", op: "clear", n: 0, text: "" });
     expect(winLines("@w")).toEqual([]);

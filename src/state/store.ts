@@ -41,6 +41,8 @@ export interface Buffer {
   mention: boolean;
   /** For a custom `@window` (kind "window"): its display kind (listbox/text/…). */
   windowKind?: string;
+  /** One-based selected rows in a custom listbox window. */
+  windowSelected?: number[];
 }
 
 export type IrcCaseMapping = "ascii" | "rfc1459" | "strict-rfc1459";
@@ -476,7 +478,13 @@ export const useStore = create<State>((set, get) => {
             case "insert": {
               const idx = Math.min(Math.max(ev.n - 1, 0), lines.length);
               lines.splice(idx, 0, mk(ev.text));
-              break;
+              return {
+                ...b,
+                lines,
+                windowSelected: (b.windowSelected ?? []).map((line) =>
+                  line >= idx + 1 ? line + 1 : line
+                ),
+              };
             }
             case "replace": {
               const i = ev.n - 1;
@@ -485,11 +493,35 @@ export const useStore = create<State>((set, get) => {
             }
             case "delete": {
               const i = ev.n - 1;
-              if (i >= 0 && i < lines.length) lines.splice(i, 1);
+              if (i >= 0 && i < lines.length) {
+                lines.splice(i, 1);
+                const selected = (b.windowSelected ?? [])
+                  .filter((line) => line !== ev.n)
+                  .map((line) => (line > ev.n ? line - 1 : line));
+                return { ...b, lines, windowSelected: selected };
+              }
               break;
             }
             case "clear":
-              return { ...b, lines: [] };
+              return { ...b, lines: [], windowSelected: [] };
+            case "select":
+              return {
+                ...b,
+                windowSelected: ev.n > 0 && ev.n <= lines.length ? [ev.n] : [],
+              };
+            case "selectAdd":
+              return {
+                ...b,
+                windowSelected:
+                  ev.n > 0 && ev.n <= lines.length
+                    ? [...new Set([...(b.windowSelected ?? []), ev.n])].sort((a, c) => a - c)
+                    : b.windowSelected,
+              };
+            case "deselect":
+              return {
+                ...b,
+                windowSelected: (b.windowSelected ?? []).filter((line) => line !== ev.n),
+              };
           }
           return { ...b, lines };
         });

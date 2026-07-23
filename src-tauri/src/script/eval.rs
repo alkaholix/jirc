@@ -1570,6 +1570,7 @@ impl<'a> Runtime<'a> {
             "rline" => self.cmd_window_line(raw_args, "replace"),
             "iline" => self.cmd_window_line(raw_args, "insert"),
             "dline" => self.cmd_window_line(raw_args, "delete"),
+            "sline" => self.cmd_window_select(raw_args),
             "clear" => self.cmd_window_clear(raw_args),
             "mkdir" => {
                 let dir = self.expand(raw_args);
@@ -1775,12 +1776,12 @@ impl<'a> Runtime<'a> {
             "updatenl" => self.cmd_updatenl(),
             // We evaluate any parameters (for identifier side effects) and stop.
             // `/run` is deliberately a no-op — jIRC never launches programs.
-            "clearall" | "close" | "sline" | "cline" | "fline" | "renwin" | "titlebar"
-            | "editbox" | "linesep" | "background" | "color" | "font" | "flash" | "beep"
-            | "ebeeps" | "speak" | "splay" | "sound" | "run" | "url" | "dns" | "debug" | "log"
-            | "logview" | "timestamp" | "donotdisturb" | "menubar" | "switchbar" | "treebar"
-            | "mdi" | "save" | "loadbuf" | "savebuf" | "showmirc" | "maximize" | "minimize"
-            | "creq" | "sreq" | "clipboard" | "resetidle" => {
+            "clearall" | "close" | "cline" | "fline" | "renwin" | "titlebar" | "editbox"
+            | "linesep" | "background" | "color" | "font" | "flash" | "beep" | "ebeeps"
+            | "speak" | "splay" | "sound" | "run" | "url" | "dns" | "debug" | "log" | "logview"
+            | "timestamp" | "donotdisturb" | "menubar" | "switchbar" | "treebar" | "mdi"
+            | "save" | "loadbuf" | "savebuf" | "showmirc" | "maximize" | "minimize" | "creq"
+            | "sreq" | "clipboard" | "resetidle" => {
                 let _ = self.expand(raw_args);
             }
             _ => {
@@ -3275,6 +3276,38 @@ impl<'a> Runtime<'a> {
             op: op.to_string(),
             n,
             text,
+        });
+    }
+
+    /// `/sline [-a|-r] @window N` — set/add/remove listbox selection.
+    fn cmd_window_select(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        let mut parts = expanded.split_whitespace();
+        let first = parts.next().unwrap_or("");
+        let (switches, name) = if first.starts_with('-') {
+            (first, parts.next().unwrap_or(""))
+        } else {
+            ("", first)
+        };
+        let n = parts.next().unwrap_or("").parse::<u32>().unwrap_or(0);
+        if !name.starts_with('@') || !self.windows.exists(name) {
+            return;
+        }
+        let add = switches.contains('a');
+        let remove = switches.contains('r');
+        self.windows.select(name, n as usize, add, remove);
+        self.actions.push(Action::WindowLine {
+            name: name.to_string(),
+            op: if remove {
+                "deselect"
+            } else if add {
+                "selectAdd"
+            } else {
+                "select"
+            }
+            .to_string(),
+            n,
+            text: String::new(),
         });
     }
 
