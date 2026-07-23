@@ -12,6 +12,36 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🧰 26.7.51 — mIRC parity, script UI, DCC fserve & flood protection
+
+### Added
+- **Script-defined toolbar buttons and docked panels.** Scripts can add safe
+  application controls with `/toolbar` and `/panel`; button commands retain
+  their defining script context and delayed `$!` evaluation.
+- **Sandboxed DCC file server.** `/fserve <nick> <maxgets> <homedir> [welcome]`
+  offers a standard DCC chat browser with `dir`, `cd`, `pwd`, `get`, and send
+  slots. Served files and welcome text are confined to `scriptdata`, including
+  canonical-path and traversal checks.
+- **Configurable outbound flood protection.** Settings → Server can enable or
+  disable throttling and choose the message/window limits (default: four
+  user/script lines per two seconds). Registration, authentication, and
+  protocol-generated replies bypass the user-output limiter.
+- A broad **mIRC/mSL parity pass** covering richer aliases/events/identifiers,
+  timed variables and hash tables, playback queues, binary and TLS sockets,
+  managed webviews, IAL/WHOX state, IRCv3 capability handling, SASL
+  EXTERNAL/SCRAM-SHA-256, TLS client certificates, and expanded DCC
+  resume/passive/retry behaviour.
+
+### Fixed
+- Windows test executables now carry the Common Controls v6 manifest dependency,
+  so the documented backend test command links and runs correctly.
+
+### Verified
+- Frontend tests and production build, the complete non-live Rust suite, and the
+  full Tauri release build pass with the new wiring.
+
+---
+
 ## 🧬 26.7.50 — Binary socket reads (`/sockread &binvar`)
 
 - Scripts can now read **binary** socket data byte-for-byte: **`/sockread &binvar`** (inside `on SOCKREAD`) puts the line's exact bytes into a binary variable, with no text/UTF-8 mangling. Parse it with `$bvar` / `$bfind`, build replies with `bset`, and send them with `/sockwrite name &binvar`. This is what binary protocols and crypto handshakes need — the text `/sockread %var` form is unchanged. New **Help → Sockets** section explains it with a before/after example.
