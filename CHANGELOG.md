@@ -12,6 +12,20 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 💬 26.7.55 — Query window identifier
+
+### Added
+- `$query(0)`, `$query(N)`, and `$query(nick)` enumerate open query windows for
+  the current connection, excluding status, channel, DCC, and custom windows.
+- `$query().wid`, `.cid`, `.addr`, and `.idle` use the live window registry,
+  connection IDs, IAL, and channel activity state.
+
+### Verified
+- Focused multi-server query test, complete non-live Rust suite, and production
+  frontend/help build.
+
+---
+
 ## 🪟 26.7.54 — Previous active window identifiers
 
 ### Added

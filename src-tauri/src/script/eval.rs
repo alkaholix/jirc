@@ -767,7 +767,9 @@ impl WinView {
     }
 
     pub fn entry_for_wid(&self, wid: u32) -> Option<&(u32, String, String)> {
-        self.entries.iter().find(|(candidate, _, _)| *candidate == wid)
+        self.entries
+            .iter()
+            .find(|(candidate, _, _)| *candidate == wid)
     }
 }
 

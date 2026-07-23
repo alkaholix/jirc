@@ -5284,6 +5284,55 @@ mod tests {
     }
 
     #[test]
+    fn query_identifier_uses_open_windows_and_live_state() {
+        let engine = ScriptEngine::new();
+        engine.assign_cid("s1");
+        engine.assign_cid("s2");
+        engine.window_open("s1", "Status Window");
+        engine.window_open("s1", "#channel");
+        engine.window_open("s1", "@custom");
+        let bob_wid = engine.window_open("s1", "Bob");
+        engine.window_open("s2", "Alice");
+
+        let activity = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            .saturating_sub(4);
+        let snap = crate::irc::state::StateSnapshot {
+            server_id: "s1".into(),
+            ial: vec![("Bob".into(), "Bob!user@example.test".into())],
+            channels: vec![crate::irc::state::ChannelView {
+                name: "#channel".into(),
+                member_activity: vec![("bOB".into(), activity)],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let query_ctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(snap),
+        };
+        engine.load(
+            "alias q { echo -a $query(0) $query(1) $query(bob).wid $query(BOB).cid $query(bob).addr $query(bob).idle }",
+        );
+        let actions = engine.run_alias(&query_ctx, "", "q", "");
+        let Action::Echo { text, .. } = &actions[0] else {
+            panic!("expected echo");
+        };
+        let fields: Vec<&str> = text.split_whitespace().collect();
+        assert_eq!(fields[0], "1");
+        assert_eq!(fields[1], "Bob");
+        assert_eq!(fields[2], bob_wid.to_string());
+        assert_eq!(fields[3], "1");
+        assert_eq!(fields[4], "Bob!user@example.test");
+        assert!(matches!(fields[5].parse::<u64>(), Ok(4..=6)));
+    }
+
+    #[test]
     fn scon_scid_dispatch() {
         let engine = ScriptEngine::new();
         engine.assign_cid("s1");

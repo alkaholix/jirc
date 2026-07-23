@@ -213,6 +213,72 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             .filter(|cid| *cid != 0)
             .map(|cid| cid.to_string())
             .unwrap_or_default(),
+        "query" => {
+            let queries: Vec<&(u32, String, String)> = rt
+                .wins
+                .entries
+                .iter()
+                .filter(|(_, server_id, window)| {
+                    server_id == &rt.state.server_id
+                        && !window.eq_ignore_ascii_case("Status Window")
+                        && !window.eq_ignore_ascii_case("(status)")
+                        && !window.starts_with('@')
+                        && !window.starts_with('=')
+                        && !window
+                            .chars()
+                            .next()
+                            .is_some_and(|prefix| rt.state.isupport.chan_types.contains(prefix))
+                })
+                .collect();
+            let selector = a(0);
+            if selector == "0" {
+                queries.len().to_string()
+            } else {
+                let entry = selector
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|n| n.checked_sub(1))
+                    .and_then(|index| queries.get(index).copied())
+                    .or_else(|| {
+                        queries
+                            .iter()
+                            .copied()
+                            .find(|(_, _, window)| rt.state.isupport.names_equal(window, &selector))
+                    });
+                entry.map_or_else(String::new, |(wid, server_id, window)| {
+                    match prop.to_ascii_lowercase().as_str() {
+                        "" => window.clone(),
+                        "wid" => wid.to_string(),
+                        "cid" => match rt.conns.cid_of(server_id) {
+                            0 => String::new(),
+                            cid => cid.to_string(),
+                        },
+                        "addr" => rt
+                            .state
+                            .ial
+                            .iter()
+                            .find(|(nick, _)| rt.state.isupport.names_equal(nick, window))
+                            .map(|(_, address)| address.clone())
+                            .unwrap_or_default(),
+                        "idle" => rt
+                            .state
+                            .channels
+                            .iter()
+                            .filter_map(|channel| {
+                                channel
+                                    .member_activity
+                                    .iter()
+                                    .find(|(nick, _)| rt.state.isupport.names_equal(nick, window))
+                                    .map(|(_, activity)| *activity)
+                            })
+                            .max()
+                            .map(|activity| now_secs().saturating_sub(activity).to_string())
+                            .unwrap_or_default(),
+                        _ => String::new(),
+                    }
+                })
+            }
+        }
         "chat" | "send" | "get" => eval_dcc_ident(rt, name, args, prop),
         "onchan" => {
             // $onchan(#chan) -> are you in that channel?
