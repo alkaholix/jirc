@@ -32,6 +32,8 @@ import { routeUrlEvent } from "./state/urlGrabber";
 import { routeModeEvent } from "./state/channelModes";
 import { applyTheme, applyCustomCss, applyChatFont, useSettings } from "./state/settings";
 import { scriptServerAutoReconnect } from "./lib/profileValidation";
+import { routeToolbarEvent } from "./state/toolbar";
+import { ScriptToolbar } from "./components/ScriptToolbar";
 
 function App() {
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -67,6 +69,7 @@ function App() {
       routeNotifyEvent(e.payload);
       routeUrlEvent(e.payload);
       routeModeEvent(e.payload);
+      routeToolbarEvent(e.payload);
       // Approve/decline an incoming DCC chat — prompt once, in the main window.
       if (e.payload.type === "dccChatOffer" && detachedKey === null) {
         const o = e.payload;
@@ -276,6 +279,7 @@ function App() {
     <div className={`app layout-${layout}`}>
       {layout === "tree" ? <Sidebar {...actions} /> : <SwitchBar {...actions} />}
       <main className="main">
+        <ScriptToolbar />
         {active ? (
           activePoppedOut ? (
             <div className="welcome">

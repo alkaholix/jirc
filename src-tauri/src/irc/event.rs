@@ -260,6 +260,17 @@ pub enum UiEvent {
         new_window: bool,
     },
 
+    /// A script changed the application toolbar.
+    Toolbar {
+        server_id: String,
+        op: String,
+        name: String,
+        tooltip: String,
+        icon: String,
+        command: String,
+        source: String,
+    },
+
     // ---- Script-driven custom windows (@window) ----
     /// Open/create a custom window.
     WindowOpen {

@@ -310,6 +310,16 @@ export type IrcEvent =
   | { type: "echo"; serverId: string; target: string; text: string }
   | { type: "scriptServer"; serverId: string; host: string; port: number; pass: string; newWindow: boolean }
   | {
+      type: "toolbar";
+      serverId: string;
+      op: string;
+      name: string;
+      tooltip: string;
+      icon: string;
+      command: string;
+      source: string;
+    }
+  | {
       type: "isupport";
       serverId: string;
       chanTypes: string;

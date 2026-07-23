@@ -80,6 +80,15 @@ pub enum Action {
         target: String,
         name: String,
     },
+    /// Add/update/delete script-defined application toolbar buttons.
+    Toolbar {
+        op: String,
+        name: String,
+        tooltip: String,
+        icon: String,
+        command: String,
+        source: String,
+    },
     /// Open a TCP socket (`/sockopen`); `tls` for `-e` (encrypted).
     SockOpen {
         name: String,
@@ -1154,6 +1163,7 @@ impl<'a> Runtime<'a> {
         }
         match lname {
             "echo" => self.cmd_echo(raw_args),
+            "toolbar" => self.cmd_toolbar(raw_args),
             "say" => {
                 let text = self.expand(raw_args);
                 let target = self.reply_target();
@@ -1697,9 +1707,9 @@ impl<'a> Runtime<'a> {
             "clearall" | "close" | "sline" | "cline" | "fline" | "renwin" | "titlebar"
             | "editbox" | "linesep" | "background" | "color" | "font" | "flash" | "beep"
             | "ebeeps" | "speak" | "splay" | "sound" | "run" | "url" | "dns" | "debug" | "log"
-            | "logview" | "timestamp" | "donotdisturb" | "toolbar" | "menubar" | "switchbar"
-            | "treebar" | "mdi" | "save" | "loadbuf" | "savebuf" | "showmirc" | "maximize"
-            | "minimize" | "creq" | "sreq" | "clipboard" | "resetidle" => {
+            | "logview" | "timestamp" | "donotdisturb" | "menubar" | "switchbar" | "treebar"
+            | "mdi" | "save" | "loadbuf" | "savebuf" | "showmirc" | "maximize" | "minimize"
+            | "creq" | "sreq" | "clipboard" | "resetidle" => {
                 let _ = self.expand(raw_args);
             }
             _ => {
@@ -3526,6 +3536,85 @@ impl<'a> Runtime<'a> {
             pass,
             new_window,
         });
+    }
+
+    /// Cross-platform subset of mIRC `/toolbar`: add, delete, clear, and update
+    /// tooltip/icon/command. Quoted fields preserve spaces.
+    fn cmd_toolbar(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        let mut rest = expanded.trim();
+        let (switches, more) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        if !switches.starts_with('-') {
+            return;
+        }
+        rest = more.trim_start();
+        let flags = switches.trim_start_matches('-');
+        if flags.contains('c') {
+            self.actions.push(Action::Toolbar {
+                op: "clear".into(),
+                name: String::new(),
+                tooltip: String::new(),
+                icon: String::new(),
+                command: String::new(),
+                source: self.event.script_source.clone(),
+            });
+            return;
+        }
+        let Some((name, tail)) = take_file_arg(rest) else {
+            return;
+        };
+        if flags.contains('d') {
+            self.actions.push(Action::Toolbar {
+                op: "delete".into(),
+                name,
+                tooltip: String::new(),
+                icon: String::new(),
+                command: String::new(),
+                source: self.event.script_source.clone(),
+            });
+            return;
+        }
+        if flags.contains('a') || flags.contains('i') {
+            let Some((tooltip, next)) = take_file_arg(tail) else {
+                return;
+            };
+            let Some((icon, next)) = take_file_arg(next) else {
+                return;
+            };
+            let Some((command, _)) = take_file_arg(next) else {
+                return;
+            };
+            self.actions.push(Action::Toolbar {
+                op: "upsert".into(),
+                name,
+                tooltip,
+                icon,
+                command,
+                source: self.event.script_source.clone(),
+            });
+            return;
+        }
+        let (op, value) = if flags.contains('t') {
+            ("tooltip", take_file_arg(tail).map(|v| v.0))
+        } else if flags.contains('p') {
+            ("icon", take_file_arg(tail).map(|v| v.0))
+        } else if flags.contains('l') {
+            ("command", take_file_arg(tail).map(|v| v.0))
+        } else {
+            return;
+        };
+        if let Some(value) = value {
+            self.actions.push(Action::Toolbar {
+                op: op.into(),
+                name,
+                tooltip: (op == "tooltip")
+                    .then_some(value.clone())
+                    .unwrap_or_default(),
+                icon: (op == "icon").then_some(value.clone()).unwrap_or_default(),
+                command: (op == "command").then_some(value).unwrap_or_default(),
+                source: self.event.script_source.clone(),
+            });
+        }
     }
 
     fn cmd_socklisten(&mut self, raw: &str) {

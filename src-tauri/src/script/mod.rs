@@ -2111,6 +2111,27 @@ fn apply_actions_depth(
                     },
                 );
             }
+            Action::Toolbar {
+                op,
+                name,
+                tooltip,
+                icon,
+                command,
+                source,
+            } => {
+                let _ = app.emit(
+                    IRC_EVENT,
+                    UiEvent::Toolbar {
+                        server_id: server_id.to_string(),
+                        op,
+                        name,
+                        tooltip,
+                        icon,
+                        command,
+                        source,
+                    },
+                );
+            }
             Action::WindowClose { name } => {
                 let _ = app.emit(
                     IRC_EVENT,
@@ -3806,6 +3827,64 @@ mod tests {
                 Action::DefineAlias {
                     name: "greet".into(),
                     command: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn toolbar_add_update_delete_and_clear_produce_ui_actions() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias tools { \
+               toolbar -a Cow \"Moo moo!\" 🐄 \"/echo -a clicked $!1\" | \
+               toolbar -t Cow \"New tip\" | \
+               toolbar -l Cow \"/echo -a changed\" | \
+               toolbar -d Cow | toolbar -c \
+             }",
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "tools", ""),
+            vec![
+                Action::Toolbar {
+                    op: "upsert".into(),
+                    name: "Cow".into(),
+                    tooltip: "Moo moo!".into(),
+                    icon: "🐄".into(),
+                    command: "/echo -a clicked $1".into(),
+                    source: "<memory>".into(),
+                },
+                Action::Toolbar {
+                    op: "tooltip".into(),
+                    name: "Cow".into(),
+                    tooltip: "New tip".into(),
+                    icon: String::new(),
+                    command: String::new(),
+                    source: "<memory>".into(),
+                },
+                Action::Toolbar {
+                    op: "command".into(),
+                    name: "Cow".into(),
+                    tooltip: String::new(),
+                    icon: String::new(),
+                    command: "/echo -a changed".into(),
+                    source: "<memory>".into(),
+                },
+                Action::Toolbar {
+                    op: "delete".into(),
+                    name: "Cow".into(),
+                    tooltip: String::new(),
+                    icon: String::new(),
+                    command: String::new(),
+                    source: "<memory>".into(),
+                },
+                Action::Toolbar {
+                    op: "clear".into(),
+                    name: String::new(),
+                    tooltip: String::new(),
+                    icon: String::new(),
+                    command: String::new(),
+                    source: "<memory>".into(),
                 },
             ]
         );

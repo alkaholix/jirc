@@ -197,6 +197,40 @@ input:focus {
   background: var(--panel2);
 }
 
+.script-toolbar {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.55rem;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  flex: 0 0 auto;
+}
+.script-toolbar-button {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0.2rem 0.45rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  white-space: nowrap;
+}
+.script-toolbar-button:hover {
+  border-color: var(--accent);
+  background: var(--panel2);
+}
+.script-toolbar-button img {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}
+
 select {
   background: var(--bg2);
   border: 1px solid var(--border);
