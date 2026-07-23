@@ -5073,6 +5073,20 @@ mod tests {
     }
 
     #[test]
+    fn process_identifiers_expand_without_platform_specific_state() {
+        let engine = ScriptEngine::new();
+        let actions =
+            engine.run_command(&ctx(), "#c", "/msg #c portable=$portable cmd=$cmdline", &[]);
+        let [Action::Send(line)] = actions.as_slice() else {
+            panic!("expected one outgoing message");
+        };
+        assert!(
+            line.starts_with("PRIVMSG #c :portable=$true cmd=")
+                || line.starts_with("PRIVMSG #c :portable=$false cmd=")
+        );
+    }
+
+    #[test]
     fn ialchan_filters_ial_by_channel() {
         use crate::irc::state::{ChannelView, StateSnapshot};
         let snap = StateSnapshot {

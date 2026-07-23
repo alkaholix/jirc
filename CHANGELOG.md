@@ -12,6 +12,19 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🧳 26.7.56 — Process and portable identifiers
+
+### Added
+- `$portable` reports whether the running jIRC executable has a `portable.txt`
+  marker beside it, matching jIRC's actual portable-install rule.
+- `$cmdline` returns the launch arguments in their original order.
+
+### Verified
+- Pure portable/command-line tests, an engine expansion test, the complete
+  non-live Rust suite, and production frontend/help build.
+
+---
+
 ## 💬 26.7.55 — Query window identifier
 
 ### Added

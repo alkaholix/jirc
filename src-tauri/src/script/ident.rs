@@ -727,6 +727,13 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "maddress" => rt.event.matched_address.clone(),
         "network" => rt.network.to_string(),
         "server" => rt.server.to_string(),
+        "cmdline" => process_command_line(std::env::args_os().skip(1)),
+        "portable" => std::env::current_exe()
+            .ok()
+            .is_some_and(|exe| portable_from_executable(&exe))
+            .then_some("$true")
+            .unwrap_or("$false")
+            .to_string(),
         "true" => "$true".to_string(),
         "false" => "$false".to_string(),
         "null" => String::new(),
@@ -2405,6 +2412,23 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             String::new()
         }
     }
+}
+
+fn process_command_line<I, S>(args: I) -> String
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    args.into_iter()
+        .map(|arg| arg.as_ref().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn portable_from_executable(executable: &std::path::Path) -> bool {
+    executable
+        .parent()
+        .is_some_and(|directory| directory.join("portable.txt").is_file())
 }
 
 fn channel_names_equal(state: &crate::irc::state::StateSnapshot, known: &str, query: &str) -> bool {
@@ -5211,5 +5235,25 @@ mod tests {
         // $r letter range stays within bounds
         let r = e("r", &["a", "a"]);
         assert_eq!(r, "a");
+    }
+
+    #[test]
+    fn process_command_line_preserves_argument_order() {
+        assert_eq!(
+            process_command_line(["--profile", "Work IRC", "--portable"]),
+            "--profile Work IRC --portable"
+        );
+        assert_eq!(process_command_line(std::iter::empty::<&str>()), "");
+    }
+
+    #[test]
+    fn portable_marker_is_checked_beside_the_executable() {
+        let root = std::env::temp_dir().join(format!("jirc-portable-ident-{}", std::process::id()));
+        let executable = root.join("bin").join("jirc-test");
+        std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        assert!(!portable_from_executable(&executable));
+        std::fs::write(executable.parent().unwrap().join("portable.txt"), "").unwrap();
+        assert!(portable_from_executable(&executable));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
