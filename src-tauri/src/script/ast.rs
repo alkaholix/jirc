@@ -276,6 +276,32 @@ impl Script {
         out
     }
 
+    /// Loaded filenames containing at least one alias, in load order.
+    pub fn alias_source_files(&self) -> Vec<&str> {
+        let mut out = Vec::new();
+        for source in &self.sources {
+            if self
+                .aliases
+                .iter()
+                .any(|alias| alias.source.eq_ignore_ascii_case(source))
+            {
+                out.push(source.as_str());
+            }
+        }
+        if out.is_empty() {
+            for alias in &self.aliases {
+                if !alias.source.is_empty()
+                    && !out
+                        .iter()
+                        .any(|known: &&str| known.eq_ignore_ascii_case(&alias.source))
+                {
+                    out.push(alias.source.as_str());
+                }
+            }
+        }
+        out
+    }
+
     /// Returns the popup items defined for `context` (and `*`-wildcard menus).
     pub fn popup_items(&self, context: &str) -> Vec<PopupItem> {
         let context = context.to_ascii_lowercase();

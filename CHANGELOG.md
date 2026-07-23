@@ -12,6 +12,19 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🧮 26.7.53 — Alias file identifier
+
+### Added
+- mIRC-compatible `$alias(N/filename)`: count loaded alias files, return the Nth
+  filename, or test a filename case-insensitively. Event-only script files are
+  correctly excluded.
+
+### Verified
+- The focused `$alias` compatibility test, complete non-live Rust suite, and
+  production frontend/help build pass.
+
+---
+
 ## 🧩 26.7.52 — Alias compatibility & detachable script editor
 
 ### Added

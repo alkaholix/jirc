@@ -4588,6 +4588,26 @@ mod tests {
     }
 
     #[test]
+    fn alias_identifier_lists_only_alias_source_files() {
+        let engine = ScriptEngine::new();
+        engine.load_sources(&[
+            (
+                "one.mrc".into(),
+                "alias show echo -a $alias(0) $alias(1) $alias(2) $alias(two.MRC)".into(),
+            ),
+            ("events.mrc".into(), "on *:CONNECT:/echo connected".into()),
+            ("Two.mrc".into(), "alias -l helper return ok".into()),
+        ]);
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "show", ""),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "2 one.mrc Two.mrc Two.mrc".into(),
+            }]
+        );
+    }
+
+    #[test]
     fn custom_identifier_alias_returns_value() {
         let engine = ScriptEngine::new();
         engine

@@ -616,6 +616,27 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 }
             }
         }
+        // $alias(N/filename) lists loaded files containing aliases.
+        "alias" => {
+            let sources = rt.script.alias_source_files();
+            let selector = a(0);
+            if selector == "0" {
+                sources.len().to_string()
+            } else if let Ok(n) = selector.parse::<usize>() {
+                n.checked_sub(1)
+                    .and_then(|index| sources.get(index))
+                    .copied()
+                    .unwrap_or("")
+                    .to_string()
+            } else {
+                sources
+                    .iter()
+                    .find(|source| source.eq_ignore_ascii_case(&selector))
+                    .copied()
+                    .unwrap_or("")
+                    .to_string()
+            }
+        }
         "scriptline" => match rt.event.script_line {
             0 => String::new(),
             line => line.to_string(),
