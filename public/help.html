@@ -659,6 +659,7 @@ each time you interact, so <code>$did</code> always reads the current form state
   <tr><td><code>/dialog /did</code></td><td>Open/manage a custom dialog (see Dialogs).</td></tr>
   <tr><td><code>/nickicon nick icon</code></td><td>Badge a nick in the nick list (emoji or image URL).</td></tr>
   <tr><td><code>/toolbar -a name "tip" icon "/command $!1"</code></td><td>Add or replace a script toolbar button. Also supports <code>-d</code> delete, <code>-c</code> clear, and <code>-t</code>/<code>-p</code>/<code>-l</code> updates. Icons may be text/emoji or an image URL; clicking supplies the button name as <code>$1</code> (use delayed <code>$!1</code> when defining it).</td></tr>
+  <tr><td><code>/panel -a name "title"</code></td><td>Create a safe docked script panel. Add text with <code>-t name id "text"</code>, buttons with <code>-b name id "label" "/command $!1"</code>, delete an item/panel with <code>-d</code>, or clear all panels with <code>-c</code>.</td></tr>
   <tr><td><code>/timer[name] reps secs cmd</code></td><td>Schedule a command (named; see Timers).</td></tr>
   <tr><td><code>/return value</code></td><td>Return a value from an alias.</td></tr>
   <tr><td><code>/goto label</code></td><td>Jump to a <code>:label</code> (see Control flow).</td></tr>
@@ -1027,7 +1028,7 @@ Some aren't in the reference tables above yet.
 Planned or possible future work — scripts using these won't work today:
 <ul style="margin:.5rem 0 0">
   <li>DCC server / fileserver (<code>/dccserver</code>, <code>/fserve</code>).</li>
-  <li>Picture / drawing <code>@windows</code> and script-defined application panels.</li>
+  <li>Picture / drawing <code>@windows</code> and richer script panel controls beyond text and buttons.</li>
   <li>A few <strong>property suffixes</strong> such as <code>$chan(#).topic</code> — most
     now work, just not every one.</li>
   <li>A long tail of rarely-used identifiers, and Windows-only bits (COM/DLL/DDE).</li>

@@ -231,6 +231,39 @@ input:focus {
   object-fit: contain;
 }
 
+.script-panels {
+  width: 240px;
+  flex: 0 0 240px;
+  overflow-y: auto;
+  background: var(--bg2);
+  border-left: 1px solid var(--border);
+}
+.script-panel {
+  border-bottom: 1px solid var(--border);
+}
+.script-panel h3 {
+  margin: 0;
+  padding: 0.55rem 0.65rem;
+  color: var(--accent);
+  font-size: 0.82rem;
+}
+.script-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0 0.65rem 0.65rem;
+}
+.script-panel-text {
+  color: var(--fg);
+  font-size: 0.82rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.script-panel button {
+  width: 100%;
+  text-align: left;
+}
+
 select {
   background: var(--bg2);
   border: 1px solid var(--border);

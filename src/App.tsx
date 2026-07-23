@@ -34,6 +34,8 @@ import { applyTheme, applyCustomCss, applyChatFont, useSettings } from "./state/
 import { scriptServerAutoReconnect } from "./lib/profileValidation";
 import { routeToolbarEvent } from "./state/toolbar";
 import { ScriptToolbar } from "./components/ScriptToolbar";
+import { routePanelEvent } from "./state/panels";
+import { ScriptPanels } from "./components/ScriptPanels";
 
 function App() {
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -70,6 +72,7 @@ function App() {
       routeUrlEvent(e.payload);
       routeModeEvent(e.payload);
       routeToolbarEvent(e.payload);
+      routePanelEvent(e.payload);
       // Approve/decline an incoming DCC chat — prompt once, in the main window.
       if (e.payload.type === "dccChatOffer" && detachedKey === null) {
         const o = e.payload;
@@ -306,6 +309,7 @@ function App() {
                   <InputBar buffer={active} />
                 </div>
                 {active.kind === "channel" && <NickList buffer={active} />}
+                <ScriptPanels />
               </div>
             </>
           )

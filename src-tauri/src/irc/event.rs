@@ -270,6 +270,17 @@ pub enum UiEvent {
         command: String,
         source: String,
     },
+    /// A script changed safe docked panel UI.
+    Panel {
+        server_id: String,
+        op: String,
+        panel: String,
+        id: String,
+        label: String,
+        value: String,
+        command: String,
+        source: String,
+    },
 
     // ---- Script-driven custom windows (@window) ----
     /// Open/create a custom window.

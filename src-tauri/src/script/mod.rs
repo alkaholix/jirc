@@ -2132,6 +2132,29 @@ fn apply_actions_depth(
                     },
                 );
             }
+            Action::Panel {
+                op,
+                panel,
+                id,
+                label,
+                value,
+                command,
+                source,
+            } => {
+                let _ = app.emit(
+                    IRC_EVENT,
+                    UiEvent::Panel {
+                        server_id: server_id.to_string(),
+                        op,
+                        panel,
+                        id,
+                        label,
+                        value,
+                        command,
+                        source,
+                    },
+                );
+            }
             Action::WindowClose { name } => {
                 let _ = app.emit(
                     IRC_EVENT,
@@ -3883,6 +3906,78 @@ mod tests {
                     name: String::new(),
                     tooltip: String::new(),
                     icon: String::new(),
+                    command: String::new(),
+                    source: "<memory>".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn panel_commands_produce_safe_ui_actions() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias ui { \
+               panel -a stats \"Channel stats\" | \
+               panel -t stats users \"42 users\" | \
+               panel -b stats refresh \"Refresh\" \"/echo -a refresh $!1\" | \
+               panel -d stats users | panel -d stats | panel -c \
+             }",
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "ui", ""),
+            vec![
+                Action::Panel {
+                    op: "upsert".into(),
+                    panel: "stats".into(),
+                    id: String::new(),
+                    label: "Channel stats".into(),
+                    value: String::new(),
+                    command: String::new(),
+                    source: "<memory>".into(),
+                },
+                Action::Panel {
+                    op: "text".into(),
+                    panel: "stats".into(),
+                    id: "users".into(),
+                    label: String::new(),
+                    value: "42 users".into(),
+                    command: String::new(),
+                    source: "<memory>".into(),
+                },
+                Action::Panel {
+                    op: "button".into(),
+                    panel: "stats".into(),
+                    id: "refresh".into(),
+                    label: "Refresh".into(),
+                    value: String::new(),
+                    command: "/echo -a refresh $1".into(),
+                    source: "<memory>".into(),
+                },
+                Action::Panel {
+                    op: "deleteItem".into(),
+                    panel: "stats".into(),
+                    id: "users".into(),
+                    label: String::new(),
+                    value: String::new(),
+                    command: String::new(),
+                    source: "<memory>".into(),
+                },
+                Action::Panel {
+                    op: "deletePanel".into(),
+                    panel: "stats".into(),
+                    id: String::new(),
+                    label: String::new(),
+                    value: String::new(),
+                    command: String::new(),
+                    source: "<memory>".into(),
+                },
+                Action::Panel {
+                    op: "clear".into(),
+                    panel: String::new(),
+                    id: String::new(),
+                    label: String::new(),
+                    value: String::new(),
                     command: String::new(),
                     source: "<memory>".into(),
                 },

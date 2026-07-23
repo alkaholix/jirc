@@ -320,6 +320,17 @@ export type IrcEvent =
       source: string;
     }
   | {
+      type: "panel";
+      serverId: string;
+      op: string;
+      panel: string;
+      id: string;
+      label: string;
+      value: string;
+      command: string;
+      source: string;
+    }
+  | {
       type: "isupport";
       serverId: string;
       chanTypes: string;

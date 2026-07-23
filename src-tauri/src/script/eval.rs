@@ -89,6 +89,16 @@ pub enum Action {
         command: String,
         source: String,
     },
+    /// Add/update/delete safe docked script panels, rows, and buttons.
+    Panel {
+        op: String,
+        panel: String,
+        id: String,
+        label: String,
+        value: String,
+        command: String,
+        source: String,
+    },
     /// Open a TCP socket (`/sockopen`); `tls` for `-e` (encrypted).
     SockOpen {
         name: String,
@@ -1164,6 +1174,7 @@ impl<'a> Runtime<'a> {
         match lname {
             "echo" => self.cmd_echo(raw_args),
             "toolbar" => self.cmd_toolbar(raw_args),
+            "panel" => self.cmd_panel(raw_args),
             "say" => {
                 let text = self.expand(raw_args);
                 let target = self.reply_target();
@@ -3612,6 +3623,100 @@ impl<'a> Runtime<'a> {
                     .unwrap_or_default(),
                 icon: (op == "icon").then_some(value.clone()).unwrap_or_default(),
                 command: (op == "command").then_some(value).unwrap_or_default(),
+                source: self.event.script_source.clone(),
+            });
+        }
+    }
+
+    /// jIRC's safe script-panel API:
+    /// `/panel -a name "title"`, `-t name id "text"`,
+    /// `-b name id "label" "/command $!1"`, `-d name [id]`, `-c`.
+    fn cmd_panel(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        let mut rest = expanded.trim();
+        let (switches, more) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        if !switches.starts_with('-') {
+            return;
+        }
+        rest = more.trim_start();
+        let flags = switches.trim_start_matches('-');
+        if flags.contains('c') {
+            self.actions.push(Action::Panel {
+                op: "clear".into(),
+                panel: String::new(),
+                id: String::new(),
+                label: String::new(),
+                value: String::new(),
+                command: String::new(),
+                source: self.event.script_source.clone(),
+            });
+            return;
+        }
+        let Some((panel, tail)) = take_file_arg(rest) else {
+            return;
+        };
+        if flags.contains('a') {
+            let Some((title, _)) = take_file_arg(tail) else {
+                return;
+            };
+            self.actions.push(Action::Panel {
+                op: "upsert".into(),
+                panel,
+                id: String::new(),
+                label: title,
+                value: String::new(),
+                command: String::new(),
+                source: self.event.script_source.clone(),
+            });
+            return;
+        }
+        if flags.contains('d') {
+            let id = take_file_arg(tail).map(|item| item.0).unwrap_or_default();
+            self.actions.push(Action::Panel {
+                op: if id.is_empty() {
+                    "deletePanel".into()
+                } else {
+                    "deleteItem".into()
+                },
+                panel,
+                id,
+                label: String::new(),
+                value: String::new(),
+                command: String::new(),
+                source: self.event.script_source.clone(),
+            });
+            return;
+        }
+        let Some((id, tail)) = take_file_arg(tail) else {
+            return;
+        };
+        if flags.contains('t') {
+            let Some((text, _)) = take_file_arg(tail) else {
+                return;
+            };
+            self.actions.push(Action::Panel {
+                op: "text".into(),
+                panel,
+                id,
+                label: String::new(),
+                value: text,
+                command: String::new(),
+                source: self.event.script_source.clone(),
+            });
+        } else if flags.contains('b') {
+            let Some((label, tail)) = take_file_arg(tail) else {
+                return;
+            };
+            let Some((command, _)) = take_file_arg(tail) else {
+                return;
+            };
+            self.actions.push(Action::Panel {
+                op: "button".into(),
+                panel,
+                id,
+                label,
+                value: String::new(),
+                command,
                 source: self.event.script_source.clone(),
             });
         }
