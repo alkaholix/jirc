@@ -12,6 +12,19 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🪟 26.7.54 — Previous active window identifiers
+
+### Added
+- `$lactive`, `$lactivewid`, and `$lactivecid` now report the previously
+  focused window and its stable window/connection IDs across networks.
+- Closing the previously active window safely clears these identifiers.
+
+### Verified
+- Focused window-registry test, complete non-live Rust suite, and production
+  frontend/help build.
+
+---
+
 ## 🧮 26.7.53 — Alias file identifier
 
 ### Added

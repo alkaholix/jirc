@@ -197,6 +197,22 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             0 => String::new(),
             w => w.to_string(),
         },
+        "lactivewid" => match rt.wins.last_active_wid {
+            0 => String::new(),
+            w => w.to_string(),
+        },
+        "lactive" => rt
+            .wins
+            .entry_for_wid(rt.wins.last_active_wid)
+            .map(|(_, _, window)| window.clone())
+            .unwrap_or_default(),
+        "lactivecid" => rt
+            .wins
+            .entry_for_wid(rt.wins.last_active_wid)
+            .map(|(_, server_id, _)| rt.conns.cid_of(server_id))
+            .filter(|cid| *cid != 0)
+            .map(|cid| cid.to_string())
+            .unwrap_or_default(),
         "chat" | "send" | "get" => eval_dcc_ident(rt, name, args, prop),
         "onchan" => {
             // $onchan(#chan) -> are you in that channel?

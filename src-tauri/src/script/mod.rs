@@ -185,6 +185,7 @@ struct WinReg {
     /// `(wid, server_id, name)` for every open window.
     entries: Vec<(u32, String, String)>,
     active_wid: u32,
+    last_active_wid: u32,
 }
 
 impl WinReg {
@@ -203,23 +204,41 @@ impl WinReg {
     }
 
     fn close(&mut self, server_id: &str, name: &str) {
+        let removed_wid = self
+            .entries
+            .iter()
+            .find(|(_, s, n)| s == server_id && n.eq_ignore_ascii_case(name))
+            .map(|(wid, _, _)| *wid);
         self.entries
             .retain(|(_, s, n)| !(s == server_id && n.eq_ignore_ascii_case(name)));
+        if removed_wid == Some(self.active_wid) {
+            self.active_wid = 0;
+        }
+        if removed_wid == Some(self.last_active_wid) {
+            self.last_active_wid = 0;
+        }
     }
 
     fn set_active(&mut self, server_id: &str, name: &str) {
-        self.active_wid = self
+        let next = self
             .entries
             .iter()
             .find(|(_, s, n)| s == server_id && n.eq_ignore_ascii_case(name))
             .map(|(w, _, _)| *w)
             .unwrap_or(0);
+        if next != self.active_wid {
+            if self.active_wid != 0 {
+                self.last_active_wid = self.active_wid;
+            }
+            self.active_wid = next;
+        }
     }
 
     fn view(&self) -> crate::script::eval::WinView {
         crate::script::eval::WinView {
             entries: self.entries.clone(),
             active_wid: self.active_wid,
+            last_active_wid: self.last_active_wid,
         }
     }
 }
@@ -5212,14 +5231,18 @@ mod tests {
     #[test]
     fn window_ids() {
         let engine = ScriptEngine::new();
+        engine.assign_cid("s1");
         // The UI opens windows; each gets a stable wid. Same (server,name) is idempotent.
         assert_eq!(engine.window_open("s1", "#a"), 1);
         assert_eq!(engine.window_open("s1", "#b"), 2);
         assert_eq!(engine.window_open("s1", "#a"), 1);
+        engine.set_active_win("s1", "#a");
         engine.set_active_win("s1", "#b");
 
         // $activewid = the active window; $wid (in an event for #a) = that window.
-        engine.load("on *:TEXT:*:#:{ /msg $chan wid=$wid active=$activewid }");
+        engine.load(
+            "on *:TEXT:*:#:{ /msg $chan wid=$wid active=$activewid last=$lactive/$lactivewid/$lactivecid }",
+        );
         let snap = crate::irc::state::StateSnapshot {
             server_id: "s1".into(),
             ..Default::default()
@@ -5241,11 +5264,22 @@ mod tests {
         };
         assert_eq!(
             drive_event(&engine, &ctx2, &ev),
-            vec![Action::Send("PRIVMSG #a :wid=1 active=2".into())]
+            vec![Action::Send(
+                "PRIVMSG #a :wid=1 active=2 last=#a/1/1".into()
+            )]
         );
 
-        // Closing #a drops its wid.
+        // Closing #a also clears the previous-active identifiers.
         engine.window_close("s1", "#a");
+        assert_eq!(
+            engine.run_command(
+                &ctx2,
+                "#c",
+                "/msg #c last=$lactive/$lactivewid/$lactivecid",
+                &[]
+            ),
+            vec![Action::Send("PRIVMSG #c :last=//".into())]
+        );
         assert_eq!(engine.window_open("s1", "#c"), 3); // new window, not reusing 1
     }
 
