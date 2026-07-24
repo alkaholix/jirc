@@ -21,9 +21,23 @@ function lineText(l: Line): string {
   return stripFormatting(`${l.from ?? ""} ${l.text}`).toLowerCase();
 }
 
-function Timestamp({ line, mode }: { line: Line; mode: TimestampMode }) {
+export function startsTimestampMinute(line: Line, previous?: Line): boolean {
+  if (!line.ts) return false;
+  return !previous?.ts || Math.floor(line.ts / 60000) !== Math.floor(previous.ts / 60000);
+}
+
+function Timestamp({
+  line,
+  mode,
+  showDivider,
+}: {
+  line: Line;
+  mode: TimestampMode;
+  showDivider: boolean;
+}) {
   const time = ts(line);
   if (!time || mode === "off") return null;
+  if (mode === "divider" && !showDivider) return null;
   return mode === "divider" ? (
     <span className="timestamp-divider"><span>{time}</span></span>
   ) : (
@@ -31,12 +45,23 @@ function Timestamp({ line, mode }: { line: Line; mode: TimestampMode }) {
   );
 }
 
-function LineRow({ line, timestampMode, selfColor }: { line: Line; timestampMode: TimestampMode; selfColor: string }) {
-  const dividerClass = timestampMode === "divider" ? " timestamp-divider-mode" : "";
+function LineRow({
+  line,
+  timestampMode,
+  selfColor,
+  showDivider,
+}: {
+  line: Line;
+  timestampMode: TimestampMode;
+  selfColor: string;
+  showDivider: boolean;
+}) {
+  const dividerClass =
+    timestampMode === "divider" && showDivider ? " timestamp-divider-mode" : "";
   if (line.kind === "event" || line.kind === "system" || line.kind === "error") {
     return (
       <div className={`line line-${line.kind}${dividerClass}`}>
-        <Timestamp line={line} mode={timestampMode} />
+        <Timestamp line={line} mode={timestampMode} showDivider={showDivider} />
         <span className="meta">{parseIrc(line.text)}</span>
       </div>
     );
@@ -44,7 +69,7 @@ function LineRow({ line, timestampMode, selfColor }: { line: Line; timestampMode
   if (line.kind === "action") {
     return (
       <div className={`line line-action${dividerClass}`}>
-        <Timestamp line={line} mode={timestampMode} />
+        <Timestamp line={line} mode={timestampMode} showDivider={showDivider} />
         <span className="action-text">
           * <span style={{ color: nickColor(line.from ?? "", line.self, selfColor) }}>{ircxDisplay(line.from)}</span>{" "}
           {parseIrc(line.text)}
@@ -59,7 +84,7 @@ function LineRow({ line, timestampMode, selfColor }: { line: Line; timestampMode
       : `${ircxDisplay(line.from)} whispers`;
     return (
       <div className={`line line-whisper${dividerClass}`}>
-        <Timestamp line={line} mode={timestampMode} />
+        <Timestamp line={line} mode={timestampMode} showDivider={showDivider} />
         <span className="whisper-text">
           <span className="whisper-mark">»</span> {label}: {parseIrc(line.text)}
         </span>
@@ -69,7 +94,7 @@ function LineRow({ line, timestampMode, selfColor }: { line: Line; timestampMode
   const isNotice = line.kind === "notice";
   return (
     <div className={`line line-msg${line.self ? " self" : ""}${dividerClass}`}>
-      <Timestamp line={line} mode={timestampMode} />
+      <Timestamp line={line} mode={timestampMode} showDivider={showDivider} />
       <span className="nick" style={{ color: nickColor(line.from ?? "", line.self, selfColor) }}>
         {isNotice ? "-" : ""}
         {ircxDisplay(line.from)}
@@ -251,7 +276,12 @@ export function MessageList({ buffer }: { buffer: Buffer }) {
                 style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${vi.start}px)` }}
                 onClick={(event) => selectWindowLine(lineNumber, event.ctrlKey || event.metaKey)}
               >
-                <LineRow line={lines[vi.index]} timestampMode={timestampMode} selfColor={selfColor} />
+                <LineRow
+                  line={lines[vi.index]}
+                  timestampMode={timestampMode}
+                  selfColor={selfColor}
+                  showDivider={startsTimestampMinute(lines[vi.index], lines[vi.index - 1])}
+                />
               </div>
             );
           })}

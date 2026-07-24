@@ -12,6 +12,19 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## ⏱️ 26.7.63 — Minute timestamp dividers
+
+- Divider timestamp mode now inserts a rule only on the first message of a new
+  minute instead of repeating it for every message.
+- Messages received during the same minute remain grouped beneath that minute's
+  timestamp divider.
+
+### Verified
+- Focused minute-boundary coverage, complete frontend and non-live Rust suites,
+  production frontend build, and full Tauri release build.
+
+---
+
 ## 🕒 26.7.62 — Timestamp display modes
 
 ### Added
