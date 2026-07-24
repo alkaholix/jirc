@@ -803,6 +803,77 @@ impl ScriptEngine {
         actions
     }
 
+    fn run_window_mouse_command(
+        &self,
+        ctx: &RunCtx,
+        target: &str,
+        command: &str,
+        source: &str,
+        x: i32,
+        y: i32,
+        list_line: u32,
+    ) -> Vec<Action> {
+        let body = parser::parse_body(command);
+        let mut g = self.inner.lock().unwrap();
+        let script = g.script.clone();
+        let event = EventVars {
+            nick: ctx.my_nick.to_string(),
+            chan: context_channel(ctx, target),
+            target: target.to_string(),
+            params: vec![x.to_string(), y.to_string()],
+            script_source: source.to_string(),
+            mouse_x: x,
+            mouse_y: y,
+            mouse_win: target.to_string(),
+            mouse_lb: if list_line == 0 {
+                String::new()
+            } else {
+                list_line.to_string()
+            },
+            ..Default::default()
+        };
+        let g = &mut *g;
+        let mut rt = Runtime {
+            script: &script,
+            my_nick: ctx.my_nick,
+            network: ctx.network,
+            server: ctx.server,
+            vars: &mut g.vars,
+            local_scopes: Vec::new(),
+            hashes: &mut g.hashes,
+            var_expiry: &mut g.var_expiry,
+            hash_expiry: &mut g.hash_expiry,
+            files: &mut g.files,
+            bins: &mut g.bins,
+            windows: &mut g.windows,
+            users: &mut g.users,
+            event,
+            actions: Vec::new(),
+            pending_pipe_commands: Vec::new(),
+            halted: false,
+            steps: 0,
+            depth: 0,
+            alias_stack: Vec::new(),
+            ret: None,
+            goto: None,
+            data_dir: ctx.data_dir.clone(),
+            state: ctx.state.clone(),
+            active: g.active.clone(),
+            conns: g.conns.view(),
+            wins: g.wins.view(),
+            sockets: g.sockets.clone(),
+            timers: g.timers.clone(),
+            play: g.play.clone(),
+            dcc: g.dcc.clone(),
+            webviews: g.webviews.clone(),
+            input: g.input.clone(),
+            caller: "menu",
+            show: true,
+        };
+        rt.run(&body);
+        std::mem::take(&mut rt.actions)
+    }
+
     /// Dispatches an event to all matching handlers. Returns the actions.
     pub fn dispatch_event(&self, ctx: &RunCtx, kind: &str, event: EventVars) -> Vec<Action> {
         self.dispatch_event_status(ctx, kind, event, None).0
@@ -3191,6 +3262,39 @@ pub fn script_run_popup(
     });
 }
 
+/// Runs a command attached to a custom-window mouse menu entry.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn script_window_mouse(
+    app: AppHandle,
+    server_id: String,
+    target: String,
+    my_nick: String,
+    network: String,
+    command: String,
+    source: String,
+    x: i32,
+    y: i32,
+    list_line: u32,
+) {
+    tauri::async_runtime::spawn_blocking(move || {
+        let engine = app.state::<ScriptEngine>();
+        let ctx = RunCtx {
+            my_nick: &my_nick,
+            network: &network,
+            server: "",
+            data_dir: script_data_dir(&app),
+            state: app
+                .try_state::<crate::irc::state::StateStore>()
+                .map(|s| s.get(&server_id))
+                .unwrap_or_default(),
+        };
+        let actions =
+            engine.run_window_mouse_command(&ctx, &target, &command, &source, x, y, list_line);
+        apply_actions(&app, &server_id, &my_nick, &network, "", actions);
+    });
+}
+
 /// Drives event handlers from a UI event produced by the connection. Returns
 /// the resulting outgoing lines and echo events to apply.
 pub fn drive_event(engine: &ScriptEngine, ctx: &RunCtx, ev: &UiEvent) -> Vec<Action> {
@@ -5167,6 +5271,28 @@ mod tests {
                 if name == "@graph" && op == "drawline"
                     && args == &["", "4", "2", "10", "20", "30", "40"]
         )));
+
+        let fill = engine.run_command(&ctx(), "#c", "/drawfill @graph 3 1 12 24", &[]);
+        assert!(fill.iter().any(|action| matches!(
+            action,
+            Action::WindowDraw { name, op, args }
+                if name == "@graph" && op == "drawfill"
+                    && args == &["", "3", "1", "12", "24"]
+        )));
+
+        let mouse = engine.run_window_mouse_command(
+            &ctx(),
+            "@graph",
+            "/msg #c $mouse.win $mouse.x $mouse.y $mouse.lb",
+            "",
+            12,
+            24,
+            3,
+        );
+        assert_eq!(
+            mouse,
+            vec![Action::Send("PRIVMSG #c :@graph 12 24 3".into())]
+        );
     }
 
     #[test]

@@ -200,15 +200,25 @@ export function MessageList({ buffer }: { buffer: Buffer }) {
   const server = useStore((s) => s.servers[buffer.serverId]);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [popups, setPopups] = useState<PopupItem[]>([]);
-  const popupContext = buffer.kind === "channel" ? "channel" : buffer.kind === "query" ? "query" : "status";
+  const popupContext =
+    buffer.kind === "window"
+      ? buffer.name
+      : buffer.kind === "channel"
+        ? "channel"
+        : buffer.kind === "query"
+          ? "query"
+          : "status";
   const popupTarget = buffer.kind === "status" ? "" : buffer.name;
   const openMenu = (e: ReactMouseEvent) => {
     e.preventDefault();
     api
       .scriptPopups(buffer.serverId, popupTarget, server?.nick ?? "", server?.name ?? "", popupContext, "")
       .then((items) => {
-        setPopups(items);
-        if (items.length) setMenu({ x: e.clientX, y: e.clientY });
+        const visible = buffer.kind === "window"
+          ? items.filter((item) => !["mouse", "sclick", "dclick", "uclick", "rclick", "lbclick", "leave", "drop"].includes(item.label.trim().toLowerCase()))
+          : items;
+        setPopups(visible);
+        if (visible.length) setMenu({ x: e.clientX, y: e.clientY });
       })
       .catch(() => {});
   };

@@ -373,6 +373,11 @@ pub struct EventVars {
     /// Selected nicknames for a nicklist popup run, exposed as `$snick`/`$snicks`.
     /// Empty for every other run (timers, typed commands, events).
     pub snicks: Vec<String>,
+    /// Picture/listbox custom-window mouse event state, exposed by `$mouse`.
+    pub mouse_x: i32,
+    pub mouse_y: i32,
+    pub mouse_win: String,
+    pub mouse_lb: String,
     /// Secondary nick for events that involve two people (e.g. `on KICK`'s
     /// kicked user, exposed as `$knick`).
     pub knick: String,
@@ -1577,9 +1582,8 @@ impl<'a> Runtime<'a> {
             "iline" => self.cmd_window_line(raw_args, "insert"),
             "dline" => self.cmd_window_line(raw_args, "delete"),
             "sline" => self.cmd_window_select(raw_args),
-            "drawdot" | "drawline" | "drawrect" | "drawtext" | "drawsize" => {
-                self.cmd_window_draw(lname, raw_args)
-            }
+            "drawdot" | "drawline" | "drawrect" | "drawtext" | "drawsize" | "drawfill"
+            | "drawreplace" => self.cmd_window_draw(lname, raw_args),
             "clear" => self.cmd_window_clear(raw_args),
             "mkdir" => {
                 let dir = self.expand(raw_args);
@@ -5003,18 +5007,19 @@ impl<'a> Runtime<'a> {
         // `$sock(x).port` / `$hget(t,N).item`. Restricting it to the
         // parenthesised form avoids swallowing a literal `.word` after a bare
         // identifier (e.g. `$nick.example`).
-        let prop = if had_parens && chars.get(*i) == Some(&'.') {
-            let mut j = *i + 1;
-            let p = read_name(chars, &mut j);
-            if p.is_empty() {
-                String::new()
+        let prop =
+            if (had_parens || name.eq_ignore_ascii_case("mouse")) && chars.get(*i) == Some(&'.') {
+                let mut j = *i + 1;
+                let p = read_name(chars, &mut j);
+                if p.is_empty() {
+                    String::new()
+                } else {
+                    *i = j;
+                    p
+                }
             } else {
-                *i = j;
-                p
-            }
-        } else {
-            String::new()
-        };
+                String::new()
+            };
         ident::eval_ident(self, &name, &args, &prop)
     }
 

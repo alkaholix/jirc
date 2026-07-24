@@ -148,6 +148,7 @@ pub fn run() {
             script::script_window_close,
             script::script_popups,
             script::script_run_popup,
+            script::script_window_mouse,
             script::input::script_prompt_reply,
             irc::ircx_keys::ircx_claim_owner,
             irc::ircx_keys::ircx_owner_protect,

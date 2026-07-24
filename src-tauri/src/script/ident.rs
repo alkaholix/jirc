@@ -1598,6 +1598,14 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                     .unwrap_or_default()
             }
         }
+        // `$mouse` state while a custom-window menu event is running.
+        "mouse" => match prop {
+            "x" => rt.event.mouse_x.to_string(),
+            "y" => rt.event.mouse_y.to_string(),
+            "win" => rt.event.mouse_win.clone(),
+            "lb" => rt.event.mouse_lb.clone(),
+            _ => String::new(),
+        },
         // $replacex (single-pass, non-recursive replace of from/to pairs).
         "replacex" | "replacexcs" => {
             let s = a(0);

@@ -179,6 +179,17 @@ export const api = {
     snicks?: string[],
     source?: string
   ) => invoke("script_run_popup", { serverId, target, myNick, network, command, params, snicks, source }),
+  scriptWindowMouse: (
+    serverId: string,
+    target: string,
+    myNick: string,
+    network: string,
+    command: string,
+    source: string,
+    x: number,
+    y: number,
+    listLine = 0
+  ) => invoke("script_window_mouse", { serverId, target, myNick, network, command, source, x, y, listLine }),
   scriptRunAlias: (
     serverId: string,
     target: string,

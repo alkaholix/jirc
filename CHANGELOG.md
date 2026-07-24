@@ -12,6 +12,27 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🪟 26.7.64 — Custom-window interaction completion
+
+### Added
+- Picture-window `menu @window` mouse actions now run for `mouse`, `sclick`,
+  `dclick`, `uclick`, `rclick`, `lbclick`, and `leave`.
+- `$mouse.x`, `$mouse.y`, `$mouse.win`, and `$mouse.lb` are available while a
+  custom-window mouse action runs.
+- `/drawfill` flood fills a picture canvas and `/drawreplace` replaces an exact
+  colour across it.
+
+### Fixed
+- Custom `@window` right-click menus now use their own `menu @window`
+  definition instead of the status menu.
+- Mouse-action entries are kept out of the visible right-click menu.
+
+### Verified
+- Focused script-engine coverage, complete frontend and non-live Rust suites,
+  production frontend build, and full Tauri release build.
+
+---
+
 ## ⏱️ 26.7.63 — Minute timestamp dividers
 
 - Divider timestamp mode now inserts a rule only on the first message of a new
