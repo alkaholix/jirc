@@ -27,6 +27,8 @@ Versions use CalVer (`YY.M.D`) — newest first.
   `$width`, `$height`, and the remaining portable `$mouse` properties.
 - Listbox `lbclick` now fires from actual row selection; picture clicks no
   longer incorrectly fire it.
+- Expanded the built-in HelpMe guide with picture-command syntax, switches,
+  identifiers, mouse/listbox events, examples, sandbox rules, and exclusions.
 
 ### Security and portability
 - Picture files remain inside `jIRC/scriptdata`.

@@ -591,6 +591,78 @@ Line and selection positions are one-based, matching mIRC.</p>
   <tr><td><code>/drawcopy</code> · <code>/drawpic</code> · <code>/drawrot</code> · <code>/drawscroll</code> · <code>/drawreplace</code> · <code>/drawsave</code></td><td>copy between picture windows, load/tile/crop/scale images, rotate or scroll regions, replace colours, and save sandboxed BMP/PNG/JPEG files or binary variables</td></tr>
 </table>
 
+<h3>Picture-window drawing reference</h3>
+<p>Coordinates and sizes are canvas pixels. Colours may be mIRC colour numbers
+or RGB values returned by <code>$rgb()</code>. Picture windows retain their
+drawing operations, so they redraw correctly after switching buffers,
+detaching, docking, or resizing.</p>
+<table>
+  <tr><th>Command</th><th>Syntax and behaviour</th></tr>
+  <tr><td><code>/drawsize</code></td><td><code>/drawsize @name width height</code> — set the canvas bitmap size (maximum 8192 × 8192).</td></tr>
+  <tr><td><code>/drawdot</code></td><td><code>/drawdot [-inr] @name color size x y [x y …]</code> — draw one or more dots.</td></tr>
+  <tr><td><code>/drawline</code></td><td><code>/drawline [-inr] @name color size x1 y1 x2 y2 [x y …]</code> — draw a connected line through all supplied points.</td></tr>
+  <tr><td><code>/drawrect</code></td><td><code>/drawrect [-inrfed] @name color size x y w h […]</code> — draw rectangles; <code>-f</code> fills, <code>-e</code> draws ellipses, and <code>-d</code> uses the final <code>w h</code> pair as rounded-corner size.</td></tr>
+  <tr><td><code>/drawfill</code></td><td><code>/drawfill [-inrs] @name color boundary x y [pattern.bmp]</code> — flood fill from a point. <code>-s</code> replaces the specified surface colour; without it, filling stops at the boundary colour. An optional 8 × 8 sandboxed image is used as a repeating pattern.</td></tr>
+  <tr><td><code>/drawtext</code></td><td><code>/drawtext [-dnboc] @name color [background] [font size] x y [w h] text</code> — draw text. <code>-b</code> supplies a background colour, <code>-o</code> uses bold text, <code>-c</code> clips to <code>w h</code>, and <code>-d</code> disables tab expansion.</td></tr>
+  <tr><td><code>/drawcopy</code></td><td><code>/drawcopy [-imnt] @source [transparent] x y w h @destination x y [w h]</code> — copy within one picture window or between two, optionally resize it; <code>-t</code> makes the supplied source colour transparent and <code>-m</code> enables high-quality smoothing.</td></tr>
+  <tr><td><code>/drawpic</code></td><td><code>/drawpic [-imnstclv] @name [transparent] x y [w h] [source-x source-y source-w source-h] file</code> — load an image, optionally crop/resize it. <code>-s</code> supplies destination <code>w h</code>, <code>-l</code> tiles, <code>-t</code> supplies a transparent colour, and <code>-v</code> reads the image from an <code>&amp;binvar</code>.</td></tr>
+  <tr><td><code>/drawrot</code></td><td><code>/drawrot [-mnpbfc] @name [background] angle [x y w h]</code> — rotate the whole bitmap or a region. <code>-b</code> supplies its cleared background, <code>-f</code> fits to the original region, <code>-c</code> centres it, and <code>-p</code> clips to the region.</td></tr>
+  <tr><td><code>/drawscroll</code></td><td><code>/drawscroll [-n] @name dx dy x y w h […]</code> — move one or more rectangular regions by a positive or negative offset.</td></tr>
+  <tr><td><code>/drawreplace</code></td><td><code>/drawreplace [-nr] @name old-color new-color [x y w h]</code> — replace an exact colour across the bitmap or the optional region.</td></tr>
+  <tr><td><code>/drawsave</code></td><td><code>/drawsave [-aqNvN] @name [x y w h] file|&amp;binvar</code> — save the whole bitmap or, with <code>-a</code>, a region. File output supports BMP, PNG, and JPEG inside <code>jIRC/scriptdata</code>; <code>-qN</code> sets JPEG quality and <code>-v</code>/<code>-vp</code>/<code>-vj</code> writes image bytes to a binary variable.</td></tr>
+</table>
+
+<div class="note">
+<strong>Drawing switches:</strong> <code>-n</code> queues drawing without
+displaying it immediately; issue any drawing command with only the window name
+to reveal queued changes. <code>-i</code> uses inverse drawing,
+<code>-m</code> requests high-quality image scaling, and numeric RGB colours
+work directly. <code>-h</code> is accepted for script compatibility but has no
+separate minimized-window icon on jIRC's cross-platform interface.
+</div>
+
+<h3>Picture identifiers</h3>
+<table>
+  <tr><th>Identifier</th><th>Returns</th></tr>
+  <tr><td><code>$click(@name,N)</code> · <code>.x</code> · <code>.y</code></td><td>the Nth retained click coordinate; <code>/clear -c @name</code> clears click history</td></tr>
+  <tr><td><code>$getdot(@name,x,y)</code></td><td>the RGB value at a rendered canvas pixel</td></tr>
+  <tr><td><code>$inrect(x,y,rx,ry,w,h)</code></td><td><code>$true</code> when the point is inside the rectangle</td></tr>
+  <tr><td><code>$inellipse(x,y,ex,ey,w,h)</code></td><td><code>$true</code> when the point is inside the ellipse</td></tr>
+  <tr><td><code>$inroundrect(x,y,rx,ry,w,h,cw,ch)</code></td><td><code>$true</code> when the point is inside the rounded rectangle</td></tr>
+  <tr><td><code>$inpoly(x,y,x1,y1,x2,y2,…)</code></td><td><code>$true</code> when the point is inside the polygon</td></tr>
+  <tr><td><code>$width(text,font,size,options)</code> · <code>$height(…)</code></td><td>practical canvas text dimensions in pixels</td></tr>
+  <tr><td><code>$mouse</code></td><td><code>x y key</code> for the current custom-window mouse event</td></tr>
+  <tr><td><code>$mouse.win</code> · <code>.x/.y</code> · <code>.mx/.my</code> · <code>.cx/.cy</code> · <code>.dx/.dy</code> · <code>.key</code> · <code>.lb</code></td><td>window, coordinates, modifier/button bitmask, and whether the event came from a listbox</td></tr>
+</table>
+
+<h3>Mouse and listbox events</h3>
+<p>Put event entries first inside the custom window's popup definition. Picture
+windows support <code>mouse</code>, <code>sclick</code>, <code>dclick</code>,
+<code>uclick</code>, <code>rclick</code>, <code>leave</code>, and
+<code>drop</code>. A selectable listbox fires <code>lbclick</code>, with
+<code>$1</code> containing the selected one-based row.</p>
+<pre><code><span class="k">menu</span> @paint {
+  mouse:<span class="k">/echo</span> moved to <span class="i">$mouse.x</span> <span class="i">$mouse.y</span>
+  sclick:<span class="k">/drawdot</span> @paint 4 8 <span class="i">$mouse.x</span> <span class="i">$mouse.y</span>
+  rclick:<span class="k">/clear</span> @paint
+  leave:<span class="k">/echo</span> mouse left <span class="i">$mouse.win</span>
+  Save picture:<span class="k">/drawsave</span> @paint "pictures/paint.png"
+}
+
+<span class="k">alias</span> paint {
+  <span class="k">/window</span> -p @paint
+  <span class="k">/drawsize</span> @paint 800 500
+  <span class="k">/drawrect</span> -f @paint 0 1 0 0 800 500
+  <span class="k">/drawtext</span> -o @paint 1 "sans-serif" 18 20 20 Click to draw
+}
+</code></pre>
+
+<p>Image filenames are resolved inside <code>jIRC/scriptdata</code>, including
+subfolders and quoted names containing spaces. This keeps scripts portable and
+prevents drawing commands from reading or overwriting arbitrary files. The
+Windows-native <code>/drawdll</code> command is intentionally unavailable:
+jIRC does not expose native bitmap handles or load platform DLLs.</p>
+
 <h2 id="dialogs">Custom dialogs</h2>
 <p>Build your own pop-up windows with input fields, dropdowns and buttons. Unlike
 mIRC, there are no pixel coordinates — controls are given a <strong>name</strong>
@@ -1065,7 +1137,7 @@ Some aren't in the reference tables above yet.
 Planned or possible future work — scripts using these won't work today:
 <ul style="margin:.5rem 0 0">
   <li>DCC server mode (<code>/dccserver</code>).</li>
-  <li>Picture / drawing <code>@windows</code> and richer script panel controls beyond text and buttons.</li>
+  <li>Richer script panel controls beyond the current safe text and button controls.</li>
   <li>A few <strong>property suffixes</strong> such as <code>$chan(#).topic</code> — most
     now work, just not every one.</li>
   <li>A long tail of rarely-used cross-platform identifiers and commands.</li>
