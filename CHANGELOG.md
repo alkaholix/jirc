@@ -12,6 +12,32 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🎨 26.7.65 — Complete cross-platform picture drawing
+
+### Added
+- Added `/drawcopy`, `/drawpic`, `/drawrot`, `/drawscroll`, and `/drawsave`.
+- Image copy/load operations support crop, resize, tiling, transparent colours,
+  smoothing, cross-window sources, quoted sandbox paths, and image binvars.
+- `/drawsave` writes sandboxed BMP, PNG, and JPEG files and supports `-v`
+  binary-variable output.
+- Completed rounded rectangles, surface/border and patterned fills, clipped and
+  styled text, deferred `-n` drawing, rotation backgrounds/fitting/clipping,
+  colour replacement regions, and multi-region scrolling.
+- Added `$click`, `$getdot`, `$inrect`, `$inellipse`, `$inroundrect`, `$inpoly`,
+  `$width`, `$height`, and the remaining portable `$mouse` properties.
+- Listbox `lbclick` now fires from actual row selection; picture clicks no
+  longer incorrectly fire it.
+
+### Security and portability
+- Picture files remain inside `jIRC/scriptdata`.
+- Windows-native `/drawdll` remains intentionally unsupported.
+
+### Verified
+- Focused picture command/identifier coverage, complete frontend and non-live
+  Rust suites, production frontend build, and full Tauri release build.
+
+---
+
 ## 🪟 26.7.64 — Custom-window interaction completion
 
 ### Added

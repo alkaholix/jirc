@@ -587,7 +587,8 @@ Line and selection positions are one-based, matching mIRC.</p>
   <tr><td><code>/sline [-a|-r] @name N</code></td><td>select, add, or remove a listbox row</td></tr>
   <tr><td><code>$line(@name,N)</code> · <code>.state</code></td><td>line text or whether that row is selected</td></tr>
   <tr><td><code>$sline(@name,N)</code> · <code>.ln</code></td><td>Nth selected row's text or original line number; N=0 returns the count</td></tr>
-  <tr><td><code>/drawsize</code> · <code>/drawdot</code> · <code>/drawline</code> · <code>/drawrect</code> · <code>/drawtext</code></td><td>size and draw on a picture window; rectangles support <code>-f</code> fill and <code>-e</code> ellipse</td></tr>
+  <tr><td><code>/drawsize</code> · <code>/drawdot</code> · <code>/drawline</code> · <code>/drawrect</code> · <code>/drawfill</code> · <code>/drawtext</code></td><td>size and draw dots, connected lines, rectangles, ellipses, rounded rectangles, fills/patterns, and styled or clipped text</td></tr>
+  <tr><td><code>/drawcopy</code> · <code>/drawpic</code> · <code>/drawrot</code> · <code>/drawscroll</code> · <code>/drawreplace</code> · <code>/drawsave</code></td><td>copy between picture windows, load/tile/crop/scale images, rotate or scroll regions, replace colours, and save sandboxed BMP/PNG/JPEG files or binary variables</td></tr>
 </table>
 
 <h2 id="dialogs">Custom dialogs</h2>

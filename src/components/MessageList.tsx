@@ -239,6 +239,18 @@ export function MessageList({ buffer }: { buffer: Buffer }) {
         `${add ? "-a " : ""}${buffer.name} ${line}`
       )
       .catch(() => {});
+    api
+      .scriptPopups(buffer.serverId, buffer.name, server?.nick ?? "", server?.name ?? "", buffer.name, "")
+      .then((items) => {
+        const event = items.find((item) => item.label.trim().toLowerCase() === "lbclick");
+        if (event) {
+          api.scriptWindowMouse(
+            buffer.serverId, buffer.name, server?.nick ?? "", server?.name ?? "",
+            event.command, event.source ?? "", 0, 0, line
+          ).catch(() => {});
+        }
+      })
+      .catch(() => {});
   };
 
   return (

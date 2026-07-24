@@ -1602,10 +1602,111 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "mouse" => match prop {
             "x" => rt.event.mouse_x.to_string(),
             "y" => rt.event.mouse_y.to_string(),
+            "mx" | "cx" | "dx" => rt.event.mouse_x.to_string(),
+            "my" | "cy" | "dy" => rt.event.mouse_y.to_string(),
             "win" => rt.event.mouse_win.clone(),
             "lb" => rt.event.mouse_lb.clone(),
-            _ => String::new(),
+            "key" => rt.event.mouse_key.to_string(),
+            _ => format!(
+                "{} {} {}",
+                rt.event.mouse_x, rt.event.mouse_y, rt.event.mouse_key
+            ),
         },
+        // `$click(@window,N)` — retained click coordinates, oldest first.
+        "click" => {
+            let window = a(0);
+            let n = a(1).parse::<usize>().unwrap_or(1);
+            rt.windows
+                .get(&window)
+                .and_then(|window| window.clicks.get(n.saturating_sub(1)))
+                .map_or_else(String::new, |(x, y)| match prop {
+                    "x" => x.to_string(),
+                    "y" => y.to_string(),
+                    _ => format!("{x} {y}"),
+                })
+        }
+        "getdot" => {
+            let x = a(1).parse::<u32>().unwrap_or(u32::MAX);
+            let y = a(2).parse::<u32>().unwrap_or(u32::MAX);
+            rt.windows
+                .dot(&a(0), x, y)
+                .map_or_else(String::new, |value| value.to_string())
+        }
+        "inrect" => {
+            let values: Vec<f64> = (0..6)
+                .map(|index| a(index).parse().unwrap_or(0.0))
+                .collect();
+            bool_str(
+                values[0] >= values[2]
+                    && values[1] >= values[3]
+                    && values[0] <= values[2] + values[4]
+                    && values[1] <= values[3] + values[5],
+            )
+        }
+        "inellipse" => {
+            let values: Vec<f64> = (0..6)
+                .map(|index| a(index).parse().unwrap_or(0.0))
+                .collect();
+            let rx = values[4] / 2.0;
+            let ry = values[5] / 2.0;
+            let dx = values[0] - (values[2] + rx);
+            let dy = values[1] - (values[3] + ry);
+            bool_str(rx > 0.0 && ry > 0.0 && dx * dx / (rx * rx) + dy * dy / (ry * ry) <= 1.0)
+        }
+        "inroundrect" => {
+            let values: Vec<f64> = (0..8)
+                .map(|index| a(index).parse().unwrap_or(0.0))
+                .collect();
+            let (px, py, x, y, w, h) = (
+                values[0], values[1], values[2], values[3], values[4], values[5],
+            );
+            let rx = (values[6].abs() / 2.0).min(w.abs() / 2.0);
+            let ry = (values[7].abs() / 2.0).min(h.abs() / 2.0);
+            let middle = px >= x + rx && px <= x + w - rx && py >= y && py <= y + h;
+            let cross = px >= x && px <= x + w && py >= y + ry && py <= y + h - ry;
+            let cx = if px < x + rx { x + rx } else { x + w - rx };
+            let cy = if py < y + ry { y + ry } else { y + h - ry };
+            bool_str(
+                middle
+                    || cross
+                    || (rx > 0.0
+                        && ry > 0.0
+                        && (px - cx).powi(2) / rx.powi(2) + (py - cy).powi(2) / ry.powi(2) <= 1.0),
+            )
+        }
+        "inpoly" => {
+            let px = a(0).parse::<f64>().unwrap_or(0.0);
+            let py = a(1).parse::<f64>().unwrap_or(0.0);
+            let points: Vec<(f64, f64)> = args[2..]
+                .chunks(2)
+                .filter(|pair| pair.len() == 2)
+                .map(|pair| {
+                    (
+                        pair[0].parse().unwrap_or(0.0),
+                        pair[1].parse().unwrap_or(0.0),
+                    )
+                })
+                .collect();
+            let mut inside = false;
+            for index in 0..points.len() {
+                let (x1, y1) = points[index];
+                let (x2, y2) = points[(index + points.len() - 1) % points.len()];
+                if (y1 > py) != (y2 > py) && px < (x2 - x1) * (py - y1) / (y2 - y1) + x1 {
+                    inside = !inside;
+                }
+            }
+            bool_str(inside)
+        }
+        "height" => {
+            let size = a(2).parse::<f64>().unwrap_or(14.0).abs();
+            (size * 1.2).ceil().to_string()
+        }
+        "width" => {
+            let size = a(2).parse::<f64>().unwrap_or(14.0).abs();
+            (a(0).chars().count() as f64 * size * 0.6)
+                .ceil()
+                .to_string()
+        }
         // $replacex (single-pass, non-recursive replace of from/to pairs).
         "replacex" | "replacexcs" => {
             let s = a(0);

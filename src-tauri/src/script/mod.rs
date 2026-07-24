@@ -812,24 +812,29 @@ impl ScriptEngine {
         x: i32,
         y: i32,
         list_line: u32,
+        key: u32,
     ) -> Vec<Action> {
         let body = parser::parse_body(command);
         let mut g = self.inner.lock().unwrap();
+        if list_line == 0 {
+            g.windows.record_click(target, x, y);
+        }
         let script = g.script.clone();
         let event = EventVars {
             nick: ctx.my_nick.to_string(),
             chan: context_channel(ctx, target),
             target: target.to_string(),
-            params: vec![x.to_string(), y.to_string()],
+            params: if list_line == 0 {
+                vec![x.to_string(), y.to_string()]
+            } else {
+                vec![list_line.to_string()]
+            },
             script_source: source.to_string(),
             mouse_x: x,
             mouse_y: y,
             mouse_win: target.to_string(),
-            mouse_lb: if list_line == 0 {
-                String::new()
-            } else {
-                list_line.to_string()
-            },
+            mouse_lb: (list_line != 0).to_string(),
+            mouse_key: key,
             ..Default::default()
         };
         let g = &mut *g;
@@ -1679,6 +1684,87 @@ pub fn script_data_dir(app: &AppHandle) -> std::path::PathBuf {
         .unwrap_or_else(|_| std::env::temp_dir().join("jirc-scriptdata"));
     let _ = std::fs::create_dir_all(&dir);
     dir
+}
+
+/// Reads an image from the script-data sandbox for `/drawpic`.
+#[tauri::command]
+pub fn script_picture_read(app: AppHandle, filename: String) -> Result<String, String> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let path = eval::sandbox_path(&script_data_dir(&app), &filename);
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let mime = match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        "webp" => "image/webp",
+        _ => "image/png",
+    };
+    Ok(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
+}
+
+/// Saves `/drawsave` output inside the script-data sandbox.
+#[tauri::command]
+pub fn script_picture_save(app: AppHandle, filename: String, data: String) -> Result<(), String> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let encoded = data
+        .split_once(',')
+        .map(|(_, encoded)| encoded)
+        .unwrap_or(data.as_str());
+    let bytes = STANDARD.decode(encoded).map_err(|e| e.to_string())?;
+    let path = eval::sandbox_path(&script_data_dir(&app), &filename);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(path, bytes).map_err(|e| e.to_string())
+}
+
+/// Refreshes the engine-side bitmap queried synchronously by `$getdot`.
+#[tauri::command]
+pub fn script_picture_snapshot(
+    engine: State<'_, ScriptEngine>,
+    name: String,
+    width: u32,
+    height: u32,
+    rgba: String,
+) -> Result<(), String> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let bytes = STANDARD.decode(rgba).map_err(|e| e.to_string())?;
+    engine
+        .inner
+        .lock()
+        .unwrap()
+        .windows
+        .set_bitmap(&name, width, height, bytes);
+    Ok(())
+}
+
+/// Stores `/drawsave -v` output in an mSL binary variable.
+#[tauri::command]
+pub fn script_picture_binvar(
+    engine: State<'_, ScriptEngine>,
+    name: String,
+    data: String,
+) -> Result<(), String> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let encoded = data
+        .split_once(',')
+        .map(|(_, encoded)| encoded)
+        .unwrap_or(data.as_str());
+    let bytes = STANDARD.decode(encoded).map_err(|e| e.to_string())?;
+    engine
+        .inner
+        .lock()
+        .unwrap()
+        .bins
+        .set(&name, 1, &bytes, true);
+    Ok(())
 }
 
 /// Sanitizes a script name into a safe file stem.
@@ -3276,6 +3362,7 @@ pub fn script_window_mouse(
     x: i32,
     y: i32,
     list_line: u32,
+    key: u32,
 ) {
     tauri::async_runtime::spawn_blocking(move || {
         let engine = app.state::<ScriptEngine>();
@@ -3290,7 +3377,7 @@ pub fn script_window_mouse(
                 .unwrap_or_default(),
         };
         let actions =
-            engine.run_window_mouse_command(&ctx, &target, &command, &source, x, y, list_line);
+            engine.run_window_mouse_command(&ctx, &target, &command, &source, x, y, list_line, key);
         apply_actions(&app, &server_id, &my_nick, &network, "", actions);
     });
 }
@@ -5280,18 +5367,66 @@ mod tests {
                     && args == &["", "3", "1", "12", "24"]
         )));
 
+        engine.run_command(&ctx(), "#c", "/window -p @copy", &[]);
+        for (command, expected_name, expected_op) in [
+            (
+                "/drawcopy -tm @graph 16711935 0 0 20 20 @copy 5 6 40 40",
+                "@copy",
+                "drawcopy",
+            ),
+            (
+                "/drawpic -sm @graph 10 20 64 32 \"images/test image.png\"",
+                "@graph",
+                "drawpic",
+            ),
+            ("/drawrot -bfc @graph 1 45 0 0 100 80", "@graph", "drawrot"),
+            (
+                "/drawscroll -n @graph 2 -3 0 0 100 80",
+                "@graph",
+                "drawscroll",
+            ),
+            (
+                "/drawsave -aq90 @graph 0 0 100 80 \"shots/test image.jpg\"",
+                "@graph",
+                "drawsave",
+            ),
+        ] {
+            let actions = engine.run_command(&ctx(), "#c", command, &[]);
+            assert!(actions.iter().any(|action| matches!(
+                action,
+                Action::WindowDraw { name, op, .. }
+                    if name == expected_name && op == expected_op
+            )));
+        }
+
         let mouse = engine.run_window_mouse_command(
             &ctx(),
             "@graph",
-            "/msg #c $mouse.win $mouse.x $mouse.y $mouse.lb",
+            "/msg #c $mouse.win $mouse.x $mouse.y $mouse.lb $mouse.key $click(@graph,1).x $inrect(12,24,0,0,20,30)",
             "",
             12,
             24,
-            3,
+            0,
+            5,
         );
         assert_eq!(
             mouse,
-            vec![Action::Send("PRIVMSG #c :@graph 12 24 3".into())]
+            vec![Action::Send(
+                "PRIVMSG #c :@graph 12 24 false 5 12 $true".into()
+            )]
+        );
+        assert_eq!(
+            engine.run_window_mouse_command(
+                &ctx(),
+                "@list",
+                "/msg #c $mouse.lb $1",
+                "",
+                0,
+                0,
+                2,
+                0,
+            ),
+            vec![Action::Send("PRIVMSG #c :true 2".into())]
         );
     }
 

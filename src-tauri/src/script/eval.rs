@@ -378,6 +378,7 @@ pub struct EventVars {
     pub mouse_y: i32,
     pub mouse_win: String,
     pub mouse_lb: String,
+    pub mouse_key: u32,
     /// Secondary nick for events that involve two people (e.g. `on KICK`'s
     /// kicked user, exposed as `$knick`).
     pub knick: String,
@@ -1583,7 +1584,9 @@ impl<'a> Runtime<'a> {
             "dline" => self.cmd_window_line(raw_args, "delete"),
             "sline" => self.cmd_window_select(raw_args),
             "drawdot" | "drawline" | "drawrect" | "drawtext" | "drawsize" | "drawfill"
-            | "drawreplace" => self.cmd_window_draw(lname, raw_args),
+            | "drawreplace" | "drawcopy" | "drawpic" | "drawrot" | "drawscroll" | "drawsave" => {
+                self.cmd_window_draw(lname, raw_args)
+            }
             "clear" => self.cmd_window_clear(raw_args),
             "mkdir" => {
                 let dir = self.expand(raw_args);
@@ -3333,25 +3336,67 @@ impl<'a> Runtime<'a> {
             switches = value.to_string();
             rest = more.trim();
         }
-        let mut parts = rest.splitn(2, char::is_whitespace);
-        let name = parts.next().unwrap_or("");
+        let mut tokens = Vec::new();
+        while let Some((token, more)) = take_file_arg(rest) {
+            tokens.push(token);
+            rest = more;
+        }
+        let Some(source_name) = tokens.first().cloned() else {
+            return;
+        };
+        let name = if op == "drawcopy" {
+            tokens
+                .iter()
+                .skip(1)
+                .rfind(|token| token.starts_with('@'))
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            source_name
+        };
         if !name.starts_with('@')
             || self
                 .windows
-                .get(name)
+                .get(&name)
                 .is_none_or(|window| window.kind != super::window::WindowKind::Picture)
         {
             return;
         }
-        let mut args: Vec<String> = parts
-            .next()
-            .unwrap_or("")
-            .split_whitespace()
-            .map(str::to_string)
-            .collect();
+        if op == "drawcopy"
+            && self
+                .windows
+                .get(tokens.first().map(String::as_str).unwrap_or(""))
+                .is_none_or(|window| window.kind != super::window::WindowKind::Picture)
+        {
+            return;
+        }
+        let mut args = if op == "drawcopy" {
+            tokens
+        } else {
+            tokens.into_iter().skip(1).collect()
+        };
+        if op == "drawpic" && switches.contains('v') {
+            if let Some(index) = args.iter().rposition(|argument| argument.starts_with('&')) {
+                if let Some(bytes) = self.bins.get(&args[index]) {
+                    use base64::{engine::general_purpose::STANDARD, Engine as _};
+                    let mime = if bytes.starts_with(b"\x89PNG") {
+                        "image/png"
+                    } else if bytes.starts_with(b"GIF8") {
+                        "image/gif"
+                    } else if bytes.starts_with(&[0xff, 0xd8]) {
+                        "image/jpeg"
+                    } else if bytes.starts_with(b"BM") {
+                        "image/bmp"
+                    } else {
+                        "application/octet-stream"
+                    };
+                    args[index] = format!("data:{mime};base64,{}", STANDARD.encode(bytes));
+                }
+            }
+        }
         args.insert(0, switches);
         self.actions.push(Action::WindowDraw {
-            name: name.to_string(),
+            name,
             op: op.to_string(),
             args,
         });
@@ -3360,9 +3405,19 @@ impl<'a> Runtime<'a> {
     /// `/clear @window` — clear a custom window's lines (channel-buffer clear is
     /// a frontend concern, deferred).
     fn cmd_window_clear(&mut self, raw: &str) {
-        let name = self.expand(raw);
-        let name = name.trim();
+        let expanded = self.expand(raw);
+        let mut parts = expanded.split_whitespace();
+        let first = parts.next().unwrap_or("");
+        let (switches, name) = if first.starts_with('-') {
+            (first, parts.next().unwrap_or(""))
+        } else {
+            ("", first)
+        };
         if name.starts_with('@') && self.windows.exists(name) {
+            if switches.contains('c') {
+                self.windows.clear_clicks(name);
+                return;
+            }
             self.windows.clear(name);
             self.actions.push(Action::WindowLine {
                 name: name.to_string(),

@@ -188,8 +188,17 @@ export const api = {
     source: string,
     x: number,
     y: number,
-    listLine = 0
-  ) => invoke("script_window_mouse", { serverId, target, myNick, network, command, source, x, y, listLine }),
+    listLine = 0,
+    key = 0
+  ) => invoke("script_window_mouse", { serverId, target, myNick, network, command, source, x, y, listLine, key }),
+  scriptPictureRead: (filename: string) =>
+    invoke<string>("script_picture_read", { filename }),
+  scriptPictureSave: (filename: string, data: string) =>
+    invoke("script_picture_save", { filename, data }),
+  scriptPictureSnapshot: (name: string, width: number, height: number, rgba: string) =>
+    invoke("script_picture_snapshot", { name, width, height, rgba }),
+  scriptPictureBinvar: (name: string, data: string) =>
+    invoke("script_picture_binvar", { name, data }),
   scriptRunAlias: (
     serverId: string,
     target: string,

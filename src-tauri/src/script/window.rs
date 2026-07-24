@@ -34,6 +34,11 @@ pub struct Window {
     pub lines: Vec<String>,
     /// One-based selected line numbers for listbox windows.
     pub selected: BTreeSet<usize>,
+    /// Oldest-to-newest click coordinates retained for `$click`.
+    pub clicks: Vec<(i32, i32)>,
+    pub bitmap_width: u32,
+    pub bitmap_height: u32,
+    pub bitmap_rgba: Vec<u8>,
 }
 
 #[derive(Default)]
@@ -53,11 +58,53 @@ impl WindowStore {
             title: title.to_string(),
             lines: Vec::new(),
             selected: BTreeSet::new(),
+            clicks: Vec::new(),
+            bitmap_width: 0,
+            bitmap_height: 0,
+            bitmap_rgba: Vec::new(),
         });
     }
 
     pub fn close(&mut self, name: &str) {
         self.windows.remove(&key(name));
+    }
+
+    pub fn record_click(&mut self, name: &str, x: i32, y: i32) {
+        if let Some(window) = self.windows.get_mut(&key(name)) {
+            window.clicks.push((x, y));
+            if window.clicks.len() > 100 {
+                window.clicks.remove(0);
+            }
+        }
+    }
+
+    pub fn clear_clicks(&mut self, name: &str) {
+        if let Some(window) = self.windows.get_mut(&key(name)) {
+            window.clicks.clear();
+        }
+    }
+
+    pub fn set_bitmap(&mut self, name: &str, width: u32, height: u32, rgba: Vec<u8>) {
+        if let Some(window) = self.windows.get_mut(&key(name)) {
+            if rgba.len() == width as usize * height as usize * 4 {
+                window.bitmap_width = width;
+                window.bitmap_height = height;
+                window.bitmap_rgba = rgba;
+            }
+        }
+    }
+
+    pub fn dot(&self, name: &str, x: u32, y: u32) -> Option<u32> {
+        let window = self.get(name)?;
+        if x >= window.bitmap_width || y >= window.bitmap_height {
+            return None;
+        }
+        let offset = (y as usize * window.bitmap_width as usize + x as usize) * 4;
+        Some(
+            u32::from(window.bitmap_rgba[offset])
+                | (u32::from(window.bitmap_rgba[offset + 1]) << 8)
+                | (u32::from(window.bitmap_rgba[offset + 2]) << 16),
+        )
     }
 
     pub fn exists(&self, name: &str) -> bool {
@@ -206,6 +253,8 @@ mod tests {
         assert_eq!(s.line("@list", 1), "one");
         s.clear("@list");
         assert_eq!(s.count("@list"), 0);
+        s.set_bitmap("@list", 1, 1, vec![12, 34, 56, 255]);
+        assert_eq!(s.dot("@list", 0, 0), Some(12 | (34 << 8) | (56 << 16)));
         s.close("@list");
         assert!(!s.exists("@list"));
     }
