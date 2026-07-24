@@ -12,6 +12,21 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🕒 26.7.62 — Timestamp display modes
+
+### Added
+- Settings → Appearance now offers three timestamp layouts: inline
+  (`timestamp nickname message`), a centered timestamp divider above each
+  message, or timestamps completely off.
+- Existing saved `Show timestamps` preferences migrate automatically to inline
+  or off.
+
+### Verified
+- Complete frontend tests, production frontend build, complete non-live Rust
+  suite, and full Tauri release build.
+
+---
+
 ## 🖼️ 26.7.61 — Picture-window drawing
 
 ### Added

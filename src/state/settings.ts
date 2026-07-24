@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 export type Theme = "dark" | "light" | "system";
 export type ScriptTheme = "vscode-dark" | "vscode-light" | "monokai" | "solarized-dark";
+export type TimestampMode = "inline" | "divider" | "off";
 export type Layout = "tree" | "switchbar";
 
 export interface Settings {
@@ -9,7 +10,7 @@ export interface Settings {
   /** Colour theme used by the mSL script editor. */
   scriptTheme: ScriptTheme;
   layout: Layout;
-  showTimestamps: boolean;
+  timestampMode: TimestampMode;
   showJoinPart: boolean;
   notifications: boolean;
   highlightWords: string[];
@@ -54,7 +55,7 @@ const DEFAULTS: Settings = {
   theme: "dark",
   scriptTheme: "vscode-dark",
   layout: "tree",
-  showTimestamps: true,
+  timestampMode: "inline",
   showJoinPart: true,
   notifications: true,
   highlightWords: [],
@@ -86,10 +87,25 @@ const DEFAULTS: Settings = {
 
 const STORAGE_KEY = "jirc.settings";
 
+export function normalizeSavedSettings(
+  value: Record<string, unknown>
+): Settings {
+  const { showTimestamps, ...saved } = value;
+  return {
+    ...DEFAULTS,
+    ...saved,
+    timestampMode:
+      (saved.timestampMode as TimestampMode | undefined) ??
+      (showTimestamps === false ? "off" : "inline"),
+  } as Settings;
+}
+
 function load(): Settings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return { ...DEFAULTS, ...JSON.parse(raw) };
+    if (raw) {
+      return normalizeSavedSettings(JSON.parse(raw));
+    }
   } catch {
     /* ignore */
   }

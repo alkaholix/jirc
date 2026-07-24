@@ -509,6 +509,25 @@ select {
   font-size: 0.78rem;
   padding-top: 0.05rem;
 }
+.line.timestamp-divider-mode {
+  flex-wrap: wrap;
+}
+.timestamp-divider {
+  flex: 0 0 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  padding: 0.22rem 0 0.12rem;
+}
+.timestamp-divider::before,
+.timestamp-divider::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
 .line .nick {
   flex: 0 0 auto;
   font-weight: 600;

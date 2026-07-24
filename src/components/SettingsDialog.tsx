@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { applyTheme, Layout, Theme, useSettings } from "../state/settings";
+import {
+  applyTheme,
+  Layout,
+  Theme,
+  useSettings,
+  type TimestampMode,
+} from "../state/settings";
 import { api, DataLocation } from "../lib/api";
 import { dccDetect } from "../state/dcc";
 import { UsersSettings } from "./UsersSettings";
@@ -206,7 +212,19 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   placeholder="(none)"
                 />
               </label>
-              {toggle("showTimestamps", "Show timestamps")}
+              <label className="inline">
+                Timestamps
+                <select
+                  value={settings.timestampMode}
+                  onChange={(event) =>
+                    settings.set("timestampMode", event.target.value as TimestampMode)
+                  }
+                >
+                  <option value="inline">Timestamp · nickname · message</option>
+                  <option value="divider">Timestamp divider above message</option>
+                  <option value="off">Off</option>
+                </select>
+              </label>
               {toggle("showJoinPart", "Show join / part / quit messages")}
               <div className="emoji-editor">
                 <div className="settings-label">

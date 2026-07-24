@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Buffer, Line, useStore } from "../state/store";
-import { useSettings } from "../state/settings";
+import { useSettings, type TimestampMode } from "../state/settings";
 import { api, PopupItem } from "../lib/api";
 import { ContextMenu, PopupItems } from "./popupMenu";
 import { parseIrc, stripFormatting } from "../ircFormat/parse";
@@ -21,20 +21,30 @@ function lineText(l: Line): string {
   return stripFormatting(`${l.from ?? ""} ${l.text}`).toLowerCase();
 }
 
-function LineRow({ line, showTime, selfColor }: { line: Line; showTime: boolean; selfColor: string }) {
-  const time = showTime ? ts(line) : "";
+function Timestamp({ line, mode }: { line: Line; mode: TimestampMode }) {
+  const time = ts(line);
+  if (!time || mode === "off") return null;
+  return mode === "divider" ? (
+    <span className="timestamp-divider"><span>{time}</span></span>
+  ) : (
+    <span className="time">{time}</span>
+  );
+}
+
+function LineRow({ line, timestampMode, selfColor }: { line: Line; timestampMode: TimestampMode; selfColor: string }) {
+  const dividerClass = timestampMode === "divider" ? " timestamp-divider-mode" : "";
   if (line.kind === "event" || line.kind === "system" || line.kind === "error") {
     return (
-      <div className={`line line-${line.kind}`}>
-        <span className="time">{time}</span>
+      <div className={`line line-${line.kind}${dividerClass}`}>
+        <Timestamp line={line} mode={timestampMode} />
         <span className="meta">{parseIrc(line.text)}</span>
       </div>
     );
   }
   if (line.kind === "action") {
     return (
-      <div className="line line-action">
-        <span className="time">{time}</span>
+      <div className={`line line-action${dividerClass}`}>
+        <Timestamp line={line} mode={timestampMode} />
         <span className="action-text">
           * <span style={{ color: nickColor(line.from ?? "", line.self, selfColor) }}>{ircxDisplay(line.from)}</span>{" "}
           {parseIrc(line.text)}
@@ -48,8 +58,8 @@ function LineRow({ line, showTime, selfColor }: { line: Line; showTime: boolean;
       ? `you whisper to ${ircxDisplay(line.to) || "?"}`
       : `${ircxDisplay(line.from)} whispers`;
     return (
-      <div className="line line-whisper">
-        <span className="time">{time}</span>
+      <div className={`line line-whisper${dividerClass}`}>
+        <Timestamp line={line} mode={timestampMode} />
         <span className="whisper-text">
           <span className="whisper-mark">»</span> {label}: {parseIrc(line.text)}
         </span>
@@ -58,8 +68,8 @@ function LineRow({ line, showTime, selfColor }: { line: Line; showTime: boolean;
   }
   const isNotice = line.kind === "notice";
   return (
-    <div className={`line line-msg${line.self ? " self" : ""}`}>
-      <span className="time">{time}</span>
+    <div className={`line line-msg${line.self ? " self" : ""}${dividerClass}`}>
+      <Timestamp line={line} mode={timestampMode} />
       <span className="nick" style={{ color: nickColor(line.from ?? "", line.self, selfColor) }}>
         {isNotice ? "-" : ""}
         {ircxDisplay(line.from)}
@@ -73,7 +83,7 @@ function LineRow({ line, showTime, selfColor }: { line: Line; showTime: boolean;
 export function MessageList({ buffer }: { buffer: Buffer }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
-  const showTimestamps = useSettings((s) => s.showTimestamps);
+  const timestampMode = useSettings((s) => s.timestampMode);
   const showJoinPart = useSettings((s) => s.showJoinPart);
   const selfColor = useSettings((s) => s.selfNickColor);
 
@@ -241,7 +251,7 @@ export function MessageList({ buffer }: { buffer: Buffer }) {
                 style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${vi.start}px)` }}
                 onClick={(event) => selectWindowLine(lineNumber, event.ctrlKey || event.metaKey)}
               >
-                <LineRow line={lines[vi.index]} showTime={showTimestamps} selfColor={selfColor} />
+                <LineRow line={lines[vi.index]} timestampMode={timestampMode} selfColor={selfColor} />
               </div>
             );
           })}
