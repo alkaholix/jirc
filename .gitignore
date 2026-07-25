@@ -38,6 +38,7 @@ window-mockups.html
 *.chm
 
 # AI working guides — kept LOCAL only (loaded by Claude Code), not on the public repo.
+AGENTS.md
 CLAUDE.md
 CLAUDE-OPUS-4.8.md
 
@@ -51,6 +52,5 @@ mirckb-master/
 # carry credentials. jIRC's own example scripts live embedded in the Rust source.
 *.mrc
 
-# Reviewed, credential-free scripts shipped as documentation examples.
-!docs/examples/
-!docs/examples/*.mrc
+# Local documentation examples — never publish.
+docs/examples/
