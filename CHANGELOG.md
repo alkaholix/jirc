@@ -12,6 +12,40 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🧩 26.7.66 — Complete cross-platform script dialogs
+
+### Added
+- Added mIRC-style dialog table parsing alongside jIRC's concise syntax,
+  including size declarations and numeric control IDs.
+- Added radio, group box, scroll, editable combo, icon, link, tab, menu, and
+  menu-item controls to the existing text/edit/button/check/list controls.
+- Added portable control styles for password/read-only/multiline edits,
+  multi-selection, initial disabled/hidden state, tabs, ranges, default/OK and
+  cancel behavior.
+- Expanded `/dialog` with modeless table instances, title, size, rename, and
+  close operations.
+- Expanded `/did` with add/insert/replace/delete/clear, enable/disable,
+  show/hide, focus/default, check/uncheck/indeterminate, range, ID lists and
+  ranges; added `/didtok`.
+- Added `$dname`, `$devent`, modeless `$dialog()` state, richer `$did`
+  properties, `$didwm`, `$didreg`, and `$didtok`.
+- `on DIALOG` now matches dialog name, event (`init`, `edit`, `sclick`,
+  `dclick`, `menu`, `scroll`, `close`) and individual/list/range control IDs.
+
+### UI and documentation
+- Dialogs are themed and resizable, support Enter/Escape default/cancel
+  behavior, and load icon controls from the script-data sandbox.
+- Corrected stale README wording: DCC chat and ordinary file transfer are
+  implemented; DCC server mode remains roadmap work.
+- Updated HelpMe and the roadmap to describe the completed portable dialog API.
+
+### Verified
+- Focused parser, event, identifier, and frontend state coverage; complete
+  frontend and non-live Rust suites; production frontend and Tauri release
+  builds.
+
+---
+
 ## 🎨 26.7.65 — Complete cross-platform picture drawing
 
 ### Added

@@ -325,9 +325,167 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             }
         }
         "did" => {
-            // $did(dialog, control) -> the control's current value (from the
-            // event snapshot the UI sent).
-            rt.event.did.get(&a(1)).cloned().unwrap_or_default()
+            if args.is_empty() {
+                return rt.event.dialog_control.clone();
+            }
+            let (control, line) = if args.len() >= 2 {
+                (a(1), a(2).parse::<usize>().unwrap_or(0))
+            } else {
+                (a(0), a(1).parse::<usize>().unwrap_or(0))
+            };
+            let value = rt.event.did.get(&control).cloned().unwrap_or_default();
+            let lines: Vec<&str> = value.split('\n').collect();
+            let options = rt
+                .event
+                .did
+                .get(&format!("\u{0}options\u{0}{control}"))
+                .map(|value| value.split('\n').collect::<Vec<_>>())
+                .unwrap_or_default();
+            match prop {
+                "len" => {
+                    let text = if line > 0 {
+                        lines.get(line - 1).copied().unwrap_or("")
+                    } else {
+                        &value
+                    };
+                    text.chars().count().to_string()
+                }
+                "lines" => if options.is_empty() {
+                    lines.len()
+                } else {
+                    options.len()
+                }
+                .to_string(),
+                "state" => {
+                    if value == "1" || value == "2" {
+                        value
+                    } else {
+                        "0".to_string()
+                    }
+                }
+                "seltext" => value.split('\n').next().unwrap_or("").to_string(),
+                "sel" => {
+                    let selected: Vec<usize> = value
+                        .split('\n')
+                        .filter_map(|selected| {
+                            options.iter().position(|option| *option == selected)
+                        })
+                        .map(|index| index + 1)
+                        .collect();
+                    if line == 0 {
+                        selected.len().to_string()
+                    } else {
+                        selected.get(line - 1).copied().unwrap_or(0).to_string()
+                    }
+                }
+                "visible" | "enabled" => rt
+                    .event
+                    .did
+                    .get(&format!("\u{0}{prop}\u{0}{control}"))
+                    .map(|value| if value == "true" { "$true" } else { "$false" })
+                    .unwrap_or("$false")
+                    .to_string(),
+                "isid" => bool_str(rt.event.did.contains_key(&control)),
+                "edited" => rt
+                    .event
+                    .did
+                    .get(&format!("\u{0}edited\u{0}{control}"))
+                    .map(|value| if value == "true" { "$true" } else { "$false" })
+                    .unwrap_or("$false")
+                    .to_string(),
+                "next" | "prev" => rt
+                    .event
+                    .did
+                    .get(&format!("\u{0}{prop}\u{0}{control}"))
+                    .cloned()
+                    .unwrap_or_default(),
+                _ if line > 0 => lines.get(line - 1).copied().unwrap_or("").to_string(),
+                _ => value,
+            }
+        }
+        "dname" => rt.event.dialog_name.clone(),
+        "devent" => rt.event.dialog_event.clone(),
+        "dialog" => {
+            let prefix = "\u{0}dialog\u{0}";
+            let mut names: Vec<String> = rt
+                .vars
+                .keys()
+                .filter_map(|key| {
+                    key.strip_prefix(prefix)
+                        .and_then(|rest| rest.split_once('\u{0}'))
+                        .map(|(name, _)| name.to_string())
+                })
+                .collect();
+            names.sort();
+            names.dedup();
+            let selector = a(0);
+            let dialog = match selector.parse::<usize>() {
+                Ok(0) => return names.len().to_string(),
+                Ok(index) => names.get(index - 1).cloned().unwrap_or_default(),
+                Err(_) => selector.to_ascii_lowercase(),
+            };
+            if !names.iter().any(|name| name.eq_ignore_ascii_case(&dialog)) {
+                return String::new();
+            }
+            match prop {
+                "" => dialog,
+                "title" | "table" | "width" | "height" | "w" | "h" => {
+                    let property = match prop {
+                        "w" => "width",
+                        "h" => "height",
+                        value => value,
+                    };
+                    rt.vars
+                        .get(&super::eval::dialog_state_key(&dialog, property))
+                        .cloned()
+                        .unwrap_or_default()
+                }
+                "modal" => "$false".to_string(),
+                "active" => "$true".to_string(),
+                "focus" => rt.event.dialog_control.clone(),
+                _ => String::new(),
+            }
+        }
+        "didtok" => {
+            let control = a(1);
+            let delimiter = a(2)
+                .parse::<u32>()
+                .ok()
+                .and_then(char::from_u32)
+                .unwrap_or(',');
+            rt.event
+                .did
+                .get(&format!("\u{0}options\u{0}{control}"))
+                .map(|value| {
+                    value
+                        .split('\n')
+                        .collect::<Vec<_>>()
+                        .join(&delimiter.to_string())
+                })
+                .unwrap_or_default()
+        }
+        "didwm" | "didreg" => {
+            let control = a(1);
+            let needle = a(2);
+            let start = a(3).parse::<usize>().unwrap_or(1).max(1);
+            let options = rt
+                .event
+                .did
+                .get(&format!("\u{0}options\u{0}{control}"))
+                .cloned()
+                .unwrap_or_default();
+            options
+                .split('\n')
+                .enumerate()
+                .skip(start - 1)
+                .find(|(_, value)| {
+                    if name.eq_ignore_ascii_case("didreg") {
+                        mirc_regex_is_match(value, &needle)
+                    } else {
+                        wildcard_match(&needle, value)
+                    }
+                })
+                .map_or_else(String::new, |(index, _)| (index + 1).to_string())
         }
         "address" => {
             // Bare $address -> the triggering user's user@host; $address(nick) ->

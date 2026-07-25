@@ -178,6 +178,8 @@ pub enum Action {
         name: String,
         title: String,
         controls: Vec<super::ast::DialogControl>,
+        width: i32,
+        height: i32,
     },
     /// Close a dialog (`/dialog -c`).
     DialogClose {
@@ -384,6 +386,9 @@ pub struct EventVars {
     pub knick: String,
     /// Dialog control values (id -> value) for `on DIALOG`, read by `$did`.
     pub did: std::collections::HashMap<String, String>,
+    pub dialog_name: String,
+    pub dialog_event: String,
+    pub dialog_control: String,
     /// The event type name, e.g. "text"/"raw"/"op" — exposed as `$event`.
     pub event: String,
     /// Name of the `/timer` currently invoking the command (`$ctimer`).
@@ -1714,6 +1719,7 @@ impl<'a> Runtime<'a> {
             "sockread" => self.cmd_sockread(raw_args),
             "dialog" => self.cmd_dialog(raw_args),
             "did" => self.cmd_did(raw_args),
+            "didtok" => self.cmd_didtok(raw_args),
             "nickicon" => {
                 // /nickicon <nick> [icon]  — empty icon clears it.
                 let expanded = self.expand(raw_args.trim());
@@ -4130,52 +4136,171 @@ impl<'a> Runtime<'a> {
             .insert(SOCK_BR_KEY.to_string(), result.bytes_read.to_string());
     }
 
-    /// `/dialog [-c] <name>` — open (or, with `-c`, close) a custom dialog.
+    /// Portable `/dialog` modeless operations.
     fn cmd_dialog(&mut self, raw: &str) {
-        let toks: Vec<&str> = raw.split_whitespace().collect();
-        let close = toks.iter().any(|t| *t == "-c");
-        let Some(name) = toks.iter().find(|t| !t.starts_with('-')) else {
-            return;
+        let expanded = self.expand(raw);
+        let mut toks = expanded.split_whitespace();
+        let first = toks.next().unwrap_or("");
+        let (flags, name) = if first.starts_with('-') {
+            (first.trim_start_matches('-'), toks.next().unwrap_or(""))
+        } else {
+            ("", first)
         };
-        if close {
+        if name.is_empty() {
+            return;
+        }
+        if flags.contains('c') || flags.contains('x') {
+            clear_dialog_state(self.vars, name);
             self.actions.push(Action::DialogClose {
                 name: name.to_string(),
             });
-        } else if let Some(d) = self.script.find_dialog(name) {
+            return;
+        }
+        if flags.contains('t') {
+            self.vars.insert(
+                dialog_state_key(name, "title"),
+                toks.clone().collect::<Vec<_>>().join(" "),
+            );
+            self.actions.push(Action::DialogSet {
+                dialog: name.to_string(),
+                control: String::new(),
+                op: "title".into(),
+                value: toks.collect::<Vec<_>>().join(" "),
+            });
+            return;
+        }
+        if flags.contains('g') {
+            let new_name = toks.next().unwrap_or("");
+            rename_dialog_state(self.vars, name, new_name);
+            self.actions.push(Action::DialogSet {
+                dialog: name.to_string(),
+                control: String::new(),
+                op: "rename".into(),
+                value: new_name.to_string(),
+            });
+            return;
+        }
+        if flags.contains('s') {
+            let value = toks.collect::<Vec<_>>().join(" ");
+            let fields: Vec<&str> = value.split_whitespace().collect();
+            if let Some(width) = fields.get(2) {
+                self.vars
+                    .insert(dialog_state_key(name, "width"), (*width).to_string());
+            }
+            if let Some(height) = fields.get(3) {
+                self.vars
+                    .insert(dialog_state_key(name, "height"), (*height).to_string());
+            }
+            self.actions.push(Action::DialogSet {
+                dialog: name.to_string(),
+                control: String::new(),
+                op: "size".into(),
+                value,
+            });
+            return;
+        }
+        let table = if flags.contains('m') {
+            toks.next().unwrap_or(name)
+        } else {
+            name
+        };
+        if let Some(d) = self.script.find_dialog(table) {
+            self.vars
+                .insert(dialog_state_key(name, "table"), table.to_string());
+            self.vars
+                .insert(dialog_state_key(name, "title"), d.title.clone());
+            self.vars
+                .insert(dialog_state_key(name, "width"), d.width.to_string());
+            self.vars
+                .insert(dialog_state_key(name, "height"), d.height.to_string());
             self.actions.push(Action::DialogOpen {
-                name: d.name.clone(),
+                name: name.to_string(),
                 title: d.title.clone(),
                 controls: d.controls.clone(),
+                width: d.width,
+                height: d.height,
             });
         }
     }
 
-    /// `/did [-a|-r] <dialog> <control> [text]` — mutate a dialog control:
-    /// `-a` add a list/combo item, `-r` clear it, default set its value.
+    /// Portable `/did` control mutation.
     fn cmd_did(&mut self, raw: &str) {
-        let mut rest = raw.trim();
-        let mut op = "set";
-        if rest.starts_with('-') {
-            let (sw, more) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
-            op = match sw {
-                "-a" => "add",
-                "-r" | "-c" => "clear",
-                _ => "set",
-            };
-            rest = more.trim();
-        }
-        let mut it = rest.splitn(3, char::is_whitespace);
-        let (dialog, control) = (it.next().unwrap_or(""), it.next().unwrap_or(""));
+        let expanded = self.expand(raw);
+        let mut it = expanded.split_whitespace();
+        let first = it.next().unwrap_or("");
+        let (flags, dialog) = if first.starts_with('-') {
+            (first.trim_start_matches('-'), it.next().unwrap_or(""))
+        } else {
+            ("", first)
+        };
+        let control = it.next().unwrap_or("");
         if dialog.is_empty() || control.is_empty() {
             return;
         }
-        let value = self.expand(it.next().unwrap_or("").trim());
-        self.actions.push(Action::DialogSet {
-            dialog: dialog.to_string(),
-            control: control.to_string(),
-            op: op.to_string(),
-            value,
-        });
+        let mut tail = it.collect::<Vec<_>>();
+        let op = if flags.contains('a') {
+            "add"
+        } else if flags.contains('i') {
+            "insert"
+        } else if flags.contains('o') {
+            "replace"
+        } else if flags.contains('d') {
+            "delete"
+        } else if flags.contains('r') {
+            "clear"
+        } else if flags.contains('e') || flags.contains('n') {
+            "enable"
+        } else if flags.contains('b') || flags.contains('m') {
+            "disable"
+        } else if flags.contains('v') {
+            "show"
+        } else if flags.contains('h') {
+            "hide"
+        } else if flags.contains('f') {
+            "focus"
+        } else if flags.contains('t') {
+            "default"
+        } else if flags.contains('c') && flags.contains('u') {
+            "indeterminate"
+        } else if flags.contains('c') || flags.contains('s') {
+            "check"
+        } else if flags.contains('u') || flags.contains('l') {
+            "uncheck"
+        } else if flags.contains('z') {
+            "range"
+        } else {
+            "set"
+        };
+        let value = tail.drain(..).collect::<Vec<_>>().join(" ");
+        for id in expand_dialog_ids(control) {
+            self.actions.push(Action::DialogSet {
+                dialog: dialog.to_string(),
+                control: id,
+                op: op.to_string(),
+                value: value.clone(),
+            });
+        }
+    }
+
+    fn cmd_didtok(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        let mut parts = expanded.splitn(4, char::is_whitespace);
+        let dialog = parts.next().unwrap_or("");
+        let control = parts.next().unwrap_or("");
+        let delimiter = parts
+            .next()
+            .and_then(|value| value.parse::<u32>().ok())
+            .and_then(char::from_u32)
+            .unwrap_or(',');
+        let text = parts.next().unwrap_or("");
+        for value in text.split(delimiter) {
+            self.actions.push(Action::DialogSet {
+                dialog: dialog.to_string(),
+                control: control.to_string(),
+                op: "add".into(),
+                value: value.to_string(),
+            });
+        }
     }
 
     /// `/hsave -s[bBniau] <table> <file> [section]` — save a hash table using
@@ -6195,6 +6320,53 @@ fn take_file_arg(raw: &str) -> Option<(String, &str)> {
     }
     let end = raw.find(char::is_whitespace).unwrap_or(raw.len());
     Some((raw[..end].to_string(), raw[end..].trim_start()))
+}
+
+fn expand_dialog_ids(spec: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    for part in spec.split(',') {
+        if let Some((start, end)) = part.split_once('-') {
+            if let (Ok(start), Ok(end)) = (start.parse::<i64>(), end.parse::<i64>()) {
+                ids.extend((start..=end).map(|id| id.to_string()));
+                continue;
+            }
+        }
+        if !part.is_empty() {
+            ids.push(part.to_string());
+        }
+    }
+    ids
+}
+
+pub fn dialog_state_key(name: &str, property: &str) -> String {
+    format!(
+        "\u{0}dialog\u{0}{}\u{0}{}",
+        name.to_ascii_lowercase(),
+        property
+    )
+}
+
+pub fn clear_dialog_state(vars: &mut HashMap<String, String>, name: &str) {
+    let prefix = format!("\u{0}dialog\u{0}{}\u{0}", name.to_ascii_lowercase());
+    vars.retain(|key, _| !key.starts_with(&prefix));
+}
+
+fn rename_dialog_state(vars: &mut HashMap<String, String>, old: &str, new: &str) {
+    if new.is_empty() {
+        return;
+    }
+    let old_prefix = format!("\u{0}dialog\u{0}{}\u{0}", old.to_ascii_lowercase());
+    let values: Vec<(String, String)> = vars
+        .iter()
+        .filter_map(|(key, value)| {
+            key.strip_prefix(&old_prefix)
+                .map(|property| (property.to_string(), value.clone()))
+        })
+        .collect();
+    clear_dialog_state(vars, old);
+    for (property, value) in values {
+        vars.insert(dialog_state_key(new, &property), value);
+    }
 }
 
 /// Extracts the decimal lifetime from a combined mIRC switch token such as

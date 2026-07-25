@@ -453,6 +453,10 @@ impl ScriptEngine {
             .is_some_and(|a| g.script.group_enabled(&g.vars, &a.group))
     }
 
+    fn close_dialog_state(&self, name: &str) {
+        eval::clear_dialog_state(&mut self.inner.lock().unwrap().vars, name);
+    }
+
     /// Returns the user-defined popup items for a context (nicklist, channel, …),
     /// evaluating each item's dynamic label ($iif/$sock/…) in a run context (the
     /// right-clicked nick + channel) and dropping items whose label renders empty
@@ -1578,6 +1582,17 @@ fn matches(
             };
         return direction_ok && pattern_ok;
     }
+    if kind == "DIALOG" {
+        let name_ok = target_spec.is_empty()
+            || target_spec == "*"
+            || wildcard_match(target_spec, &ev.dialog_name);
+        let event_ok = selector.is_empty()
+            || selector == "*"
+            || selector.eq_ignore_ascii_case(&ev.dialog_event);
+        let id_ok =
+            pattern.is_empty() || pattern == "*" || dialog_id_matches(pattern, &ev.dialog_control);
+        return name_ok && event_ok && id_ok;
+    }
     if kind == "RAW" {
         let selector_ok =
             selector.is_empty() || selector == "*" || wildcard_match(selector, &ev.text);
@@ -1626,6 +1641,23 @@ fn matches(
         // A named target (e.g. a socket name in `on *:SOCKREAD:bot:`) is matched
         // as a wildcard against the event's name/channel.
         spec => wildcard_match(spec, &ev.chan),
+    })
+}
+
+fn dialog_id_matches(spec: &str, id: &str) -> bool {
+    spec.split(',').any(|part| {
+        let part = part.trim();
+        if let Some((start, end)) = part.split_once('-') {
+            let id = id.parse::<i64>().ok();
+            let start = start.trim().parse::<i64>().ok();
+            let end = end.trim().parse::<i64>().ok();
+            id.is_some()
+                && start
+                    .zip(end)
+                    .is_some_and(|(start, end)| (start..=end).contains(&id.unwrap()))
+        } else {
+            part.eq_ignore_ascii_case(id)
+        }
     })
 }
 
@@ -2778,6 +2810,8 @@ fn apply_actions_depth(
                 name,
                 title,
                 controls,
+                width,
+                height,
             } => {
                 let _ = app.emit(
                     IRC_EVENT,
@@ -2786,6 +2820,8 @@ fn apply_actions_depth(
                         name,
                         title,
                         controls,
+                        width,
+                        height,
                     },
                 );
             }
@@ -2969,15 +3005,16 @@ pub async fn script_popups(
 /// `values` is the current id->value of every control, exposed via `$did`.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub fn script_run_dialog(
+pub async fn script_run_dialog(
     app: AppHandle,
     server_id: String,
     my_nick: String,
     network: String,
     dialog: String,
+    event: String,
     control: String,
     values: HashMap<String, String>,
-) {
+) -> bool {
     // An `on DIALOG` handler may call `$input`/`$?`, which blocks the run waiting
     // for the prompt reply. Run it on a blocking thread so the main thread (and
     // WebView2) stay responsive — a sync command blocking the main thread freezes
@@ -2996,17 +3033,25 @@ pub fn script_run_dialog(
         let vars = EventVars {
             nick: control.clone(),
             chan: dialog.clone(),
-            target: dialog,
+            target: dialog.clone(),
             text: control.clone(),
-            params: vec![control],
+            params: vec![control.clone()],
             did: values,
+            dialog_name: dialog.clone(),
+            dialog_event: event.clone(),
+            dialog_control: control,
             ..Default::default()
         };
-        let actions = app
-            .state::<ScriptEngine>()
-            .dispatch_event(&ctx, "DIALOG", vars);
+        let engine = app.state::<ScriptEngine>();
+        let (actions, halted) = engine.dispatch_event_halt(&ctx, "DIALOG", vars);
+        if event.eq_ignore_ascii_case("close") {
+            engine.close_dialog_state(&dialog);
+        }
         apply_actions(&app, &server_id, &my_nick, &network, "", actions);
-    });
+        halted
+    })
+    .await
+    .unwrap_or(false)
 }
 
 /// A notify-list nick came online (`on NOTIFY`) or went offline (`on UNOTIFY`).
@@ -7651,28 +7696,56 @@ mod tests {
     #[test]
     fn dialog_open_produces_action() {
         let engine = ScriptEngine::new();
-        engine.load("dialog g {\n title \"Hi\"\n edit name\n}\nalias o { /dialog g }");
+        engine.load(
+            "dialog g {\n title \"Hi\"\n size -1 -1 360 240\n edit name\n}\n\
+             alias o { /dialog g }\n\
+             alias info { /echo $dialog(0) $dialog(g).title $dialog(g).table $dialog(g).w $dialog(g).h }",
+        );
         let actions = engine.run_alias(&ctx(), "#c", "o", "");
         match &actions[..] {
             [Action::DialogOpen {
                 name,
                 title,
                 controls,
+                width,
+                height,
             }] => {
                 assert_eq!(name, "g");
                 assert_eq!(title, "Hi");
                 assert_eq!(controls.len(), 1);
                 assert_eq!(controls[0].id, "name");
+                assert_eq!((*width, *height), (360, 240));
             }
             _ => panic!("expected DialogOpen, got {actions:?}"),
         }
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "info", ""),
+            vec![Action::Echo {
+                target: "#c".into(),
+                text: "1 Hi g 360 240".into(),
+            }]
+        );
+        let did = engine.run_command(
+            &ctx(),
+            "#c",
+            "/did -a g name one | /did -i g name 1 zero | /did -b g name",
+            &[],
+        );
+        assert!(did.iter().any(|action| matches!(
+            action,
+            Action::DialogSet { op, value, .. } if op == "insert" && value == "1 zero"
+        )));
+        assert!(did.iter().any(|action| matches!(
+            action,
+            Action::DialogSet { op, .. } if op == "disable"
+        )));
     }
 
     #[test]
     fn dialog_event_reads_values_and_acts() {
         let engine = ScriptEngine::new();
         engine
-            .load("on *:DIALOG:g:{ if ($1 == send) { /msg #c hi $did(g, name) | /dialog -c g } }");
+            .load("on *:DIALOG:g:sclick:send:{ /msg #c $dname $devent $did hi $did(g, name) | /dialog -c g }");
         let mut vals = std::collections::HashMap::new();
         vals.insert("name".to_string(), "bob".to_string());
         let vars = EventVars {
@@ -7681,13 +7754,16 @@ mod tests {
             text: "send".into(),
             params: vec!["send".into()],
             did: vals,
+            dialog_name: "g".into(),
+            dialog_event: "sclick".into(),
+            dialog_control: "send".into(),
             ..Default::default()
         };
         let actions = engine.dispatch_event(&ctx(), "DIALOG", vars);
         assert_eq!(
             actions,
             vec![
-                Action::Send("PRIVMSG #c :hi bob".into()),
+                Action::Send("PRIVMSG #c :g sclick send hi bob".into()),
                 Action::DialogClose { name: "g".into() },
             ]
         );

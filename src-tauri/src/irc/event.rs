@@ -184,6 +184,8 @@ pub enum UiEvent {
         name: String,
         title: String,
         controls: Vec<crate::script::ast::DialogControl>,
+        width: i32,
+        height: i32,
     },
     /// Close a dialog.
     DialogClose { server_id: String, name: String },

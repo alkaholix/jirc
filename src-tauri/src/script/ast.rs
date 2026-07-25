@@ -114,7 +114,8 @@ pub struct Popup {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DialogControl {
-    /// text, edit, editbox, button, check, combo, list.
+    /// text, edit, editbox, button, check, radio, box, scroll, combo, list,
+    /// link, or tab.
     pub kind: String,
     pub id: String,
     /// Label (text/button/check) or initial value (edit).
@@ -125,6 +126,11 @@ pub struct DialogControl {
     pub default: bool,
     /// `:cancel` button (also Esc; closes the dialog).
     pub cancel: bool,
+    pub ok: bool,
+    pub styles: Vec<String>,
+    pub enabled: bool,
+    pub visible: bool,
+    pub tab: String,
 }
 
 /// A custom dialog definition (`dialog name { … }`).
@@ -134,6 +140,8 @@ pub struct Dialog {
     pub name: String,
     pub title: String,
     pub controls: Vec<DialogControl>,
+    pub width: i32,
+    pub height: i32,
 }
 
 /// A fully compiled script.

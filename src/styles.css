@@ -861,7 +861,8 @@ img.nick-icon {
 /* Script-defined custom dialogs */
 .dialog-modal {
   min-width: 320px;
-  max-width: 520px;
+  max-width: 90vw;
+  max-height: 90vh;
 }
 .dialog-body {
   display: flex;
@@ -893,6 +894,30 @@ img.nick-icon {
   align-items: center;
   gap: 0.5rem;
   cursor: pointer;
+}
+.dlg-tabs,
+.dlg-menu {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.4rem;
+}
+.dlg-tabs [aria-selected="true"] {
+  background: var(--accent);
+  color: var(--accentText);
+}
+.dlg-menu details {
+  position: relative;
+}
+.dlg-menu details > button,
+.dlg-menu details > hr {
+  display: block;
+  min-width: 10rem;
+}
+.dlg-icon {
+  max-width: 100%;
+  object-fit: contain;
 }
 
 /* ---- Input ---- */

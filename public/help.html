@@ -664,9 +664,11 @@ Windows-native <code>/drawdll</code> command is intentionally unavailable:
 jIRC does not expose native bitmap handles or load platform DLLs.</p>
 
 <h2 id="dialogs">Custom dialogs</h2>
-<p>Build your own pop-up windows with input fields, dropdowns and buttons. Unlike
-mIRC, there are no pixel coordinates — controls are given a <strong>name</strong>
-and laid out automatically, and they render as real, themed web controls.</p>
+<p>Build resizable, themed script windows with standard form controls, tabs,
+menus, icons and events. jIRC accepts both its concise table syntax and
+mIRC-style comma/coordinate tables. Coordinates are accepted for compatibility;
+controls use a responsive cross-platform layout rather than Windows dialog
+units.</p>
 
 <h3>Defining a dialog</h3>
 <pre><code><span class="k">dialog</span> quicksay {
@@ -685,31 +687,76 @@ and laid out automatically, and they render as real, themed web controls.</p>
   <tr><td><code>edit   id ["initial"]</code></td><td>a single-line input</td></tr>
   <tr><td><code>editbox id</code></td><td>a multi-line text area</td></tr>
   <tr><td><code>check  id "label"</code></td><td>a checkbox (<code>$did</code> = <code>1</code>/<code>0</code>)</td></tr>
+  <tr><td><code>radio id "label"</code></td><td>a mutually exclusive radio option</td></tr>
+  <tr><td><code>box id "label"</code></td><td>a labelled group box</td></tr>
+  <tr><td><code>scroll id "label"</code></td><td>a range/scroll control</td></tr>
   <tr><td><code>combo  id "opt"…</code></td><td>a dropdown</td></tr>
   <tr><td><code>list   id "opt"…</code></td><td>a list box</td></tr>
+  <tr><td><code>link id "label"</code></td><td>a clickable link control</td></tr>
+  <tr><td><code>icon id "file"</code></td><td>a sandboxed image from <code>scriptdata</code></td></tr>
+  <tr><td><code>tab "label", id, x y w h</code></td><td>a tab; later controls use <code>tab id</code></td></tr>
+  <tr><td><code>menu</code> / <code>item</code></td><td>dialog menus, separators and menu events</td></tr>
   <tr><td><code>button id "label" [:default] [:cancel]</code></td><td>a button</td></tr>
 </table>
 
+<h3>mIRC-style table example</h3>
+<pre><code><span class="k">dialog</span> settings {
+  <span class="k">title</span> "Settings"
+  <span class="k">size</span> -1 -1 420 300
+  <span class="k">tab</span> "General", 1, 10 10 400 240
+  <span class="k">tab</span> "Advanced", 2
+  <span class="k">edit</span> "", 10, 20 50 240 24, autohs tab 1
+  <span class="k">check</span> "Enable alerts", 11, 20 85 180 20, tab 1
+  <span class="k">scroll</span> "Volume", 12, 20 60 240 20, horizontal range 0 100 pos 50 tab 2
+  <span class="k">button</span> "Save", 20, 250 260 70 28, default ok
+  <span class="k">button</span> "Cancel", 21, 330 260 70 28, cancel
+}
+</code></pre>
+<p>Portable styles include <code>disable</code>, <code>hide</code>,
+<code>default</code>, <code>ok</code>, <code>cancel</code>, <code>pass</code>,
+<code>read</code>, <code>multi</code>, <code>multsel</code>,
+<code>extsel</code>, <code>edit</code>, <code>range min max</code>,
+<code>pos N</code>, and <code>tab id</code>. Windows-only theme/handle details
+are intentionally not exposed.</p>
+
 <h3>Opening, reading, reacting</h3>
 <ul>
-  <li><code>/dialog name</code> opens it; <code>/dialog -c name</code> closes it.</li>
-  <li><code>$did(name, control)</code> reads a control's current value.</li>
-  <li><code>/did [-a|-r] name control [text]</code> changes a control: <code>-a</code> add a combo/list item, <code>-r</code> clear, default set the value.</li>
-  <li><code>on *:DIALOG:name:{ }</code> fires on interaction; <code>$1</code> is the control that triggered it (a button id, or <code>init</code> when it opens).</li>
+  <li><code>/dialog name</code> opens the matching table;
+    <code>/dialog -m instance table</code> opens a named modeless instance;
+    <code>-c</code> closes, <code>-t</code> changes title, <code>-s</code>
+    changes size, and <code>-g</code> renames it.</li>
+  <li><code>/did</code> supports <code>-a</code> add, <code>-i</code> insert,
+    <code>-o</code> overwrite, <code>-d</code> delete, <code>-r</code> clear,
+    <code>-e/-b</code> enable/disable, <code>-v/-h</code> show/hide,
+    <code>-f</code> focus, <code>-t</code> default, and
+    <code>-c/-u</code> check/uncheck. IDs may be comma lists or ranges.</li>
+  <li><code>/didtok name id character-code text</code> adds tokenized items.</li>
+  <li><code>$did(name,id[,N])</code> reads current values. Properties include
+    <code>.text</code>, <code>.len</code>, <code>.lines</code>,
+    <code>.sel</code>, <code>.seltext</code>, <code>.state</code>,
+    <code>.edited</code>, <code>.visible</code>, <code>.enabled</code>,
+    <code>.isid</code>, <code>.next</code> and <code>.prev</code>.</li>
+  <li><code>$dialog(name/N)</code> lists open modeless dialogs; properties
+    include <code>.title</code>, <code>.table</code>, <code>.w/.h</code>,
+    <code>.modal</code>, <code>.active</code> and <code>.focus</code>.</li>
+  <li><code>$didwm</code>, <code>$didreg</code> and <code>$didtok</code>
+    search or join list/combo items.</li>
 </ul>
 <pre><code><span class="k">alias</span> qsay { <span class="k">/dialog</span> quicksay }
 
-<span class="k">on</span> *:DIALOG:quicksay:{
-  <span class="k">if</span> (<span class="i">$1</span> == send) {
+<span class="k">on</span> *:DIALOG:quicksay:sclick:send:{
     <span class="k">if</span> (<span class="i">$did</span>(quicksay, act) == 1) { <span class="k">/describe</span> <span class="i">$did</span>(quicksay, where) <span class="i">$did</span>(quicksay, msg) }
     <span class="k">else</span> { <span class="k">/msg</span> <span class="i">$did</span>(quicksay, where) <span class="i">$did</span>(quicksay, msg) }
     <span class="k">/dialog</span> -c quicksay
-  }
 }
 </code></pre>
-<div class="note">Behind the scenes, the dialog's control values are sent to your script
-each time you interact, so <code>$did</code> always reads the current form state. Use
-<code>on *:DIALOG:name:</code> with <code>$1 == init</code> to pre-fill controls with <code>/did</code> when it opens.</div>
+<div class="note"><code>on DIALOG</code> uses
+<code>on level:DIALOG:name:event:id-list:</code>. Events are
+<code>init</code>, <code>edit</code>, <code>sclick</code>,
+<code>dclick</code>, <code>menu</code>, <code>scroll</code>, and
+<code>close</code>. <code>$dname</code>, <code>$devent</code> and bare
+<code>$did</code> return the current dialog, event and control ID. Use
+<code>on *:DIALOG:name:init:0:</code> to populate controls before use.</div>
 
 <h2 id="timers">Timers</h2>
 <p><code>/timer[name] &lt;reps&gt; &lt;seconds&gt; &lt;command&gt;</code> runs a command repeatedly.

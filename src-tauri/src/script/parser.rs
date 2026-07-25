@@ -556,7 +556,13 @@ fn parse_event_header(header: &str, body: Vec<Stmt>) -> Option<Event> {
     let (kind, rest) = tail.split_once(':').unwrap_or((tail, ""));
     let kind = kind.trim().to_ascii_uppercase();
     let regex_match = base_level.contains('$');
-    let (pattern, selector, target) = if kind == "RAW" {
+    let (pattern, selector, target) = if kind == "DIALOG" {
+        let mut fields = rest.split(':');
+        let name = fields.next().unwrap_or("*").trim().to_string();
+        let event = fields.next().unwrap_or("*").trim().to_ascii_lowercase();
+        let id = fields.next().unwrap_or("*").trim().to_string();
+        (id, event, name)
+    } else if kind == "RAW" {
         let selector = rest.split_once(':').map_or(rest, |(value, _)| value);
         ("*".to_string(), selector.trim().to_string(), String::new())
     } else if kind == "PARSELINE" {
@@ -845,7 +851,7 @@ fn tokenize_quoted(line: &str) -> Vec<String> {
                 in_q = !in_q;
                 have = true;
             }
-            c if c.is_whitespace() && !in_q => {
+            c if (c.is_whitespace() || c == ',') && !in_q => {
                 if have {
                     toks.push(std::mem::take(&mut cur));
                     have = false;
@@ -870,7 +876,10 @@ fn parse_dialog(name: String, src: &str) -> Dialog {
         name,
         title: String::new(),
         controls: Vec::new(),
+        width: 0,
+        height: 0,
     };
+    let mut last_menu = String::new();
     for raw in src.lines() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with(';') {
@@ -884,27 +893,147 @@ fn parse_dialog(name: String, src: &str) -> Dialog {
             dialog.title = toks.get(1..).map(|r| r.join(" ")).unwrap_or_default();
             continue;
         }
+        if kind == "size" {
+            dialog.width = toks
+                .get(3)
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(0);
+            dialog.height = toks
+                .get(4)
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(0);
+            continue;
+        }
+        if kind == "option" {
+            continue;
+        }
+        if kind == "menu" || kind == "item" {
+            let id = toks.get(2).cloned().unwrap_or_default();
+            if id.is_empty() {
+                continue;
+            }
+            let styles = toks[3..]
+                .iter()
+                .map(|style| style.to_ascii_lowercase())
+                .collect::<Vec<_>>();
+            let parent = toks
+                .get(3)
+                .cloned()
+                .filter(|value| value.parse::<i64>().is_ok())
+                .unwrap_or_else(|| {
+                    if kind == "item" {
+                        last_menu.clone()
+                    } else {
+                        String::new()
+                    }
+                });
+            if kind == "menu" {
+                last_menu = id.clone();
+            }
+            dialog.controls.push(DialogControl {
+                kind,
+                id,
+                label: toks.get(1).cloned().unwrap_or_default(),
+                options: Vec::new(),
+                default: styles
+                    .iter()
+                    .any(|style| matches!(style.as_str(), "default" | "ok")),
+                cancel: styles.iter().any(|style| style == "cancel"),
+                ok: styles.iter().any(|style| style == "ok"),
+                styles,
+                enabled: true,
+                visible: true,
+                tab: parent,
+            });
+            continue;
+        }
         if !matches!(
             kind.as_str(),
-            "text" | "edit" | "editbox" | "button" | "check" | "combo" | "list"
+            "text"
+                | "edit"
+                | "editbox"
+                | "button"
+                | "check"
+                | "radio"
+                | "box"
+                | "scroll"
+                | "combo"
+                | "list"
+                | "link"
+                | "tab"
+                | "icon"
         ) {
             continue;
         }
-        let Some(id) = toks.get(1).cloned() else {
+        let mirc_syntax = line.contains(',');
+        let label_kinds = matches!(
+            kind.as_str(),
+            "text"
+                | "edit"
+                | "editbox"
+                | "button"
+                | "check"
+                | "radio"
+                | "box"
+                | "scroll"
+                | "link"
+                | "tab"
+        );
+        let id_index = if mirc_syntax && label_kinds { 2 } else { 1 };
+        let Some(id) = toks.get(id_index).cloned() else {
             continue;
         };
-        let rest = &toks[2.min(toks.len())..];
-        let default = rest.iter().any(|t| t.eq_ignore_ascii_case(":default"));
-        let cancel = rest.iter().any(|t| t.eq_ignore_ascii_case(":cancel"));
-        let plain: Vec<String> = rest
-            .iter()
-            .filter(|t| !t.starts_with(':'))
-            .cloned()
-            .collect();
-        let (label, options) = if kind == "combo" || kind == "list" {
-            (String::new(), plain)
+        let style_start = if kind == "icon" && mirc_syntax {
+            8.min(toks.len())
+        } else if mirc_syntax {
+            (id_index + 5).min(toks.len())
         } else {
-            (plain.first().cloned().unwrap_or_default(), Vec::new())
+            2.min(toks.len())
+        };
+        let styles: Vec<String> = toks[style_start..]
+            .iter()
+            .filter(|style| mirc_syntax || style.starts_with(':'))
+            .map(|style| style.trim_start_matches(':').to_ascii_lowercase())
+            .collect();
+        let default = styles
+            .iter()
+            .any(|style| matches!(style.as_str(), "default" | "ok"));
+        let cancel = styles.iter().any(|style| style == "cancel");
+        let ok = styles.iter().any(|style| style == "ok");
+        let tab = styles
+            .iter()
+            .position(|style| style == "tab")
+            .and_then(|index| styles.get(index + 1))
+            .cloned()
+            .unwrap_or_default();
+        let enabled = !styles.iter().any(|style| style == "disable");
+        let visible = !styles.iter().any(|style| style == "hide");
+        let (label, options) = if kind == "icon" && mirc_syntax {
+            (toks.get(6).cloned().unwrap_or_default(), Vec::new())
+        } else if mirc_syntax {
+            (
+                if label_kinds {
+                    toks.get(1).cloned().unwrap_or_default()
+                } else {
+                    String::new()
+                },
+                Vec::new(),
+            )
+        } else if kind == "combo" || kind == "list" {
+            let options = toks[2.min(toks.len())..]
+                .iter()
+                .filter(|value| !value.starts_with(':'))
+                .cloned()
+                .collect();
+            (String::new(), options)
+        } else {
+            (
+                toks.get(2)
+                    .filter(|value| !value.starts_with(':'))
+                    .cloned()
+                    .unwrap_or_default(),
+                Vec::new(),
+            )
         };
         dialog.controls.push(DialogControl {
             kind,
@@ -913,6 +1042,11 @@ fn parse_dialog(name: String, src: &str) -> Dialog {
             options,
             default,
             cancel,
+            ok,
+            styles,
+            enabled,
+            visible,
+            tab,
         });
     }
     dialog
@@ -1507,6 +1641,35 @@ mod tests {
         assert_eq!(d.controls[2].options, vec!["#a", "#b"]);
         assert!(d.controls[3].default);
         assert!(d.controls[4].cancel);
+    }
+
+    #[test]
+    fn parses_mirc_dialog_table_controls_styles_and_event_selector() {
+        let s = parse(
+            "dialog settings {\n\
+               title \"Settings\"\n\
+               size -1 -1 420 300\n\
+               tab \"General\", 1, 10 10 400 250\n\
+               tab \"Advanced\", 2\n\
+               edit \"secret\", 10, 20 40 200 24, pass tab 1\n\
+               radio \"Fast\", 11, 20 80 100 20, group tab 1\n\
+               scroll \"Level\", 12, 20 110 200 20, horizontal range 0 10 pos 5 tab 2\n\
+               button \"Save\", 20, 250 260 70 28, default ok\n\
+               button \"Cancel\", 21, 330 260 70 28, cancel\n\
+             }\n\
+             on *:DIALOG:settings:sclick:10-20:{ echo $dname $devent $did }",
+        );
+        let dialog = &s.dialogs[0];
+        assert_eq!((dialog.width, dialog.height), (420, 300));
+        assert_eq!(dialog.controls[0].kind, "tab");
+        assert_eq!(dialog.controls[2].label, "secret");
+        assert!(dialog.controls[2].styles.contains(&"pass".to_string()));
+        assert_eq!(dialog.controls[2].tab, "1");
+        assert!(dialog.controls[5].ok);
+        let event = &s.events[0];
+        assert_eq!(event.target, "settings");
+        assert_eq!(event.selector, "sclick");
+        assert_eq!(event.pattern, "10-20");
     }
 
     #[test]

@@ -262,9 +262,10 @@ export const api = {
     myNick: string,
     network: string,
     dialog: string,
+    event: string,
     control: string,
     values: Record<string, string>
-  ) => invoke<void>("script_run_dialog", { serverId, myNick, network, dialog, control, values }),
+  ) => invoke<boolean>("script_run_dialog", { serverId, myNick, network, dialog, event, control, values }),
 };
 
 /// One control in a script-defined dialog (mirrors the Rust `DialogControl`).
@@ -275,6 +276,11 @@ export interface DialogControl {
   options: string[];
   default: boolean;
   cancel: boolean;
+  ok: boolean;
+  styles: string[];
+  enabled: boolean;
+  visible: boolean;
+  tab: string;
 }
 
 // Mirrors the backend `UiEvent` enum (serde tagged by `type`, camelCase).
@@ -330,7 +336,7 @@ export type IrcEvent =
       setBy: string | null;
     }
   | { type: "mode"; serverId: string; target: string; modes: string; by: string | null }
-  | { type: "dialogOpen"; serverId: string; name: string; title: string; controls: DialogControl[] }
+  | { type: "dialogOpen"; serverId: string; name: string; title: string; controls: DialogControl[]; width: number; height: number }
   | { type: "dialogClose"; serverId: string; name: string }
   | { type: "dialogSet"; serverId: string; dialog: string; control: string; op: string; value: string }
   | { type: "nickIcon"; serverId: string; nick: string; icon: string }

@@ -7,7 +7,8 @@ Linux) and speaking both **standard IRC** (RFC 1459/2812 + some IRCv3) and
 > **Status: usable.** Multi-server chat, TLS/SASL, IRCX, a tabbed/tree UI, a
 > channel browser, scriptable popups, and a **mature native mIRC-scripting (mSL)
 > engine** — 200+ identifiers, access-level-gated events, and user lists. The
-> main thing still missing is DCC (file transfer). See the
+> remaining work is concentrated in DCC server mode, broader IRCv3/IRCX
+> variants, and UI polish. Standard DCC chat and file transfer already work. See the
 > [changelog](./CHANGELOG.md) and the [help &amp; scripting guide](./public/help.html).
 
 ## Features
@@ -66,7 +67,7 @@ the **?** button opens it in your browser.
   and jIRC evaluates *once*, so other people's text can't turn into commands
   (no mSL-injection footguns — see the help guide's "Safety" section)
 
-Not 100% mIRC-compatible — DCC (file transfer) is the main remaining gap; see the
+Not 100% mIRC-compatible — DCC server mode and some protocol/UI depth remain; see the
 [changelog](./CHANGELOG.md) and the [help guide](./public/help.html).
 
 ## Install / develop
