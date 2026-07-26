@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "jIRC",
-  "version": "26.7.74",
+  "version": "26.7.75",
   "identifier": "com.jirc.client",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -27,6 +27,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -34,5 +35,16 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY4RTVGQUUwQTI4REJDOTAKUldTUXZJMmk0UHJsYUFDWkt1R09WOEY1RXZCazBBLzBQSkhLYm40S1dLWGFmcUFrQm41THNPTWEK",
+      "endpoints": [
+        "https://github.com/alkaholix/jirc/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

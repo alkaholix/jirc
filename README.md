@@ -33,6 +33,8 @@ Linux) and speaking both **standard IRC** (RFC 1459/2812 + IRCv3) and
   clickable URLs, per-buffer logging, desktop notifications & highlight words
 - **Detachable windows** — pop any status, channel, query, or `@window` out into its own
   OS window and dock it back with one click (beyond mIRC's in-app MDI)
+- **Signed updates** — check, download, install, and restart from Settings →
+  Behaviour using platform-native update bundles published with each release
 - **Channel management** — nick right-click menu (whois/op/voice/kick/ban/ignore),
   topic editing, channel-mode commands, **/list & IRCX /listx channel browser**, and
   an **auto-join channels folder** (per-network add/remove + Join-now)

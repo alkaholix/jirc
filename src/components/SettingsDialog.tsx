@@ -9,6 +9,11 @@ import {
 import { api, DataLocation } from "../lib/api";
 import { dccDetect } from "../state/dcc";
 import { UsersSettings } from "./UsersSettings";
+import {
+  checkForUpdate,
+  installUpdate,
+  type UpdateStatus,
+} from "../lib/updater";
 
 const splitList = (value: string) =>
   value
@@ -40,6 +45,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [dccMsg, setDccMsg] = useState("");
   const [systemFonts, setSystemFonts] = useState<string[]>([]);
   const [fontsLoading, setFontsLoading] = useState(true);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ state: "idle" });
 
   useEffect(() => {
     api
@@ -130,6 +136,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const setTheme = (theme: Theme) => {
     settings.set("theme", theme);
     applyTheme(theme);
+  };
+
+  const checkUpdate = async () => {
+    setUpdateStatus({ state: "checking" });
+    setUpdateStatus(await checkForUpdate());
   };
 
   const toggle = (key: Parameters<typeof settings.set>[0], label: string) => (
@@ -345,6 +356,43 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               {toggle("rejoinOnReconnect", "Rejoin channels after a disconnect")}
               {toggle("keepOpenOnKickQuit", "Keep channel windows open on kick / disconnect")}
               {toggle("showAway", "Show when users go away / come back")}
+              <div className="settings-label">Application updates</div>
+              <div className="row">
+                <button
+                  onClick={checkUpdate}
+                  disabled={
+                    updateStatus.state === "checking" ||
+                    updateStatus.state === "downloading"
+                  }
+                >
+                  {updateStatus.state === "checking" ? "Checking…" : "Check for updates"}
+                </button>
+                {updateStatus.state === "available" && (
+                  <button onClick={() => installUpdate(setUpdateStatus)}>
+                    Install {updateStatus.version}
+                  </button>
+                )}
+              </div>
+              {updateStatus.state === "current" && (
+                <div className="keyring-note ok">jIRC is up to date.</div>
+              )}
+              {updateStatus.state === "available" && (
+                <div className="keyring-note ok">
+                  jIRC {updateStatus.version} is available.
+                  {updateStatus.notes && <div>{updateStatus.notes}</div>}
+                </div>
+              )}
+              {updateStatus.state === "downloading" && (
+                <div className="keyring-note ok">
+                  Downloading {updateStatus.version}
+                  {updateStatus.percent === undefined ? "…" : ` — ${updateStatus.percent}%`}
+                </div>
+              )}
+              {updateStatus.state === "error" && (
+                <div className="keyring-note warn">
+                  Update check failed: {updateStatus.message}
+                </div>
+              )}
               <div className="settings-label">Data folder</div>
               {dataLoc && (
                 <>

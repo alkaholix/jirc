@@ -12,6 +12,13 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🔄 26.7.75 — Signed application updates
+
+- Added a cross-platform signed updater under Settings → Behaviour, including
+  update checks, release notes, download progress, installation, and restart.
+- Added GitHub release automation for Windows, macOS, and Linux, producing the
+  signed update artifacts and `latest.json` consumed by installed clients.
+
 ## 🎯 26.7.74 — Cleaner composer reset
 
 - Removed the empty colour swatch box and shortened the emoji picker button to

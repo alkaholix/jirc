@@ -1,6 +1,6 @@
 [package]
 name = "jirc"
-version = "26.7.74"
+version = "26.7.75"
 description = "jIRC — a modern, open-source mIRC-style IRC client (standard IRC + IRCX)"
 authors = ["jIRC contributors"]
 edition = "2021"
@@ -56,6 +56,8 @@ tokio-socks = "0.5"
 tauri-plugin-notification = "2.3.3"
 tauri-plugin-opener = "2.5.4"
 tauri-plugin-dialog = "2"
+tauri-plugin-process = "2.3.1"
+tauri-plugin-updater = "2.10.1"
 fontdb = "0.23"
 
 [profile.release]

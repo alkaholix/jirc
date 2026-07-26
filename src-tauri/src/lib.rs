@@ -29,6 +29,8 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(ConnectionManager::new())
         .manage(ScriptEngine::new())
         .manage(script::socket::SocketManager::new())

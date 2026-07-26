@@ -3,5 +3,12 @@
   "identifier": "default",
   "description": "Default capability set granted to the main window and detached buffer windows.",
   "windows": ["main", "detached-*", "script-editor"],
-  "permissions": ["core:default", "notification:default", "opener:allow-open-url", "dialog:allow-open"]
+  "permissions": [
+    "core:default",
+    "notification:default",
+    "opener:allow-open-url",
+    "dialog:allow-open",
+    "process:allow-restart",
+    "updater:default"
+  ]
 }
