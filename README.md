@@ -124,6 +124,7 @@ not mIRC-style INI files (scripts may still create sandboxed INI data):
 ```
 jIRC/
   profiles.json   # saved servers (secrets normally use the OS keyring)
+  addressbook.json # contacts and private notes
   scripts/        # your .mrc scripts, all compiled together
   dcc/            # received DCC files
   logs/           # chat logs, <network>/<buffer>.log

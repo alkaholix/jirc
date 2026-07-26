@@ -123,6 +123,8 @@ pub fn run() {
             storage::profiles_load,
             storage::profiles_save,
             storage::profiles_delete,
+            storage::address_book_load,
+            storage::address_book_save,
             storage::data_location,
             storage::set_data_location,
             storage::log_append,

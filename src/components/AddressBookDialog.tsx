@@ -48,6 +48,7 @@ export function AddressBookDialog() {
     <div className="modal-backdrop" onClick={book.close}>
       <div className="modal address-book-modal" onClick={(event) => event.stopPropagation()}>
         <h2>Address book</h2>
+        {book.error && <div className="keyring-note warn">{book.error}</div>}
         <div className="address-book-layout">
           <aside>
             <input

@@ -48,6 +48,16 @@ export interface DataLocation {
   forced: boolean;
 }
 
+export interface AddressEntry {
+  id: string;
+  nick: string;
+  network: string;
+  name: string;
+  email: string;
+  website: string;
+  notes: string;
+}
+
 /** Which auto-list an entry belongs to. */
 export type AutoKind = "aop" | "avoice" | "protect";
 
@@ -166,6 +176,8 @@ export const api = {
   profilesLoad: () => invoke<ServerProfile[]>("profiles_load"),
   profilesSave: (profiles: ServerProfile[]) => invoke("profiles_save", { profiles }),
   profilesDelete: (id: string) => invoke("profiles_delete", { id }),
+  addressBookLoad: () => invoke<AddressEntry[]>("address_book_load"),
+  addressBookSave: (entries: AddressEntry[]) => invoke("address_book_save", { entries }),
   dataLocation: () => invoke<DataLocation>("data_location"),
   systemFonts: () => invoke<string[]>("system_fonts"),
   setDataLocation: (path: string | null) => invoke("set_data_location", { path }),

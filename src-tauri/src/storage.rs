@@ -13,11 +13,28 @@ use keyring::Entry;
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config::ServerProfile;
 
 const KEYRING_SERVICE: &str = "jirc";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressEntry {
+    pub id: String,
+    pub nick: String,
+    #[serde(default)]
+    pub network: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub email: String,
+    #[serde(default)]
+    pub website: String,
+    #[serde(default)]
+    pub notes: String,
+}
 
 fn secret_cache() -> &'static Mutex<std::collections::HashMap<String, Option<String>>> {
     static CACHE: OnceLock<Mutex<std::collections::HashMap<String, Option<String>>>> =
@@ -321,6 +338,24 @@ pub fn profiles_delete(app: AppHandle, id: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn address_book_load(app: AppHandle) -> Result<Vec<AddressEntry>, String> {
+    let path = config_dir(&app)?.join("addressbook.json");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let data = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    serde_json::from_str(&data).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn address_book_save(app: AppHandle, entries: Vec<AddressEntry>) -> Result<(), String> {
+    let dir = config_dir(&app)?;
+    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    let data = serde_json::to_string_pretty(&entries).map_err(|error| error.to_string())?;
+    fs::write(dir.join("addressbook.json"), data).map_err(|error| error.to_string())
+}
+
 /// Appends a formatted line to a buffer's log file.
 #[tauri::command]
 pub fn log_append(
@@ -356,8 +391,19 @@ pub fn log_read(app: AppHandle, network: String, buffer: String) -> Result<Strin
 mod tests {
     use super::{
         load_secret, read_location_redirect, resolve_custom_base, sanitize, secret_cache,
-        store_secret,
+        store_secret, AddressEntry,
     };
+
+    #[test]
+    fn address_book_entries_default_new_fields_and_round_trip_as_camel_case() {
+        let entry: AddressEntry =
+            serde_json::from_str(r#"{"id":"1","nick":"Alice","network":"Test"}"#).unwrap();
+        assert_eq!(entry.email, "");
+        assert_eq!(entry.notes, "");
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains(r#""network":"Test""#));
+        assert!(json.contains(r#""website":"""#));
+    }
 
     #[test]
     fn reads_location_redirect() {

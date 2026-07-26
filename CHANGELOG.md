@@ -18,7 +18,9 @@ Versions use CalVer (`YY.M.D`) — newest first.
   website, and private free-form notes.
 - Contacts can be opened from either main layout and directly from a channel
   nick's context menu, which pre-fills the nick and network.
-- Entries persist locally, migrate defensively, and can be edited or removed.
+- Entries persist in <code>addressbook.json</code> under the active jIRC data
+  folder, migrate defensively from the earlier WebView draft, and can be edited
+  or removed.
 
 ## ▶️ 26.7.84 — Perform commands on connect
 
