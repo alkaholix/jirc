@@ -14,6 +14,7 @@ vi.mock("./notify", () => ({ notify: vi.fn() }));
 import { api } from "./api";
 import { handleInput } from "./slash";
 import { Buffer } from "../state/store";
+import { useChannelCentral } from "../state/channelModes";
 
 const SID = "s1";
 
@@ -24,6 +25,7 @@ beforeEach(() => {
   vi.mocked(api.sendRaw).mockClear();
   vi.mocked(api.scriptRunAlias).mockReset().mockResolvedValue(false);
   vi.mocked(api.scriptRunCommand).mockClear();
+  useChannelCentral.setState({ target: null });
 });
 
 describe("mIRC alias precedence", () => {
@@ -65,6 +67,16 @@ describe("/mode targeting", () => {
   it("leaves an explicit # channel target untouched", async () => {
     await handleInput("/mode #other +m", channel("%#Test"));
     expect(api.sendRaw).toHaveBeenCalledWith(SID, "MODE #other +m");
+  });
+});
+
+describe("/channel targeting", () => {
+  it("opens an explicit IRCX channel type instead of falling back to the active channel", async () => {
+    await handleInput("/channel %#Other", channel("%#Current"));
+    expect(useChannelCentral.getState().target).toEqual({
+      serverId: SID,
+      channel: "%#Other",
+    });
   });
 });
 

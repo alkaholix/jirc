@@ -150,10 +150,16 @@ pub enum UiEvent {
         chan_types: String,
         /// Prefix characters, highest rank first (e.g. "~&@%+" or ".@+").
         prefixes: String,
+        /// Prefix mode letters in matching rank order (e.g. "qaohv").
+        prefix_modes: String,
         /// `ascii`, `rfc1459`, or `strict-rfc1459`.
         case_mapping: String,
         /// Channel-status message prefixes (e.g. `@+`).
         status_msg: String,
+        /// Raw ISUPPORT CHANMODES groups A,B,C,D.
+        chan_modes: String,
+        /// Maximum mode changes accepted in one MODE command.
+        modes_per_line: u32,
     },
     /// A formatted WHOIS reply block.
     Whois {
@@ -401,11 +407,17 @@ mod tests {
             server_id: "s1".into(),
             chan_types: "#&".into(),
             prefixes: "@+".into(),
+            prefix_modes: "ov".into(),
             case_mapping: "rfc1459".into(),
             status_msg: "@+".into(),
+            chan_modes: "beI,k,l,imnst".into(),
+            modes_per_line: 4,
         };
         let json = serde_json::to_string(&isupport).unwrap();
         assert!(json.contains("\"caseMapping\":\"rfc1459\""), "{json}");
         assert!(json.contains("\"statusMsg\":\"@+\""), "{json}");
+        assert!(json.contains("\"prefixModes\":\"ov\""), "{json}");
+        assert!(json.contains("\"chanModes\":\"beI,k,l,imnst\""), "{json}");
+        assert!(json.contains("\"modesPerLine\":4"), "{json}");
     }
 }

@@ -7,6 +7,7 @@ import { NickList } from "./NickList";
 import { InputBar } from "./InputBar";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { PromptDialog } from "./PromptDialog";
+import { ChannelCentral } from "./ChannelCentral";
 
 /** Single-window mode: renders just one buffer in its own OS window. Kept live by
  *  the same app-wide `irc-event` broadcast the main window listens to; its first
@@ -70,6 +71,7 @@ export function DetachedView({ bufferKey }: { bufferKey: string }) {
           windows receive and would otherwise open twice. */}
       <ConfirmDialog />
       <PromptDialog />
+      <ChannelCentral />
     </div>
   );
 }

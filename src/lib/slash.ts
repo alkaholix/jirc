@@ -342,7 +342,12 @@ export async function handleInput(input: string, buffer: Buffer): Promise<void> 
     }
     case "channel": {
       // Open Channel Central for a channel (defaults to the current one).
-      const chan = args.trim().startsWith("#") ? args.trim().split(/\s+/)[0] : kind === "channel" ? name : "";
+      const requested = args.trim().split(/\s+/)[0] ?? "";
+      const chan = (srv?.chanTypes ?? "#&!+%").includes(requested[0])
+        ? requested
+        : kind === "channel"
+          ? name
+          : "";
       if (chan) useChannelCentral.getState().open(serverId, chan);
       break;
     }

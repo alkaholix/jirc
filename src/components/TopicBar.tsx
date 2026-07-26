@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { ircxDisplay } from "../lib/ircx";
 import { useAway } from "../state/away";
 import { promptDialog } from "../state/prompt";
+import { useChannelCentral } from "../state/channelModes";
 
 export function TopicBar({
   buffer,
@@ -71,6 +72,15 @@ export function TopicBar({
       >
         {away ? "● Away" : "Away"}
       </button>
+      {buffer.kind === "channel" && (
+        <button
+          className="win-btn"
+          onClick={() => useChannelCentral.getState().open(buffer.serverId, buffer.name)}
+          title="View and change channel modes"
+        >
+          Modes
+        </button>
+      )}
       {onDock && (
         <button className="win-btn" onClick={onDock} title="Dock this window back into jIRC">
           ⧈ Dock

@@ -1154,6 +1154,53 @@ img.nick-icon {
 .settings-body {
   min-height: 230px;
 }
+.channel-mode-dialog {
+  width: min(46rem, calc(100vw - 2rem));
+  max-height: min(46rem, calc(100vh - 2rem));
+}
+.channel-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.45rem 1rem;
+}
+.channel-mode-grid code,
+.channel-mode-parameters code,
+.channel-mode-list .settings-label code {
+  color: var(--accent);
+}
+.channel-mode-parameters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 0.65rem;
+}
+.channel-mode-list {
+  display: grid;
+  gap: 0.45rem;
+  padding-bottom: 0.8rem;
+  border-bottom: 1px solid var(--border);
+}
+.channel-mode-list:last-of-type {
+  border-bottom: 0;
+}
+.channel-mode-list-items {
+  display: grid;
+  gap: 0.3rem;
+  max-height: 10rem;
+  overflow: auto;
+}
+.channel-mode-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel2);
+}
+.channel-mode-list-item code {
+  overflow-wrap: anywhere;
+}
 .confirm-modal {
   width: 380px;
 }

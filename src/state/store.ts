@@ -57,8 +57,11 @@ export interface Server {
   registered: boolean;
   chanTypes: string;
   prefixes: string;
+  prefixModes: string;
   caseMapping: IrcCaseMapping;
   statusMsg: string;
+  chanModes: string;
+  modesPerLine: number;
 }
 
 export interface ChannelListEntry {
@@ -715,8 +718,11 @@ export const useStore = create<State>((set, get) => {
                     ...s.servers[sid],
                     chanTypes: ev.chanTypes,
                     prefixes: ev.prefixes,
+                    prefixModes: ev.prefixModes,
                     caseMapping: ev.caseMapping,
                     statusMsg: ev.statusMsg,
+                    chanModes: ev.chanModes,
+                    modesPerLine: ev.modesPerLine,
                   },
                 },
               }
@@ -846,8 +852,11 @@ export const useStore = create<State>((set, get) => {
                   registered: false,
                   chanTypes: DEFAULT_CHANTYPES,
                   prefixes: DEFAULT_PREFIXES,
+                  prefixModes: "qaohv",
                   caseMapping: "rfc1459",
                   statusMsg: "",
+                  chanModes: "beI,k,l,imnpstrS",
+                  modesPerLine: 3,
                 },
               },
             }

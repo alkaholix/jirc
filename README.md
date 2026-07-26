@@ -36,7 +36,8 @@ Linux) and speaking both **standard IRC** (RFC 1459/2812 + IRCv3) and
 - **Signed updates** — check, download, install, and restart from Settings →
   Behaviour using platform-native update bundles published with each release
 - **Channel management** — nick right-click menu (whois/op/voice/kick/ban/ignore),
-  topic editing, channel-mode commands, **/list & IRCX /listx channel browser**, and
+  topic editing, a server-aware channel-mode editor with access lists,
+  **/list & IRCX /listx channel browser**, and
   an **auto-join channels folder** (per-network add/remove + Join-now)
 - **Alternative nickname** with automatic fallback when your nick is in use
 - **Ignore list**, CTCP auto-replies (VERSION/PING/TIME/FINGER/USERINFO/SOURCE/CLIENTINFO), emoji shortcodes

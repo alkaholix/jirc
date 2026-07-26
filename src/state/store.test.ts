@@ -48,8 +48,11 @@ describe("IRC casemapping", () => {
       serverId: SID,
       chanTypes: "#&",
       prefixes: "~&@%+",
+      prefixModes: "qaohv",
       caseMapping: "ascii",
       statusMsg: "@+",
+      chanModes: "beI,k,l,imnst",
+      modesPerLine: 4,
     });
     expect(serverBufferKey(SID, "Nick[")).not.toBe(serverBufferKey(SID, "nick{"));
   });
@@ -63,8 +66,11 @@ describe("channel routing", () => {
       serverId: SID,
       chanTypes: "#&",
       prefixes: "~&@%+",
+      prefixModes: "qaohv",
       caseMapping: "rfc1459",
       statusMsg: "@+",
+      chanModes: "beI,k,l,imnst",
+      modesPerLine: 4,
     });
     s.handleEvent({
       type: "message",
@@ -106,8 +112,11 @@ describe("channel routing", () => {
       serverId: SID,
       chanTypes: "%#",
       prefixes: "~&@%+",
+      prefixModes: "qaohv",
       caseMapping: "rfc1459",
       statusMsg: "@+",
+      chanModes: "beI,k,l,imnst",
+      modesPerLine: 4,
     });
     s.handleEvent({
       type: "message",
@@ -224,8 +233,11 @@ describe("channel membership", () => {
         serverId: SID,
         chanTypes: "#&",
         prefixes: ".@+",
+        prefixModes: "qov",
         caseMapping: "rfc1459",
         statusMsg: "@+",
+        chanModes: "beI,k,l,imnst",
+        modesPerLine: 4,
       });
     useStore.getState().handleEvent({ type: "join", serverId: SID, channel: "#x", nick: "me" });
     useStore.getState().handleEvent({

@@ -12,6 +12,15 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🎛️ 26.7.77 — Complete channel-mode editor
+
+- Rebuilt Channel Central around each server's advertised `CHANMODES`, `PREFIX`,
+  and `MODES` rules instead of a fixed set of checkboxes.
+- Added dynamic flag and parameter controls plus ban, ban-exception, and
+  invite-exception list management.
+- Mode changes are validated and split into correctly ordered, server-sized
+  `MODE` batches, with a new Modes button directly on channel windows.
+
 ## 🧪 26.7.76 — Updater test release
 
 - Test release for verifying the complete signed in-app update path from

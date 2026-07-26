@@ -382,8 +382,11 @@ export type IrcEvent =
       serverId: string;
       chanTypes: string;
       prefixes: string;
+      prefixModes: string;
       caseMapping: "ascii" | "rfc1459" | "strict-rfc1459";
       statusMsg: string;
+      chanModes: string;
+      modesPerLine: number;
     }
   | { type: "whois"; serverId: string; nick: string; lines: string[] }
   | { type: "listEntry"; serverId: string; channel: string; users: number; topic: string }

@@ -2073,8 +2073,23 @@ fn handle_numeric(ctx: &mut Context, fx: &mut Effects, resp: Response, args: &[S
                 server_id,
                 chan_types: ctx.state.isupport.chan_types.clone(),
                 prefixes: ctx.state.isupport.prefix_chars(),
+                prefix_modes: ctx
+                    .state
+                    .isupport
+                    .prefix_modes
+                    .iter()
+                    .map(|(mode, _)| *mode)
+                    .collect(),
                 case_mapping: ctx.state.isupport.case_mapping.as_str().to_string(),
                 status_msg: ctx.state.isupport.status_msg.clone(),
+                chan_modes: format!(
+                    "{},{},{},{}",
+                    ctx.state.isupport.chanmodes_a,
+                    ctx.state.isupport.chanmodes_b,
+                    ctx.state.isupport.chanmodes_c,
+                    ctx.state.isupport.chanmodes_d
+                ),
+                modes_per_line: ctx.state.isupport.modes,
             });
         }
         Response::RPL_WHOISUSER
