@@ -12,6 +12,13 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## ℹ️ 26.7.79 — About dialog and dedicated DCC settings
+
+- Added an About popup showing the running jIRC version, with a **Help me**
+  button that opens the bundled Help guide.
+- Moved all transfer, passive-mode, port, address, and DCC Server controls from
+  Behaviour into a dedicated DCC settings tab.
+
 ## 🔊 26.7.78 — Notification sounds and audio commands
 
 - Added configurable sounds for mentions, private messages, invites, and watched

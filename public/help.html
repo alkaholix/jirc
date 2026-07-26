@@ -251,7 +251,8 @@ highlighted with a count; Enter / Shift+Enter jump to the next / previous; Esc c
   <tr><th>Page</th><th>What you can configure</th></tr>
   <tr><td><strong>Appearance</strong></td><td>Dark/light/system theme, tree or switchbar layout, nick colour, installed-device font picker and size, input formatting toolbar, quit message, timestamp mode, join/part visibility, custom emoji, and live custom CSS.</td></tr>
   <tr><td><strong>Alerts</strong></td><td>Desktop notifications, per-event sounds and volume, quiet hours, highlight words, watched nicks, and nick/hostmask ignores.</td></tr>
-  <tr><td><strong>Behaviour</strong></td><td>Rejoin and window-retention behaviour, away changes, data-folder location, DCC IP/port/passive settings, and DCC Server services.</td></tr>
+  <tr><td><strong>Behaviour</strong></td><td>Rejoin and window-retention behaviour, away changes, application updates, and data-folder location.</td></tr>
+  <tr><td><strong>DCC</strong></td><td>Transfer IP and port range, passive/reverse mode, plus DCC Server listener and service controls.</td></tr>
   <tr><td><strong>Users</strong></td><td>Persistent mSL user/access levels plus automatic op, voice, and protection lists.</td></tr>
   <tr><td><strong>Server</strong></td><td>MOTD, ping/pong and raw tracing visibility, plus outbound flood protection.</td></tr>
 </table>
@@ -1196,7 +1197,7 @@ the cookie name and <code>$3-</code> for its value.</p>
 <h2 id="dccserver">DCC Server</h2>
 <p>jIRC implements the cross-platform mIRC DCC Server protocol for direct Chat,
 Send, and Fileserver connections. Enable it in <strong>Settings → Behaviour →
-DCC Server</strong>, or from a script:</p>
+DCC</strong>, or from a script:</p>
 <pre><code><span class="k">/dccserver</span> +scf on 59
 <span class="k">/dccserver</span> off
 </code></pre>

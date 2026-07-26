@@ -1158,6 +1158,7 @@ img.nick-icon {
   gap: 0.25rem;
   border-bottom: 1px solid var(--border);
   margin-bottom: 0.8rem;
+  overflow-x: auto;
 }
 .tab {
   background: transparent;

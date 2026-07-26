@@ -23,11 +23,12 @@ const splitList = (value: string) =>
     .map((w) => w.trim())
     .filter(Boolean);
 
-type Tab = "appearance" | "alerts" | "behaviour" | "server" | "users";
+type Tab = "appearance" | "alerts" | "behaviour" | "dcc" | "server" | "users";
 const TABS: { id: Tab; label: string }[] = [
   { id: "appearance", label: "Appearance" },
   { id: "alerts", label: "Alerts" },
   { id: "behaviour", label: "Behaviour" },
+  { id: "dcc", label: "DCC" },
   { id: "users", label: "Users" },
   { id: "server", label: "Server" },
 ];
@@ -488,7 +489,12 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   )}
                 </>
               )}
-              <div className="settings-label">DCC (file transfer)</div>
+            </>
+          )}
+
+          {tab === "dcc" && (
+            <>
+              <div className="settings-label">File transfers and direct chat</div>
               <label>
                 Your IP for DCC (blank = automatic / local network)
                 <input
