@@ -2480,6 +2480,16 @@ fn apply_actions_depth(
                     },
                 );
             }
+            Action::Audio { operation, path } => {
+                let _ = app.emit(
+                    IRC_EVENT,
+                    UiEvent::Audio {
+                        server_id: server_id.to_string(),
+                        operation,
+                        path,
+                    },
+                );
+            }
             Action::WindowClose { name } => {
                 let _ = app.emit(
                     IRC_EVENT,
@@ -4347,6 +4357,38 @@ mod tests {
                     local: false,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn sound_and_splay_produce_safe_local_audio_actions() {
+        let engine = ScriptEngine::new();
+        let actions = engine.run_command(&ctx(), "#c", "/splay alert.wav", &[]);
+        assert!(matches!(
+            &actions[..],
+            [Action::Audio { operation, path }]
+                if operation == "play" && path.ends_with("alert.wav")
+        ));
+
+        let actions = engine.run_command(&ctx(), "#c", "/sound #c alert.wav hello", &[]);
+        assert!(
+            matches!(
+                &actions[..],
+                [
+                    Action::Send(line),
+                    Action::Audio { operation, path }
+                ] if line == "PRIVMSG #c :\u{1}SOUND alert.wav hello\u{1}"
+                    && operation == "play"
+                    && path.ends_with("alert.wav")
+            ),
+            "unexpected /sound actions: {actions:?}"
+        );
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", "/splay -p", &[]),
+            vec![Action::Audio {
+                operation: "pause".into(),
+                path: String::new(),
+            }]
         );
     }
 

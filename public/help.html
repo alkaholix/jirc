@@ -211,6 +211,10 @@ highlighted with a count; Enter / Shift+Enter jump to the next / previous; Esc c
   <li><strong>Notify / watch list:</strong> add friends' nicks in Settings → Alerts. jIRC
     checks who's online and alerts you when they come/go, and lists who's around in the
     sidebar's <strong>Online</strong> panel.</li>
+  <li><strong>Notification sounds:</strong> Settings → Alerts has separate sounds for
+    mentions, private messages, invites, and watched users coming online. Choose any
+    supported audio file installed on the device, use the built-in tones, set the
+    volume, preview each sound, or mute them during a daily quiet-hours range.</li>
   <li><strong>Highlight words &amp; ignores</strong> are also in Settings → Alerts.</li>
 </ul>
 
@@ -246,7 +250,7 @@ highlighted with a count; Enter / Shift+Enter jump to the next / previous; Esc c
 <table>
   <tr><th>Page</th><th>What you can configure</th></tr>
   <tr><td><strong>Appearance</strong></td><td>Dark/light/system theme, tree or switchbar layout, nick colour, installed-device font picker and size, input formatting toolbar, quit message, timestamp mode, join/part visibility, custom emoji, and live custom CSS.</td></tr>
-  <tr><td><strong>Alerts</strong></td><td>Desktop mention/private-message notifications, highlight words, watched nicks, and nick/hostmask ignores.</td></tr>
+  <tr><td><strong>Alerts</strong></td><td>Desktop notifications, per-event sounds and volume, quiet hours, highlight words, watched nicks, and nick/hostmask ignores.</td></tr>
   <tr><td><strong>Behaviour</strong></td><td>Rejoin and window-retention behaviour, away changes, data-folder location, DCC IP/port/passive settings, and DCC Server services.</td></tr>
   <tr><td><strong>Users</strong></td><td>Persistent mSL user/access levels plus automatic op, voice, and protection lists.</td></tr>
   <tr><td><strong>Server</strong></td><td>MOTD, ping/pong and raw tracing visibility, plus outbound flood protection.</td></tr>
@@ -871,6 +875,8 @@ are intentionally not exposed.</p>
   <tr><td><code>/noop</code></td><td>Do nothing (but evaluate its parameters).</td></tr>
   <tr><td><code>/write [switches] file text</code> · <code>/filter</code></td><td>Edit/filter sandboxed text files and custom windows (see Files).</td></tr>
   <tr><td><code>/play [switches] [target] file [delay]</code></td><td>Queue file lines as messages, notices, commands, or alias calls; inspect with <code>$play</code>/<code>$pnick</code>.</td></tr>
+  <tr><td><code>/sound [target] file [message]</code></td><td>Play a file from the script-data sandbox and optionally send a CTCP SOUND request to a channel or nick. A quoted filename may contain spaces.</td></tr>
+  <tr><td><code>/splay file</code> · <code>/splay -p|-r|-s</code></td><td>Play a sandboxed audio file, or pause, resume, and stop the current scripted playback.</td></tr>
   <tr><td><code>/sockopen /socklisten /sockudp /sockwrite /sockread /sockclose</code></td><td>TCP, UDP, direct TLS and STARTTLS sockets (see Sockets).</td></tr>
   <tr><td><code>/parseline [switches] line</code></td><td>Replace or queue a byte-preserving incoming/outgoing protocol line from <code>on PARSELINE</code>.</td></tr>
   <tr><td><code>/dcc chat|send|get|fserve|close|retry</code></td><td>DCC chat, files, passive/reverse negotiation, resume, and direct <code>IP[:port]</code> DCC Server clients.</td></tr>
@@ -892,8 +898,8 @@ are intentionally not exposed.</p>
   <tr><td><code>/reload</code> · <code>/unsetall</code></td><td>Recompile all scripts · clear all variables.</td></tr>
   <tr><td><code>/scon N cmd</code> · <code>/scid cid cmd</code></td><td>Run a command on another connection — by index / by <code>$cid</code> — in that connection's context.</td></tr>
 </table>
-<div class="note">Unrecognized <em>client-side</em> commands (unsupported display/sound/launch
-commands such as <code>/beep</code>, <code>/splay</code>, or <code>/run</code>) are quietly ignored
+<div class="note">Unrecognized <em>client-side</em> commands (unsupported display/launch
+commands such as <code>/beep</code> or <code>/run</code>) are quietly ignored
 so dropped-in scripts don't error. Anything else that isn't a built-in or one of your
 aliases is sent to the server as a raw IRC command — so real IRC commands like
 <code>/whois</code> or <code>/list</code> work, but a typo like <code>/joimn</code> still

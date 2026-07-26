@@ -378,6 +378,12 @@ export type IrcEvent =
       source: string;
     }
   | {
+      type: "audio";
+      serverId: string;
+      operation: "play" | "pause" | "resume" | "stop";
+      path: string;
+    }
+  | {
       type: "isupport";
       serverId: string;
       chanTypes: string;

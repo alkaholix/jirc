@@ -1201,6 +1201,31 @@ img.nick-icon {
 .channel-mode-list-item code {
   overflow-wrap: anywhere;
 }
+.sound-settings-grid {
+  display: grid;
+  gap: 0.45rem;
+}
+.sound-setting {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) minmax(8rem, 2fr) auto auto auto;
+  align-items: center;
+  gap: 0.35rem;
+}
+.sound-setting code {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (max-width: 760px) {
+  .sound-setting {
+    grid-template-columns: 1fr auto auto auto;
+  }
+  .sound-setting code {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
 .confirm-modal {
   width: 380px;
 }

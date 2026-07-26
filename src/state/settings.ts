@@ -13,6 +13,15 @@ export interface Settings {
   timestampMode: TimestampMode;
   showJoinPart: boolean;
   notifications: boolean;
+  soundEnabled: boolean;
+  soundVolume: number;
+  mentionSound: string;
+  privateSound: string;
+  inviteSound: string;
+  onlineSound: string;
+  quietHoursEnabled: boolean;
+  quietHoursFrom: string;
+  quietHoursTo: string;
   highlightWords: string[];
   /** Nick masks to ignore (wildcards allowed, e.g. "spammer" or "*!*@bad.host"). */
   ignores: string[];
@@ -65,6 +74,15 @@ const DEFAULTS: Settings = {
   timestampMode: "inline",
   showJoinPart: true,
   notifications: true,
+  soundEnabled: true,
+  soundVolume: 0.5,
+  mentionSound: "",
+  privateSound: "",
+  inviteSound: "",
+  onlineSound: "",
+  quietHoursEnabled: false,
+  quietHoursFrom: "22:00",
+  quietHoursTo: "07:00",
   highlightWords: [],
   ignores: [],
   selfNickColor: "#7aa2f7",

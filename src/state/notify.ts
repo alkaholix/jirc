@@ -3,6 +3,7 @@ import { api, IrcEvent } from "../lib/api";
 import { useSettings } from "./settings";
 import { useStore } from "./store";
 import { notify } from "../lib/notify";
+import { playAlertSound } from "../lib/sound";
 
 /// Which watched nicks are currently online, per server (from ISON / RPL_ISON).
 interface NotifyState {
@@ -30,6 +31,7 @@ export function routeNotifyEvent(ev: IrcEvent) {
       // Fire `on NOTIFY` (regardless of the desktop-notification setting).
       api.scriptNotify(ev.serverId, network, n, true).catch(() => {});
       if (notifications) notify("Online", `${n} is online`);
+      playAlertSound("online");
     }
   }
   for (const n of prev) {

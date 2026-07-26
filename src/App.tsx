@@ -30,6 +30,7 @@ import { routeAwayEvent } from "./state/away";
 import { pollNotify, routeNotifyEvent, useNotify } from "./state/notify";
 import { routeUrlEvent } from "./state/urlGrabber";
 import { routeModeEvent } from "./state/channelModes";
+import { controlAudio } from "./lib/sound";
 import {
   applyTheme,
   resolveTheme,
@@ -153,6 +154,9 @@ function MainApp() {
       routeNotifyEvent(e.payload);
       routeUrlEvent(e.payload);
       routeModeEvent(e.payload);
+      if (e.payload.type === "audio") {
+        controlAudio(e.payload.operation, e.payload.path);
+      }
       routeToolbarEvent(e.payload);
       routePanelEvent(e.payload);
       // Approve/decline an incoming DCC chat — prompt once, in the main window.

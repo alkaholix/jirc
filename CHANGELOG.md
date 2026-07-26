@@ -12,6 +12,14 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🔊 26.7.78 — Notification sounds and audio commands
+
+- Added configurable sounds for mentions, private messages, invites, and watched
+  users coming online, with built-in tones, per-device audio-file selection,
+  volume control, test buttons, and optional quiet hours.
+- Implemented sandboxed mSL `/sound` and `/splay` playback, including pause,
+  resume, and stop controls.
+
 ## 🎛️ 26.7.77 — Complete channel-mode editor
 
 - Rebuilt Channel Central around each server's advertised `CHANMODES`, `PREFIX`,

@@ -9,6 +9,8 @@ import {
 import { api, DataLocation } from "../lib/api";
 import { dccDetect } from "../state/dcc";
 import { UsersSettings } from "./UsersSettings";
+import { open } from "@tauri-apps/plugin-dialog";
+import { playAlertSound } from "../lib/sound";
 import {
   checkForUpdate,
   installUpdate,
@@ -141,6 +143,18 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const checkUpdate = async () => {
     setUpdateStatus({ state: "checking" });
     setUpdateStatus(await checkForUpdate());
+  };
+
+  const chooseSound = async (
+    key: "mentionSound" | "privateSound" | "inviteSound" | "onlineSound"
+  ) => {
+    const selected = await open({
+      multiple: false,
+      filters: [
+        { name: "Audio", extensions: ["wav", "mp3", "ogg", "flac", "m4a", "aac"] },
+      ],
+    });
+    if (typeof selected === "string") settings.set(key, selected);
   };
 
   const toggle = (key: Parameters<typeof settings.set>[0], label: string) => (
@@ -321,6 +335,55 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           {tab === "alerts" && (
             <>
               {toggle("notifications", "Desktop notifications for mentions & PMs")}
+              {toggle("soundEnabled", "Play notification sounds")}
+              <label>
+                Sound volume — {Math.round(settings.soundVolume * 100)}%
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={settings.soundVolume}
+                  onChange={(event) => settings.set("soundVolume", Number(event.target.value))}
+                />
+              </label>
+              <div className="sound-settings-grid">
+                {([
+                  ["mention", "mentionSound", "Mention"],
+                  ["private", "privateSound", "Private message"],
+                  ["invite", "inviteSound", "Invite"],
+                  ["online", "onlineSound", "Watched user online"],
+                ] as const).map(([kind, key, label]) => (
+                  <div className="sound-setting" key={key}>
+                    <span>{label}</span>
+                    <code title={settings[key]}>{settings[key] || "Built-in tone"}</code>
+                    <button onClick={() => chooseSound(key)}>Choose…</button>
+                    <button className="ghost" onClick={() => settings.set(key, "")}>Default</button>
+                    <button className="ghost" onClick={() => playAlertSound(kind, true)}>Test</button>
+                  </div>
+                ))}
+              </div>
+              {toggle("quietHoursEnabled", "Mute sounds during quiet hours")}
+              {settings.quietHoursEnabled && (
+                <div className="row">
+                  <label>
+                    From
+                    <input
+                      type="time"
+                      value={settings.quietHoursFrom}
+                      onChange={(event) => settings.set("quietHoursFrom", event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Until
+                    <input
+                      type="time"
+                      value={settings.quietHoursTo}
+                      onChange={(event) => settings.set("quietHoursTo", event.target.value)}
+                    />
+                  </label>
+                </div>
+              )}
               <label>
                 Highlight words (comma-separated)
                 <input

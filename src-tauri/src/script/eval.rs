@@ -103,6 +103,11 @@ pub enum Action {
         command: String,
         source: String,
     },
+    /// Play, pause, resume, or stop local audio.
+    Audio {
+        operation: String,
+        path: String,
+    },
     /// Open a TCP socket (`/sockopen`); `tls` for `-e` (encrypted).
     SockOpen {
         name: String,
@@ -1811,14 +1816,78 @@ impl<'a> Runtime<'a> {
             "ialfill" => self.cmd_ialfill(raw_args),
             "ialmark" => self.cmd_ialmark(raw_args),
             "updatenl" => self.cmd_updatenl(),
+            "splay" => {
+                let args = self.expand(raw_args);
+                let mut rest = args.trim();
+                let flags = rest
+                    .split_whitespace()
+                    .take_while(|part| part.starts_with('-'))
+                    .collect::<Vec<_>>();
+                for flag in &flags {
+                    rest = rest[flag.len()..].trim_start();
+                }
+                let operation = if flags.iter().any(|part| *part == "-p") {
+                    "pause"
+                } else if flags.iter().any(|part| *part == "-r") {
+                    "resume"
+                } else if rest.is_empty() || flags.iter().any(|part| *part == "-s" || *part == "-c")
+                {
+                    "stop"
+                } else {
+                    "play"
+                };
+                let file = take_file_arg(rest)
+                    .map(|(file, _)| file)
+                    .unwrap_or_default();
+                let path = if operation == "play" && !file.is_empty() {
+                    sandbox_path(&self.data_dir, &file)
+                        .to_string_lossy()
+                        .into_owned()
+                } else {
+                    String::new()
+                };
+                self.actions.push(Action::Audio {
+                    operation: operation.into(),
+                    path,
+                });
+            }
+            "sound" => {
+                let args = self.expand(raw_args);
+                if let Some((first, rest)) = take_file_arg(&args) {
+                    let (target, file, message) = if rest.is_empty() {
+                        (self.reply_target(), first, "")
+                    } else if let Some((file, message)) = take_file_arg(rest) {
+                        (first, file, message)
+                    } else {
+                        (self.reply_target(), first, "")
+                    };
+                    if !file.is_empty() {
+                        let payload = if message.is_empty() {
+                            format!("\u{1}SOUND {file}\u{1}")
+                        } else {
+                            format!("\u{1}SOUND {file} {message}\u{1}")
+                        };
+                        if !target.is_empty() {
+                            self.actions
+                                .push(Action::Send(format!("PRIVMSG {target} :{payload}")));
+                        }
+                        self.actions.push(Action::Audio {
+                            operation: "play".into(),
+                            path: sandbox_path(&self.data_dir, &file)
+                                .to_string_lossy()
+                                .into_owned(),
+                        });
+                    }
+                }
+            }
             // We evaluate any parameters (for identifier side effects) and stop.
             // `/run` is deliberately a no-op — jIRC never launches programs.
             "clearall" | "close" | "cline" | "fline" | "renwin" | "titlebar" | "editbox"
             | "linesep" | "background" | "color" | "font" | "flash" | "beep" | "ebeeps"
-            | "speak" | "splay" | "sound" | "run" | "url" | "dns" | "debug" | "log" | "logview"
-            | "timestamp" | "donotdisturb" | "menubar" | "switchbar" | "treebar" | "mdi"
-            | "save" | "loadbuf" | "savebuf" | "showmirc" | "maximize" | "minimize" | "creq"
-            | "sreq" | "clipboard" | "resetidle" => {
+            | "speak" | "run" | "url" | "dns" | "debug" | "log" | "logview" | "timestamp"
+            | "donotdisturb" | "menubar" | "switchbar" | "treebar" | "mdi" | "save" | "loadbuf"
+            | "savebuf" | "showmirc" | "maximize" | "minimize" | "creq" | "sreq" | "clipboard"
+            | "resetidle" => {
                 let _ = self.expand(raw_args);
             }
             _ => {

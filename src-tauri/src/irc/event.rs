@@ -289,6 +289,12 @@ pub enum UiEvent {
         command: String,
         source: String,
     },
+    /// Local media playback requested by `/splay` or `/sound`.
+    Audio {
+        server_id: String,
+        operation: String,
+        path: String,
+    },
 
     // ---- Script-driven custom windows (@window) ----
     /// Open/create a custom window.

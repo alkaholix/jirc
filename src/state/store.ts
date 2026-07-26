@@ -6,6 +6,7 @@ import { stripFormatting } from "../ircFormat/parse";
 import { ircxDisplay } from "../lib/ircx";
 import { dccOffers } from "./dcc";
 import { useTransfers } from "./transfers";
+import { playAlertSound } from "../lib/sound";
 
 export type BufferKind = "status" | "channel" | "query" | "window";
 
@@ -277,11 +278,14 @@ export const useStore = create<State>((set, get) => {
     }));
 
     // Desktop notification for mentions and private messages.
-    if (settings.notifications && isAlert && !line.self) {
+    if (isAlert && line.kind !== "whisper" && !line.self) {
       const windowFocused = typeof document !== "undefined" && document.hasFocus();
       if ((mentioned || kind === "query") && (!isActive || !windowFocused)) {
         const where = kind === "query" ? (line.from ?? name) : name;
-        notify(where, `${line.from ? `${line.from}: ` : ""}${stripFormatting(line.text)}`);
+        if (settings.notifications) {
+          notify(where, `${line.from ? `${line.from}: ` : ""}${stripFormatting(line.text)}`);
+        }
+        playAlertSound(kind === "query" ? "private" : "mention");
       }
     }
 
@@ -738,6 +742,7 @@ export const useStore = create<State>((set, get) => {
         const who = ev.from ?? "someone";
         sys(`→ ${who} invited you to ${ircxDisplay(ev.channel)}`);
         if (settings.notifications) notify("Invite", `${who} invited you to ${ircxDisplay(ev.channel)}`);
+        playAlertSound("invite");
         break;
       }
       case "ircxState":
@@ -784,10 +789,13 @@ export const useStore = create<State>((set, get) => {
         // Whispers are private — notify (and flag the channel) like a mention.
         const wkey = keyFor(sid, ev.channel);
         if (get().active !== wkey) patchBuffer(wkey, (b) => ({ ...b, mention: true }));
-        if (settings.notifications) {
+        {
           const windowFocused = typeof document !== "undefined" && document.hasFocus();
           if (get().active !== wkey || !windowFocused) {
-            notify(`Whisper from ${ev.from ?? "?"} in ${ev.channel}`, ev.text);
+            if (settings.notifications) {
+              notify(`Whisper from ${ev.from ?? "?"} in ${ev.channel}`, ev.text);
+            }
+            playAlertSound("private");
           }
         }
         break;
