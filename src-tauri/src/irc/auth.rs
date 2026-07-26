@@ -2,7 +2,8 @@
 //!
 //! CAP LS can span multiple replies.  We accumulate the complete offer before
 //! sending one request, then keep the request pending until every capability is
-//! ACKed or NAKed.  SASL supports PLAIN, EXTERNAL, and SCRAM-SHA-256; all
+//! ACKed or NAKed. SASL supports PLAIN, EXTERNAL, SCRAM-SHA-256, and
+//! OAUTHBEARER; all
 //! AUTHENTICATE payloads use the protocol's 400-byte chunking rules.
 
 use std::collections::{HashMap, HashSet};
@@ -81,6 +82,10 @@ const SUPPORTED_CAPS: &[&str] = &[
     "userhost-in-names",
     "message-tags",
     "echo-message",
+    "account-tag",
+    "batch",
+    "labeled-response",
+    "draft/chathistory",
 ];
 
 fn parse_cap_token(token: &str) -> Option<(String, Option<String>, bool)> {
@@ -146,7 +151,11 @@ fn desired_caps(
         SUPPORTED_CAPS
             .iter()
             .copied()
-            .filter(|cap| eligible(cap))
+            .filter(|cap| {
+                eligible(cap)
+                    && (*cap != "labeled-response" || state.offered_caps.contains_key("batch"))
+                    && (*cap != "draft/chathistory" || state.offered_caps.contains_key("batch"))
+            })
             .map(str::to_string),
     );
     desired
@@ -333,6 +342,30 @@ fn handle_complete_challenge(
             // inheriting the nick as PLAIN/SCRAM do.
             encode_authenticate(p.account.as_deref().unwrap_or_default().as_bytes())
         }
+        (Some(SaslMechanism::OAuthBearer), SaslPhase::AwaitingInitial) => {
+            if !challenge.is_empty() {
+                return fail_exchange(state);
+            }
+            let token = p.account_password.as_deref().unwrap_or_default();
+            if token.is_empty() {
+                return fail_exchange(state);
+            }
+            let authzid = p
+                .account
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .map(|value| format!("a={}", value.replace('=', "=3D").replace(',', "=2C")))
+                .unwrap_or_default();
+            let payload = format!("n,{authzid},\u{1}auth=Bearer {token}\u{1}\u{1}");
+            state.phase = SaslPhase::AwaitingResult;
+            encode_authenticate(payload.as_bytes())
+        }
+        (Some(SaslMechanism::OAuthBearer), SaslPhase::AwaitingResult) => {
+            // RFC 7628 sends a base64 JSON error challenge before the failure
+            // numeric. An empty response acknowledges it and lets the server
+            // finish the exchange.
+            vec!["AUTHENTICATE +".into()]
+        }
         (Some(SaslMechanism::ScramSha256), SaslPhase::AwaitingInitial) => {
             if !challenge.is_empty() {
                 return fail_exchange(state);
@@ -502,6 +535,7 @@ mod tests {
             realname: None,
             password: None,
             ntlm: false,
+            ircx_auth_package: None,
             ntlm_domain: None,
             ntlm_user: None,
             ntlm_password: None,
@@ -553,6 +587,34 @@ mod tests {
             vec!["CAP END"]
         );
         assert!(state.cap_enabled("ECHO-MESSAGE"));
+    }
+
+    #[test]
+    fn negotiates_batch_dependent_capabilities_together() {
+        let p = profile(false, None, SaslMechanism::Plain);
+        let mut state = AuthState::default();
+        assert_eq!(
+            on_cap(
+                &p,
+                &mut state,
+                &CapSubCommand::LS,
+                "account-tag labeled-response draft/chathistory batch",
+                false,
+            ),
+            vec!["CAP REQ :account-tag batch labeled-response draft/chathistory"]
+        );
+
+        let mut without_batch = AuthState::default();
+        assert_eq!(
+            on_cap(
+                &p,
+                &mut without_batch,
+                &CapSubCommand::LS,
+                "labeled-response draft/chathistory",
+                false,
+            ),
+            vec!["CAP END"]
+        );
     }
 
     #[test]
@@ -627,6 +689,26 @@ mod tests {
         assert_eq!(
             on_authenticate(&p, &mut state, "+"),
             vec![format!("AUTHENTICATE {}", STANDARD.encode("acct"))]
+        );
+    }
+
+    #[test]
+    fn oauthbearer_sends_rfc_7628_initial_response_and_acknowledges_errors() {
+        let p = profile(true, Some("access-token"), SaslMechanism::OAuthBearer);
+        let mut state = begin_sasl(&p, "sasl=OAUTHBEARER");
+        let outgoing = on_authenticate(&p, &mut state, "+");
+        let payload = outgoing[0].strip_prefix("AUTHENTICATE ").unwrap();
+        assert_eq!(
+            String::from_utf8(STANDARD.decode(payload).unwrap()).unwrap(),
+            "n,a=acct,\u{1}auth=Bearer access-token\u{1}\u{1}"
+        );
+        assert_eq!(
+            on_authenticate(
+                &p,
+                &mut state,
+                &STANDARD.encode(r#"{"status":"invalid_token"}"#),
+            ),
+            vec!["AUTHENTICATE +"]
         );
     }
 

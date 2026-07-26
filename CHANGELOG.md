@@ -12,6 +12,17 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🔐 26.7.68 — Broader IRCv3 and IRCX authentication
+
+- Added TLS-only **SASL OAUTHBEARER** authentication. Access tokens use the
+  existing account-password field and OS-keyring storage.
+- Added the IRCX **ANON** pre-registration authentication package alongside
+  native NTLM and script-managed authentication.
+- Negotiates IRCv3 `account-tag`, `batch`, `labeled-response`, and
+  `draft/chathistory`, including the required batch dependencies.
+- Account tags now keep IAL account metadata current for every user message,
+  while structural `BATCH` delimiters stay out of chat buffers.
+
 ## 🔌 26.7.67 — Complete DCC Server mode
 
 ### Added

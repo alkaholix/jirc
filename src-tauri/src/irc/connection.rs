@@ -576,24 +576,40 @@ async fn run_once(
         engine.set_connection_context(server_id, &profile.name, &profile.host);
     }
 
-    // Registration. IRC7 servers require an IRCX NTLM (SSPI) handshake *before*
-    // NICK/USER; standard servers use CAP/SASL instead.
-    if profile.ntlm {
-        if let Err(e) =
+    // Registration. IRCX AUTH packages run before NICK/USER; standard servers
+    // use CAP/SASL instead.
+    let ircx_anon = profile.ircx
+        && profile
+            .ircx_auth_package
+            .as_deref()
+            .is_some_and(|package| package.eq_ignore_ascii_case("ANON"));
+    if profile.ntlm || ircx_anon {
+        let auth_result = if profile.ntlm {
             crate::irc::ntlm::handshake(&mut reader, &mut write_half, profile, app, server_id).await
-        {
+        } else {
+            crate::irc::ntlm::anonymous_handshake(
+                &mut reader,
+                &mut write_half,
+                profile,
+                app,
+                server_id,
+            )
+            .await
+        };
+        if let Err(e) = auth_result {
+            let package = if profile.ntlm { "NTLM" } else { "ANON" };
             emit(
                 app,
                 UiEvent::Error {
                     server_id: server_id.to_string(),
-                    message: format!("NTLM authentication failed: {e}"),
+                    message: format!("{package} authentication failed: {e}"),
                 },
             );
             emit(
                 app,
                 UiEvent::Disconnected {
                     server_id: server_id.to_string(),
-                    reason: format!("NTLM auth failed: {e}"),
+                    reason: format!("{package} auth failed: {e}"),
                 },
             );
             return Outcome::Dropped;
@@ -1081,6 +1097,19 @@ pub fn process_message(ctx: &mut Context, raw: &str, msg: Message) -> Effects {
             .find(|t| t.0 == "time")
             .and_then(|t| t.1.clone())
     });
+    // IRCv3 account-tag applies to every command from a user, including direct
+    // messages from users with whom we share no channel. Keep the IAL account
+    // metadata current before routing the command or firing scripts.
+    if let Some(nick) = source.as_deref() {
+        if let Some(account) = msg.tags.as_ref().and_then(|tags| {
+            tags.iter()
+                .find(|tag| tag.0 == "account")
+                .and_then(|tag| tag.1.as_deref())
+        }) {
+            ctx.state.update_ial_account(nick, account);
+            fx.ial_changed = true;
+        }
+    }
 
     match msg.command {
         Command::PING(ref s, ref t) => {
@@ -1469,6 +1498,11 @@ pub fn process_message(ctx: &mut Context, raw: &str, msg: Message) -> Effects {
         }),
         Command::Response(resp, ref args) => handle_numeric(ctx, &mut fx, resp, args),
         Command::Raw(ref cmd, ref args) => {
+            // IRCv3 batch delimiters are structural. The contained messages are
+            // still routed normally and retain their @batch tag.
+            if cmd.eq_ignore_ascii_case("BATCH") {
+                return fx;
+            }
             // mIRC's `/ialfill` WHOX request uses token 995 and fields
             // %acdfhlnrstu. WHOX replies always use canonical field order:
             // token, channel, user, host, server, nick, flags, hops, idle,
@@ -2393,6 +2427,7 @@ mod tests {
             realname: None,
             password: None,
             ntlm: false,
+            ircx_auth_package: None,
             ntlm_domain: None,
             ntlm_user: None,
             ntlm_password: None,
@@ -3098,6 +3133,32 @@ mod tests {
             }
             _ => panic!("expected Message"),
         }
+    }
+
+    #[test]
+    fn account_tag_updates_ial_for_direct_messages() {
+        let mut state = SessionState::default();
+        let mut accum = HashMap::new();
+        run_line(
+            &mut state,
+            &mut accum,
+            "@account=bob_account :bob!u@h PRIVMSG me :hello",
+        );
+        assert_eq!(state.ial_info["bob"].account, "bob_account");
+    }
+
+    #[test]
+    fn batch_delimiters_are_structural_and_silent() {
+        let mut state = SessionState::default();
+        let mut accum = HashMap::new();
+        let open = run_line(
+            &mut state,
+            &mut accum,
+            ":server BATCH +history chathistory #room",
+        );
+        let close = run_line(&mut state, &mut accum, ":server BATCH -history");
+        assert!(open.events.is_empty());
+        assert!(close.events.is_empty());
     }
 
     #[test]

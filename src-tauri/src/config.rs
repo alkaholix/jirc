@@ -12,6 +12,8 @@ pub enum SaslMechanism {
     External,
     #[serde(rename = "SCRAM-SHA-256")]
     ScramSha256,
+    #[serde(rename = "OAUTHBEARER")]
+    OAuthBearer,
 }
 
 impl SaslMechanism {
@@ -20,6 +22,7 @@ impl SaslMechanism {
             Self::Plain => "PLAIN",
             Self::External => "EXTERNAL",
             Self::ScramSha256 => "SCRAM-SHA-256",
+            Self::OAuthBearer => "OAUTHBEARER",
         }
     }
 }
@@ -90,6 +93,10 @@ pub struct ServerProfile {
     pub password: Option<String>,
     #[serde(default)]
     pub ntlm: bool,
+    /// Additional pre-registration IRCX AUTH package. `ANON` is implemented
+    /// natively; NTLM remains represented by the legacy `ntlm` fields.
+    #[serde(default)]
+    pub ircx_auth_package: Option<String>,
     /// NTLM domain (e.g. "cg"); None/empty when the account isn't domain-scoped.
     #[serde(default)]
     pub ntlm_domain: Option<String>,
@@ -172,6 +179,16 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&mechanism).unwrap(),
             r#""SCRAM-SHA-256""#
+        );
+    }
+
+    #[test]
+    fn oauthbearer_mechanism_uses_the_irc_name_in_json() {
+        let mechanism: SaslMechanism = serde_json::from_str(r#""OAUTHBEARER""#).unwrap();
+        assert_eq!(mechanism, SaslMechanism::OAuthBearer);
+        assert_eq!(
+            serde_json::to_string(&mechanism).unwrap(),
+            r#""OAUTHBEARER""#
         );
     }
 }

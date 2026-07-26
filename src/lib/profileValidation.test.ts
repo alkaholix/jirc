@@ -26,6 +26,14 @@ describe("tlsClientAuthError", () => {
     ).toContain("both a PEM client certificate");
   });
 
+  it("requires TLS for SASL OAUTHBEARER tokens", () => {
+    expect(
+      tlsClientAuthError(
+        profile({ tls: false, sasl: true, saslMechanism: "OAUTHBEARER" }),
+      ),
+    ).toBe("SASL OAUTHBEARER requires TLS.");
+  });
+
   it("accepts a complete certificate/key pair and rejects one-sided paths", () => {
     expect(
       tlsClientAuthError(

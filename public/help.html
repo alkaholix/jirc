@@ -252,8 +252,14 @@ part for fine control. Made a mess? Hit <strong>Reset</strong> in the settings p
 <h2 id="security">Security &amp; where your data lives</h2>
 <ul>
   <li><strong>TLS</strong> (rustls, including PEM client certificates), SASL
-    <strong>PLAIN / EXTERNAL / SCRAM-SHA-256</strong>, NickServ identify, and a
+    <strong>PLAIN / EXTERNAL / SCRAM-SHA-256 / OAUTHBEARER</strong>, NickServ
+    identify, and a
     <strong>SOCKS5 proxy</strong> are all supported.</li>
+  <li><strong>OAUTHBEARER</strong> requires TLS. Enter the access token in the
+    token field; it is stored in the OS keyring like an account password.</li>
+  <li>IRCX profiles support pre-registration <strong>NTLM</strong> and
+    credential-free <strong>ANON</strong> packages. Choose
+    <em>None / script-managed</em> for network-specific GateKeeper scripts.</li>
   <li>Passwords live in the <strong>OS keyring</strong> (Windows Credential Manager / macOS
     Keychain / Linux Secret Service), never in plain files.</li>
   <li>Server profiles: <code>profiles.json</code>; scripts: <code>scripts/*.mrc</code>;
@@ -1203,7 +1209,9 @@ IRCX owner/host keys, <strong>user access lists</strong>
 notify / lifecycle events (<code>on OPEN</code>/<code>CLOSE</code>/<code>NOTIFY</code>/<code>START</code>/<code>EXIT</code>).
 Also supported: DCC chat/send/get/resume/passive transfers and DCC Server,
 <code>/play</code>,
-PARSELINE, UDP/STARTTLS script sockets, echo-message, and SASL EXTERNAL/SCRAM-SHA-256.
+PARSELINE, UDP/STARTTLS script sockets, IRCv3 account tags/batches/labeled
+responses/chat history negotiation, and SASL
+EXTERNAL/SCRAM-SHA-256/OAUTHBEARER.
 Some aren't in the reference tables above yet.
 </div>
 

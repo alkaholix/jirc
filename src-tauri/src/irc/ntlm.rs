@@ -19,6 +19,7 @@
 
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::time::{timeout, Duration};
 
 use crate::config::ServerProfile;
 use crate::irc::event::{Direction, UiEvent, IRC_EVENT};
@@ -108,6 +109,53 @@ where
             return Err(
                 "NTLM authentication failed (910) — check the username, domain and password".into(),
             );
+        }
+    }
+}
+
+/// Runs the IRCX `ANON` SASL package before NICK/USER. ANON carries a harmless
+/// trace string and no credential. Servers either confirm with
+/// `AUTH ANON *|OK ...` or reject it with an IRCX 9xx error.
+pub async fn anonymous_handshake<R, W>(
+    reader: &mut R,
+    writer: &mut W,
+    profile: &ServerProfile,
+    app: &AppHandle,
+    server_id: &str,
+) -> Result<(), String>
+where
+    R: AsyncBufReadExt + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let trace = profile
+        .username
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .unwrap_or("jIRC");
+    send_token(writer, app, server_id, b"AUTH ANON I :", trace.as_bytes()).await?;
+    loop {
+        let line = timeout(Duration::from_secs(30), read_line(reader))
+            .await
+            .map_err(|_| "ANON authentication timed out".to_string())?
+            .map_err(|error| format!("read during ANON auth: {error}"))?
+            .ok_or("connection closed during ANON auth")?;
+        emit_raw(app, server_id, Direction::In, &line);
+        if handle_ping(writer, app, server_id, &line).await? {
+            continue;
+        }
+        let upper = decode(&line).to_ascii_uppercase();
+        if upper.contains("AUTH ANON *") || upper.contains("AUTH ANON OK") {
+            echo(app, server_id, "IRCX ANON authentication succeeded.");
+            return Ok(());
+        }
+        if numeric_code(&line).is_some_and(|code| (900..=999).contains(&code)) {
+            return Err(format!(
+                "IRCX ANON authentication failed: {}",
+                decode(&line)
+            ));
+        }
+        if upper.contains("AUTH ANON S") {
+            return Err("server requested an unsupported multi-step ANON exchange".into());
         }
     }
 }
@@ -277,6 +325,17 @@ fn is_numeric(line: &[u8], code: &[u8]) -> bool {
         other => other,
     };
     token == Some(code)
+}
+
+fn numeric_code(line: &[u8]) -> Option<u16> {
+    let mut it = line.split(|&byte| byte == b' ');
+    let first = it.next()?;
+    let token = if first.first() == Some(&b':') {
+        it.next()?
+    } else {
+        first
+    };
+    std::str::from_utf8(token).ok()?.parse().ok()
 }
 
 #[cfg(test)]

@@ -7,7 +7,8 @@ Linux) and speaking both **standard IRC** (RFC 1459/2812 + some IRCv3) and
 > **Status: usable.** Multi-server chat, TLS/SASL, IRCX, a tabbed/tree UI, a
 > channel browser, scriptable popups, and a **mature native mIRC-scripting (mSL)
 > engine** — 200+ identifiers, access-level-gated events, and user lists. The
-> remaining work is concentrated in broader IRCv3/IRCX variants and UI polish.
+> remaining work is concentrated in additional network-specific protocol variants
+> and UI polish.
 > Standard DCC chat, file transfer, and direct DCC Server mode work. See the
 > [changelog](./CHANGELOG.md) and the [help &amp; scripting guide](./public/help.html).
 
@@ -16,7 +17,8 @@ Linux) and speaking both **standard IRC** (RFC 1459/2812 + some IRCv3) and
 - **Multiple servers at once**, each in its own window; auto-reconnect with backoff
 - **Standard IRC + IRCX** — IRCX `IRCX`/`ISIRCX` handshake, `ACCESS`/`PROP`/`LISTX`/
   `WHISPER`; ISUPPORT (`PREFIX`/`CHANTYPES`) so non-standard prefixes work
-- **Security & auth** — TLS (rustls), SASL PLAIN, NickServ, SOCKS5 proxy; passwords
+- **Security & auth** — TLS (rustls), SASL PLAIN/EXTERNAL/SCRAM-SHA-256/OAUTHBEARER,
+  IRCX NTLM/ANON, NickServ, SOCKS5 proxy; passwords and tokens
   stored in the OS keyring, not in plaintext
 - **Chat UI** — collapsible **server tree** *or* **switchbar** (tabs) layout,
   nick list with prefix sorting/colours, full mIRC colour/format rendering,

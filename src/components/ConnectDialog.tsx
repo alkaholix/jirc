@@ -186,12 +186,17 @@ export function ConnectDialog({ onClose, onConnect }: Props) {
               />
             </label>
             <label className="grow">
-              Password{form.saslMechanism === "EXTERNAL" ? " (not used by EXTERNAL)" : ""}
+              {form.saslMechanism === "OAUTHBEARER" ? "OAuth bearer token" : "Password"}
+              {form.saslMechanism === "EXTERNAL" ? " (not used by EXTERNAL)" : ""}
               <input
                 type="password"
                 value={form.accountPassword ?? ""}
                 onChange={(e) => set("accountPassword", e.target.value)}
-                placeholder="account password"
+                placeholder={
+                  form.saslMechanism === "OAUTHBEARER"
+                    ? "access token"
+                    : "account password"
+                }
               />
             </label>
             {form.sasl && (
@@ -209,6 +214,7 @@ export function ConnectDialog({ onClose, onConnect }: Props) {
                   <option value="PLAIN">PLAIN</option>
                   <option value="EXTERNAL">EXTERNAL</option>
                   <option value="SCRAM-SHA-256">SCRAM-SHA-256</option>
+                  <option value="OAUTHBEARER">OAUTHBEARER</option>
                 </select>
               </label>
             )}
@@ -295,13 +301,27 @@ export function ConnectDialog({ onClose, onConnect }: Props) {
               />
               IRCX
             </label>
-            {form.ircx && (
-              <label className="inline">
-                <input type="checkbox" checked={!!form.ntlm} onChange={(e) => set("ntlm", e.target.checked)} />
-                NTLM
-              </label>
-            )}
           </div>
+          {form.ircx && (
+            <label>
+              IRCX authentication package
+              <select
+                value={form.ntlm ? "NTLM" : form.ircxAuthPackage ?? ""}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setForm((current) => ({
+                    ...current,
+                    ntlm: value === "NTLM",
+                    ircxAuthPackage: value === "ANON" ? "ANON" : undefined,
+                  }));
+                }}
+              >
+                <option value="">None / script-managed</option>
+                <option value="NTLM">NTLM (username and password)</option>
+                <option value="ANON">ANON (anonymous)</option>
+              </select>
+            </label>
+          )}
           {form.ircx && form.ntlm && (
             <>
               <div className="row">

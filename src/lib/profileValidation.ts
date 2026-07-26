@@ -29,8 +29,10 @@ export function tlsClientAuthError(profile: ServerProfile): string | null {
   const cert = present(profile.tlsClientCertPath);
   const key = present(profile.tlsClientKeyPath);
   const external = !!profile.sasl && profile.saslMechanism === "EXTERNAL";
+  const oauthBearer = !!profile.sasl && profile.saslMechanism === "OAUTHBEARER";
 
   if (external && !profile.tls) return "SASL EXTERNAL requires TLS.";
+  if (oauthBearer && !profile.tls) return "SASL OAUTHBEARER requires TLS.";
   if (external && (!cert || !key)) {
     return "SASL EXTERNAL requires both a PEM client certificate and private-key file.";
   }

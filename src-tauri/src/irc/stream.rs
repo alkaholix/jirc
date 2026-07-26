@@ -129,6 +129,9 @@ type ClientIdentity = (
 fn client_identity(profile: &ServerProfile) -> io::Result<Option<ClientIdentity>> {
     let cert = nonempty_path(profile.tls_client_cert_path.as_deref());
     let key = nonempty_path(profile.tls_client_key_path.as_deref());
+    if profile.sasl && profile.sasl_mechanism == SaslMechanism::OAuthBearer && !profile.tls {
+        return Err(invalid_input("SASL OAUTHBEARER requires TLS"));
+    }
     if profile.sasl && profile.sasl_mechanism == SaslMechanism::External {
         if !profile.tls {
             return Err(invalid_input("SASL EXTERNAL requires TLS"));
@@ -314,6 +317,17 @@ mod tests {
         profile.tls = true;
         let error = client_identity(&profile).unwrap_err();
         assert!(error.to_string().contains("both a TLS client certificate"));
+    }
+
+    #[test]
+    fn oauth_bearer_requires_tls_before_connecting() {
+        let mut profile = profile();
+        profile.sasl = true;
+        profile.sasl_mechanism = SaslMechanism::OAuthBearer;
+        profile.tls = false;
+        let error = client_identity(&profile).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("OAUTHBEARER requires TLS"));
     }
 
     #[test]

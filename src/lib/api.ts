@@ -19,7 +19,7 @@ export interface ServerProfile {
   tlsClientKeyPath?: string;
   ircx?: boolean;
   sasl?: boolean;
-  saslMechanism?: "PLAIN" | "EXTERNAL" | "SCRAM-SHA-256";
+  saslMechanism?: "PLAIN" | "EXTERNAL" | "SCRAM-SHA-256" | "OAUTHBEARER";
   account?: string;
   accountPassword?: string;
   nickserv?: boolean;
@@ -31,6 +31,7 @@ export interface ServerProfile {
   realname?: string;
   password?: string;
   ntlm?: boolean;
+  ircxAuthPackage?: "ANON";
   ntlmDomain?: string;
   ntlmUser?: string;
   ntlmPassword?: string;
