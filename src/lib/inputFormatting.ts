@@ -43,3 +43,13 @@ export function colorControl(foreground: number, background?: number): string {
     .padStart(2, "0");
   return `${IRC_FORMAT.color}${fg},${bg}`;
 }
+
+export function applyPersistentColor(
+  text: string,
+  active: boolean,
+  foreground: number,
+  background?: number
+): string {
+  if (!active || text.startsWith("/")) return text;
+  return `${colorControl(foreground, background)}${text}${IRC_FORMAT.reset}`;
+}

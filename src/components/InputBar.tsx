@@ -3,7 +3,7 @@ import { Buffer } from "../state/store";
 import { handleInput } from "../lib/slash";
 import { emojiPicker } from "../lib/emoji";
 import {
-  colorControl,
+  applyPersistentColor,
   insertControl,
   IRC_FORMAT,
 } from "../lib/inputFormatting";
@@ -27,6 +27,10 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
   const [picker, setPicker] = useState(false);
   const [foreground, setForeground] = useState(1);
   const [background, setBackground] = useState<number | undefined>();
+  const [activeColours, setActiveColours] = useState<{
+    foreground: number;
+    background?: number;
+  } | null>(null);
   const showInputToolbar = useSettings((state) => state.showInputToolbar);
   const inputRef = useRef<HTMLInputElement>(null);
   const history = useRef<string[]>([]);
@@ -56,7 +60,15 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
     history.current.push(text);
     histIdx.current = history.current.length;
     setValue("");
-    await handleInput(text, buffer);
+    await handleInput(
+      applyPersistentColor(
+        text,
+        activeColours !== null,
+        activeColours?.foreground ?? foreground,
+        activeColours?.background
+      ),
+      buffer
+    );
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -171,17 +183,27 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
             </label>
             <button
               type="button"
-              title="Apply the selected text and background colours"
-              className="input-color-apply"
+              title="Use these text and background colours until Reset is clicked"
+              className={`input-color-apply${activeColours ? " active" : ""}`}
               style={{
                 color: IRC_COLORS[foreground],
                 backgroundColor: background === undefined ? undefined : IRC_COLORS[background],
               }}
-              onClick={() => applyControl(colorControl(foreground, background), IRC_FORMAT.reset)}
+              onClick={() => {
+                setActiveColours({ foreground, background });
+                inputRef.current?.focus();
+              }}
             >
-              Apply colours
+              {activeColours ? "Colours active" : "Apply colours"}
             </button>
-            <button type="button" title="Clear all formatting from this point" onClick={() => applyControl(IRC_FORMAT.reset, "")}>
+            <button
+              type="button"
+              title="Stop applying colours to new messages"
+              onClick={() => {
+                setActiveColours(null);
+                inputRef.current?.focus();
+              }}
+            >
               Reset
             </button>
           </>

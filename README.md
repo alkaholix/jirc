@@ -28,7 +28,8 @@ Linux) and speaking both **standard IRC** (RFC 1459/2812 + IRCv3) and
 - **Chat UI** — collapsible **server tree** *or* **switchbar** (tabs) layout,
   nick list with prefix sorting/colours, full mIRC colour/format rendering,
   a polished toolbar above the message box for emoji plus clearly labelled
-  bold/italic/underline/text/background colour controls,
+  bold/italic/underline/text/background colour controls; applied colours remain
+  active across messages until reset,
   clickable URLs, per-buffer logging, desktop notifications & highlight words
 - **Detachable windows** — pop any status, channel, query, or `@window` out into its own
   OS window and dock it back with one click (beyond mIRC's in-app MDI)

@@ -1014,6 +1014,10 @@ img.nick-icon {
   font-weight: 700;
   text-shadow: 0 0 2px #000;
 }
+.composer-toolbar .input-color-apply.active {
+  border-color: var(--ok);
+  box-shadow: 0 0 0 1px var(--ok);
+}
 @media (max-width: 760px) {
   .composer-color-control {
     font-size: 0;
@@ -1029,6 +1033,9 @@ img.nick-icon {
   .composer-toolbar .input-color-apply::after {
     content: "Apply";
     font-size: 0.8rem;
+  }
+  .composer-toolbar .input-color-apply.active::after {
+    content: "Active";
   }
 }
 .emoji-backdrop {

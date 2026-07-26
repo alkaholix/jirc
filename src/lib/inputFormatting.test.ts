@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { colorControl, insertControl, IRC_FORMAT } from "./inputFormatting";
+import {
+  applyPersistentColor,
+  colorControl,
+  insertControl,
+  IRC_FORMAT,
+} from "./inputFormatting";
 
 describe("input formatting controls", () => {
   it("inserts a toggle at the caret", () => {
@@ -22,5 +27,13 @@ describe("input formatting controls", () => {
     expect(colorControl(4)).toBe(`${IRC_FORMAT.color}04`);
     expect(colorControl(12, 1)).toBe(`${IRC_FORMAT.color}12,01`);
     expect(colorControl(120, -2)).toBe(`${IRC_FORMAT.color}99,00`);
+  });
+
+  it("keeps active colours on chat text without changing slash commands", () => {
+    expect(applyPersistentColor("hello", true, 4, 1)).toBe(
+      `${IRC_FORMAT.color}04,01hello${IRC_FORMAT.reset}`
+    );
+    expect(applyPersistentColor("/join #room", true, 4, 1)).toBe("/join #room");
+    expect(applyPersistentColor("hello", false, 4, 1)).toBe("hello");
   });
 });

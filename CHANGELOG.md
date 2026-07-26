@@ -12,6 +12,14 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🎯 26.7.73 — Persistent composer colours
+
+- Applying text/background colours now keeps that combination active for every
+  normal message until Reset is clicked.
+- Each outgoing coloured message is safely terminated with a reset code, while
+  slash commands remain untouched.
+- The Apply button clearly reports and highlights its active state.
+
 ## ✨ 26.7.72 — Polished composer and system font picker
 
 - Rebuilt the composer into a dedicated toolbar above the message field, with
