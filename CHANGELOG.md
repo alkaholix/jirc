@@ -12,6 +12,14 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 📐 26.7.89 — mSL geometry identifiers
+
+- Added `$intersect()` for line, ray, and segment intersection coordinates.
+- Added `$onpoly()` polygon overlap detection, including crossing edges,
+  touching boundaries, and fully-contained polygons.
+- Added regression coverage for intersection bounds and overlapping,
+  contained, and separate polygons.
+
 ## 🧩 26.7.88 — Script-controlled client UI
 
 - Implemented `/editbox` with active/status/window targeting, focus, appended

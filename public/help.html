@@ -738,6 +738,8 @@ separate minimized-window icon on jIRC's cross-platform interface.
   <tr><td><code>$inroundrect(x,y,rx,ry,w,h,cw,ch)</code></td><td><code>$true</code> when the point is inside the rounded rectangle</td></tr>
   <tr><td><code>$inpoly(x,y,x1,y1,x2,y2,…)</code></td><td><code>$true</code> when the point is inside the polygon</td></tr>
   <tr><td><code>$width(text,font,size,options)</code> · <code>$height(…)</code></td><td>practical canvas text dimensions in pixels</td></tr>
+  <tr><td><code>$intersect(x1,y1,x2,y2,x3,y3,x4,y4[,method])</code></td><td>intersection point for lines, rays, or segments; methods use <code>l</code>, <code>r</code>, and <code>s</code> pairs such as <code>ss</code></td></tr>
+  <tr><td><code>$onpoly(n1,n2,x,y,…)</code></td><td><code>$true</code> when two polygons cross, touch, or one contains the other</td></tr>
   <tr><td><code>$mouse</code></td><td><code>x y key</code> for the current custom-window mouse event</td></tr>
   <tr><td><code>$mouse.win</code> · <code>.x/.y</code> · <code>.mx/.my</code> · <code>.cx/.cy</code> · <code>.dx/.dy</code> · <code>.key</code> · <code>.lb</code></td><td>window, coordinates, modifier/button bitmask, and whether the event came from a listbox</td></tr>
 </table>

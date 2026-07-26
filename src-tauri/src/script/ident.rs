@@ -1853,15 +1853,44 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                     )
                 })
                 .collect();
-            let mut inside = false;
-            for index in 0..points.len() {
-                let (x1, y1) = points[index];
-                let (x2, y2) = points[(index + points.len() - 1) % points.len()];
-                if (y1 > py) != (y2 > py) && px < (x2 - x1) * (py - y1) / (y2 - y1) + x1 {
-                    inside = !inside;
-                }
-            }
-            bool_str(inside)
+            bool_str(point_in_polygon((px, py), &points))
+        }
+        "intersect" => {
+            let values: Vec<f64> = (0..8)
+                .map(|index| a(index).parse().unwrap_or(0.0))
+                .collect();
+            let method = a(8).to_ascii_lowercase();
+            let method = if method.len() == 2 {
+                method
+            } else {
+                "ll".into()
+            };
+            line_intersection(
+                (values[0], values[1]),
+                (values[2], values[3]),
+                (values[4], values[5]),
+                (values[6], values[7]),
+                method.as_bytes()[0] as char,
+                method.as_bytes()[1] as char,
+            )
+            .map_or_else(String::new, |(x, y)| {
+                format!("{} {}", fmt_round6(x), fmt_round6(y))
+            })
+        }
+        "onpoly" => {
+            let first_count = a(0).parse::<usize>().unwrap_or(0);
+            let second_count = a(1).parse::<usize>().unwrap_or(0);
+            let coordinates: Vec<f64> = args[2..]
+                .iter()
+                .map(|value| value.parse().unwrap_or(0.0))
+                .collect();
+            let first_end = first_count.saturating_mul(2).min(coordinates.len());
+            let first = coordinate_pairs(&coordinates[..first_end]);
+            let second_end = first_end
+                .saturating_add(second_count.saturating_mul(2))
+                .min(coordinates.len());
+            let second = coordinate_pairs(&coordinates[first_end..second_end]);
+            bool_str(polygons_overlap(&first, &second))
         }
         "height" => {
             let size = a(2).parse::<f64>().unwrap_or(14.0).abs();
@@ -3613,6 +3642,95 @@ fn bool_str(b: bool) -> String {
     if b { "$true" } else { "$false" }.to_string()
 }
 
+fn coordinate_pairs(values: &[f64]) -> Vec<(f64, f64)> {
+    values
+        .chunks_exact(2)
+        .map(|pair| (pair[0], pair[1]))
+        .collect()
+}
+
+fn cross((ax, ay): (f64, f64), (bx, by): (f64, f64)) -> f64 {
+    ax * by - ay * bx
+}
+
+fn line_intersection(
+    p: (f64, f64),
+    p2: (f64, f64),
+    q: (f64, f64),
+    q2: (f64, f64),
+    first_kind: char,
+    second_kind: char,
+) -> Option<(f64, f64)> {
+    let r = (p2.0 - p.0, p2.1 - p.1);
+    let s = (q2.0 - q.0, q2.1 - q.1);
+    let denominator = cross(r, s);
+    if denominator.abs() <= f64::EPSILON {
+        return None;
+    }
+    let qp = (q.0 - p.0, q.1 - p.1);
+    let t = cross(qp, s) / denominator;
+    let u = cross(qp, r) / denominator;
+    let accepts = |kind: char, value: f64| match kind {
+        'r' => value >= 0.0,
+        's' => (0.0..=1.0).contains(&value),
+        _ => true,
+    };
+    (accepts(first_kind, t) && accepts(second_kind, u)).then_some((p.0 + t * r.0, p.1 + t * r.1))
+}
+
+fn point_on_segment(point: (f64, f64), start: (f64, f64), end: (f64, f64)) -> bool {
+    let segment = (end.0 - start.0, end.1 - start.1);
+    let relative = (point.0 - start.0, point.1 - start.1);
+    cross(segment, relative).abs() <= 1e-9
+        && point.0 >= start.0.min(end.0) - 1e-9
+        && point.0 <= start.0.max(end.0) + 1e-9
+        && point.1 >= start.1.min(end.1) - 1e-9
+        && point.1 <= start.1.max(end.1) + 1e-9
+}
+
+fn point_in_polygon(point: (f64, f64), points: &[(f64, f64)]) -> bool {
+    if points.len() < 3 {
+        return false;
+    }
+    let mut inside = false;
+    for index in 0..points.len() {
+        let current = points[index];
+        let previous = points[(index + points.len() - 1) % points.len()];
+        if point_on_segment(point, previous, current) {
+            return true;
+        }
+        if (current.1 > point.1) != (previous.1 > point.1)
+            && point.0
+                < (previous.0 - current.0) * (point.1 - current.1) / (previous.1 - current.1)
+                    + current.0
+        {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+fn polygons_overlap(first: &[(f64, f64)], second: &[(f64, f64)]) -> bool {
+    if first.len() < 3 || second.len() < 3 {
+        return false;
+    }
+    for first_index in 0..first.len() {
+        let a = first[first_index];
+        let b = first[(first_index + 1) % first.len()];
+        for second_index in 0..second.len() {
+            let c = second[second_index];
+            let d = second[(second_index + 1) % second.len()];
+            if line_intersection(a, b, c, d, 's', 's').is_some()
+                || point_on_segment(a, c, d)
+                || point_on_segment(c, a, b)
+            {
+                return true;
+            }
+        }
+    }
+    point_in_polygon(first[0], second) || point_in_polygon(second[0], first)
+}
+
 /// `$gettok` index/range resolver: `N`, `N-`, `N1-N2`, and negative indices
 /// (`-1` = last token). Returns the joined slice, or empty if out of range.
 fn gettok_range(toks: &[&str], spec: &str, sep: char) -> String {
@@ -5342,6 +5460,85 @@ mod tests {
         assert_eq!(mirc_to_chrono("ddd mmm dd"), "%a %b %d");
         assert_eq!(mirc_to_chrono("h:nn tt"), "%-I:%M %p");
         assert_eq!(mirc_to_chrono("yy"), "%y");
+    }
+
+    #[test]
+    fn geometry_intersection_and_polygon_identifiers() {
+        use crate::script::ast::Script;
+        use std::collections::HashMap;
+        let script = Script::default();
+        let mut vars = HashMap::new();
+        let mut hashes = HashMap::new();
+        let mut var_expiry = HashMap::new();
+        let mut hash_expiry = HashMap::new();
+        let mut files = crate::script::files::FileStore::default();
+        let mut bins = crate::script::binvar::BinStore::default();
+        let mut windows = crate::script::window::WindowStore::default();
+        let mut users = crate::script::users::UserList::default();
+        let mut rt = rt_for(
+            &script,
+            &mut vars,
+            &mut hashes,
+            &mut var_expiry,
+            &mut hash_expiry,
+            &mut files,
+            &mut bins,
+            &mut windows,
+            &mut users,
+        );
+        let mut evaluate = |name: &str, values: &[&str]| {
+            eval_ident(
+                &mut rt,
+                name,
+                &values
+                    .iter()
+                    .map(|value| (*value).into())
+                    .collect::<Vec<_>>(),
+                "",
+            )
+        };
+
+        assert_eq!(
+            evaluate("intersect", &["0", "0", "10", "10", "0", "10", "10", "0"]),
+            "5 5"
+        );
+        assert_eq!(
+            evaluate(
+                "intersect",
+                &["0", "0", "1", "0", "2", "-1", "2", "1", "ss"]
+            ),
+            ""
+        );
+        assert_eq!(
+            evaluate(
+                "onpoly",
+                &[
+                    "4", "4", "0", "0", "10", "0", "10", "10", "0", "10", "5", "5", "15", "5",
+                    "15", "15", "5", "15",
+                ],
+            ),
+            "$true"
+        );
+        assert_eq!(
+            evaluate(
+                "onpoly",
+                &[
+                    "4", "4", "0", "0", "20", "0", "20", "20", "0", "20", "5", "5", "10", "5",
+                    "10", "10", "5", "10",
+                ],
+            ),
+            "$true"
+        );
+        assert_eq!(
+            evaluate(
+                "onpoly",
+                &[
+                    "4", "4", "0", "0", "2", "0", "2", "2", "0", "2", "5", "5", "7", "5", "7", "7",
+                    "5", "7",
+                ],
+            ),
+            "$false"
+        );
     }
 
     fn rt_for<'a>(
