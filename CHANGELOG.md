@@ -12,6 +12,12 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🪟 26.7.81 — Wider responsive settings
+
+- Widened the Settings dialog while keeping it within the available app window.
+- Settings tabs now wrap instead of requiring horizontal scrolling, and Alerts
+  sound paths/buttons stay contained at desktop and narrow window sizes.
+
 ## 🔐 26.7.80 — Stop repeated macOS Keychain prompts
 
 - Removed the destructive Keychain availability probe previously run whenever

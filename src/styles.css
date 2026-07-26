@@ -1180,6 +1180,24 @@ img.nick-icon {
 .settings-body {
   min-height: 230px;
 }
+.settings-modal {
+  width: min(48rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  display: flex;
+  flex-direction: column;
+}
+.settings-modal > .tabs {
+  flex-wrap: wrap;
+  overflow-x: visible;
+}
+.settings-modal > .tabs .tab {
+  flex: 1 1 auto;
+}
+.settings-modal .settings-body {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
 .channel-mode-dialog {
   width: min(46rem, calc(100vw - 2rem));
   max-height: min(46rem, calc(100vh - 2rem));
@@ -1245,11 +1263,25 @@ img.nick-icon {
 }
 @media (max-width: 760px) {
   .sound-setting {
-    grid-template-columns: 1fr auto auto auto;
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
   }
   .sound-setting code {
     grid-column: 1 / -1;
     grid-row: 2;
+  }
+}
+@media (max-width: 520px) {
+  .sound-setting {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .sound-setting > span,
+  .sound-setting code {
+    grid-column: 1 / -1;
+  }
+  .sound-setting button {
+    width: 100%;
+    min-width: 0;
+    padding-inline: 0.35rem;
   }
 }
 .confirm-modal {
