@@ -12,6 +12,13 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🎯 26.7.74 — Cleaner composer reset
+
+- Removed the empty colour swatch box and shortened the emoji picker button to
+  its face icon so the composer controls fit together more cleanly.
+- Reset now restores the colour selectors to black text with no background as
+  well as disabling persistent message colours.
+
 ## 🎯 26.7.73 — Persistent composer colours
 
 - Applying text/background colours now keeps that combination active for every

@@ -21,11 +21,12 @@ const IRC_COLOR_NAMES = [
   "Yellow", "Lime", "Teal", "Cyan",
   "Blue", "Pink", "Grey", "Light grey",
 ];
+const DEFAULT_FOREGROUND = 1;
 
 export function InputBar({ buffer }: { buffer: Buffer }) {
   const [value, setValue] = useState("");
   const [picker, setPicker] = useState(false);
-  const [foreground, setForeground] = useState(1);
+  const [foreground, setForeground] = useState(DEFAULT_FOREGROUND);
   const [background, setBackground] = useState<number | undefined>();
   const [activeColours, setActiveColours] = useState<{
     foreground: number;
@@ -129,7 +130,7 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
           title="Choose an emoji"
           onClick={() => setPicker((p) => !p)}
         >
-          <span aria-hidden="true">😀</span> Emoji
+          <span aria-hidden="true">😀</span>
         </button>
         {showInputToolbar && (
           <>
@@ -146,7 +147,6 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
               </button>
             </div>
             <label className="composer-color-control">
-              <span className="composer-color-swatch" style={{ backgroundColor: IRC_COLORS[foreground] }} />
               Text colour
               <select
                 aria-label="Text colour"
@@ -161,10 +161,6 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
               </select>
             </label>
             <label className="composer-color-control">
-              <span
-                className={`composer-color-swatch${background === undefined ? " none" : ""}`}
-                style={background === undefined ? undefined : { backgroundColor: IRC_COLORS[background] }}
-              />
               Background
               <select
                 aria-label="Background colour"
@@ -198,8 +194,10 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
             </button>
             <button
               type="button"
-              title="Stop applying colours to new messages"
+              title="Restore default message colours"
               onClick={() => {
+                setForeground(DEFAULT_FOREGROUND);
+                setBackground(undefined);
                 setActiveColours(null);
                 inputRef.current?.focus();
               }}

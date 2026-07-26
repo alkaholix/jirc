@@ -965,7 +965,8 @@ img.nick-icon {
 .emoji-btn {
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
+  justify-content: center;
+  min-width: 1.9rem;
 }
 .emoji-btn span {
   font-size: 1.05rem;
@@ -997,18 +998,6 @@ img.nick-icon {
   max-width: 7.5rem;
   padding: 0.15rem 1.5rem 0.15rem 0.4rem;
   cursor: pointer;
-}
-.composer-color-swatch {
-  width: 0.85rem;
-  height: 0.85rem;
-  flex: none;
-  border: 1px solid var(--muted);
-  border-radius: 3px;
-}
-.composer-color-swatch.none {
-  background:
-    linear-gradient(45deg, transparent 43%, var(--err) 44%, var(--err) 56%, transparent 57%),
-    var(--panel2);
 }
 .composer-toolbar .input-color-apply {
   font-weight: 700;
