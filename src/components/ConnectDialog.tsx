@@ -22,27 +22,14 @@ const BLANK: ServerProfile = {
   autojoin: [],
 };
 
-// Probe the keyring once per session (avoids repeated macOS Keychain prompts).
-let keyringCache: boolean | null = null;
-
 export function ConnectDialog({ onClose, onConnect }: Props) {
   const [saved, setSaved] = useState<ServerProfile[]>([]);
   const [form, setForm] = useState<ServerProfile>({ ...BLANK });
   const [channels, setChannels] = useState(DEFAULT_CHANNELS);
   const [selected, setSelected] = useState("");
-  const [keyring, setKeyring] = useState<boolean | null>(keyringCache);
 
   useEffect(() => {
     api.profilesLoad().then(setSaved).catch(() => {});
-    if (keyringCache === null) {
-      api
-        .keyringAvailable()
-        .then((ok) => {
-          keyringCache = ok;
-          setKeyring(ok);
-        })
-        .catch(() => setKeyring(false));
-    }
   }, []);
 
   const load = (p: ServerProfile) => {
@@ -247,14 +234,6 @@ export function ConnectDialog({ onClose, onConnect }: Props) {
             </>
           )}
           {clientAuthError && <div className="keyring-note warn">⚠ {clientAuthError}</div>}
-          {keyring !== null && (
-            <div className={`keyring-note ${keyring ? "ok" : "warn"}`}>
-              {keyring
-                ? "🔒 Passwords are stored in your OS keyring."
-                : "⚠ OS keyring unavailable — passwords will be saved in the config file. On Linux, install a Secret Service provider (e.g. gnome-keyring)."}
-            </div>
-          )}
-
           <div className="row toggles">
             <label className="inline">
               <input

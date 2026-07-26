@@ -123,7 +123,6 @@ pub fn run() {
             storage::profiles_load,
             storage::profiles_save,
             storage::profiles_delete,
-            storage::keyring_available,
             storage::data_location,
             storage::set_data_location,
             storage::log_append,

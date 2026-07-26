@@ -12,6 +12,14 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🔐 26.7.80 — Stop repeated macOS Keychain prompts
+
+- Removed the destructive Keychain availability probe previously run whenever
+  the Connect dialog opened.
+- Cached successful, missing, and denied credential lookups for the jIRC
+  session, so Connect and Auto-join cannot repeatedly request the same macOS
+  Keychain item.
+
 ## ℹ️ 26.7.79 — About dialog and dedicated DCC settings
 
 - Added an About popup showing the running jIRC version, with a **Help me**

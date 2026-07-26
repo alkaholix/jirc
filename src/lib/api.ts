@@ -165,7 +165,6 @@ export const api = {
   profilesLoad: () => invoke<ServerProfile[]>("profiles_load"),
   profilesSave: (profiles: ServerProfile[]) => invoke("profiles_save", { profiles }),
   profilesDelete: (id: string) => invoke("profiles_delete", { id }),
-  keyringAvailable: () => invoke<boolean>("keyring_available"),
   dataLocation: () => invoke<DataLocation>("data_location"),
   systemFonts: () => invoke<string[]>("system_fonts"),
   setDataLocation: (path: string | null) => invoke("set_data_location", { path }),

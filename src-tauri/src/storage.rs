@@ -7,6 +7,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
 use keyring::Entry;
 use tauri::{AppHandle, Manager};
@@ -18,44 +19,54 @@ use crate::config::ServerProfile;
 
 const KEYRING_SERVICE: &str = "jirc";
 
+fn secret_cache() -> &'static Mutex<std::collections::HashMap<String, Option<String>>> {
+    static CACHE: OnceLock<Mutex<std::collections::HashMap<String, Option<String>>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
 /// Stores a secret in the OS keyring; returns true on success.
 fn store_secret(id: &str, field: &str, value: Option<&str>) -> bool {
     let account = format!("{id}:{field}");
     let Ok(entry) = Entry::new(KEYRING_SERVICE, &account) else {
         return false;
     };
-    match value {
+    let stored = match value {
         Some(v) if !v.is_empty() => entry.set_password(v).is_ok(),
         _ => {
             // Best-effort removal of any stale secret.
             let _ = entry.delete_credential();
             true
         }
-    }
-}
-
-/// Probes whether the OS keyring is usable (write + read + delete a throwaway
-/// entry). Used to tell the user where passwords will be stored.
-#[tauri::command]
-pub fn keyring_available() -> bool {
-    let Ok(entry) = Entry::new(KEYRING_SERVICE, "__jirc_probe__") else {
-        return false;
     };
-    if entry.set_password("probe").is_err() {
-        return false;
+    if stored {
+        let cached = value.filter(|v| !v.is_empty()).map(str::to_string);
+        if let Ok(mut cache) = secret_cache().lock() {
+            cache.insert(account, cached);
+        }
     }
-    let ok = entry.get_password().map(|v| v == "probe").unwrap_or(false);
-    let _ = entry.delete_credential();
-    ok
+    stored
 }
 
 /// Loads a secret from the OS keyring, if present.
 fn load_secret(id: &str, field: &str) -> Option<String> {
     let account = format!("{id}:{field}");
-    Entry::new(KEYRING_SERVICE, &account)
+    if let Ok(cache) = secret_cache().lock() {
+        if let Some(cached) = cache.get(&account) {
+            return cached.clone();
+        }
+    }
+    let value = Entry::new(KEYRING_SERVICE, &account)
         .ok()
         .and_then(|e| e.get_password().ok())
-        .filter(|s| !s.is_empty())
+        .filter(|s| !s.is_empty());
+    // Cache successful, missing, and denied reads. Several dialogs reload the
+    // same profiles, but macOS must not ask for the same item repeatedly in one
+    // jIRC session.
+    if let Ok(mut cache) = secret_cache().lock() {
+        cache.insert(account, value.clone());
+    }
+    value
 }
 
 /// Replaces characters that are illegal in file names on Windows/Unix.
@@ -344,7 +355,7 @@ pub fn log_read(app: AppHandle, network: String, buffer: String) -> Result<Strin
 #[cfg(test)]
 mod tests {
     use super::{
-        keyring_available, load_secret, read_location_redirect, resolve_custom_base, sanitize,
+        load_secret, read_location_redirect, resolve_custom_base, sanitize, secret_cache,
         store_secret,
     };
 
@@ -397,17 +408,33 @@ mod tests {
         assert_eq!(sanitize("Libera.Chat"), "Libera.Chat");
     }
 
+    #[test]
+    fn cached_keyring_results_avoid_repeated_backend_lookups() {
+        let id = format!("cache-test-{}", std::process::id());
+        let account = format!("{id}:account_password");
+        secret_cache()
+            .lock()
+            .unwrap()
+            .insert(account.clone(), Some("cached".into()));
+        assert_eq!(
+            load_secret(&id, "account_password").as_deref(),
+            Some("cached")
+        );
+
+        secret_cache().lock().unwrap().insert(account, None);
+        assert_eq!(load_secret(&id, "account_password"), None);
+    }
+
     /// Round-trips a secret through the real OS keyring. Ignored by default
     /// (touches the OS credential store): run with `-- --ignored keyring`.
     #[test]
     #[ignore]
     fn keyring_round_trip() {
+        let id = "test-roundtrip";
         assert!(
-            keyring_available(),
+            store_secret(id, "account_password", Some("s3cret")),
             "OS keyring not available on this platform"
         );
-        let id = "test-roundtrip";
-        assert!(store_secret(id, "account_password", Some("s3cret")));
         assert_eq!(
             load_secret(id, "account_password").as_deref(),
             Some("s3cret")
