@@ -12,6 +12,16 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🪟 26.7.86 — Script window buffer commands
+
+- Implemented `/titlebar` for custom `@windows`, including live title updates
+  in docked and detached window views.
+- Implemented sandboxed `/loadbuf` and `/savebuf` with mIRC-compatible
+  append/replace switches and line ranges for UTF-8 files under
+  `jIRC/scriptdata`.
+- Added backend and frontend coverage for persistence, line restoration, and
+  stable window identity.
+
 ## 📇 26.7.85 — Address book and user notes
 
 - Added a searchable local address book for nick, network, real name, email,

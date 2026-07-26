@@ -372,6 +372,26 @@ describe("custom @windows", () => {
     expect(useStore.getState().active).toBe(key);
   });
 
+  it("updates a custom window title without changing its stable buffer name", () => {
+    const state = useStore.getState();
+    state.handleEvent({
+      type: "windowOpen",
+      serverId: SID,
+      name: "@notes",
+      kind: "listbox",
+      title: "@notes",
+    });
+    state.handleEvent({
+      type: "windowTitle",
+      serverId: SID,
+      name: "@notes",
+      title: "Saved notes",
+    });
+    const buffer = useStore.getState().buffers[bufferKey(SID, "@notes")];
+    expect(buffer.name).toBe("@notes");
+    expect(buffer.windowTitle).toBe("Saved notes");
+  });
+
   it("mirrors aline/iline/rline/dline/clear with 1-based positions", () => {
     const s = useStore.getState();
     s.handleEvent({ type: "windowOpen", serverId: SID, name: "@w", kind: "listbox", title: "@w" });

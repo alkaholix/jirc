@@ -2511,6 +2511,16 @@ fn apply_actions_depth(
                     },
                 );
             }
+            Action::WindowTitle { name, title } => {
+                let _ = app.emit(
+                    IRC_EVENT,
+                    UiEvent::WindowTitle {
+                        server_id: server_id.to_string(),
+                        name,
+                        title,
+                    },
+                );
+            }
             Action::WindowDraw { name, op, args } => {
                 let _ = app.emit(
                     IRC_EVENT,
@@ -5532,6 +5542,72 @@ mod tests {
             ),
             vec![Action::Send("PRIVMSG #c :true 2".into())]
         );
+    }
+
+    #[test]
+    fn custom_window_title_and_buffer_files() {
+        let data_dir = std::env::temp_dir().join(format!(
+            "jirc-window-buffer-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let run_ctx = RunCtx {
+            data_dir: data_dir.clone(),
+            ..ctx()
+        };
+        let engine = ScriptEngine::new();
+        engine.run_command(&run_ctx, "#c", "/window @notes", &[]);
+        engine.run_command(&run_ctx, "#c", "/aline @notes first", &[]);
+        engine.run_command(&run_ctx, "#c", "/aline @notes second", &[]);
+
+        let title = engine.run_command(&run_ctx, "#c", "/titlebar @notes Saved notes", &[]);
+        assert_eq!(
+            title,
+            vec![Action::WindowTitle {
+                name: "@notes".into(),
+                title: "Saved notes".into(),
+            }]
+        );
+
+        engine.run_command(&run_ctx, "#c", "/savebuf @notes notes.txt", &[]);
+        assert_eq!(
+            std::fs::read_to_string(data_dir.join("notes.txt")).unwrap(),
+            "first\nsecond\n"
+        );
+
+        engine.run_command(&run_ctx, "#c", "/clear @notes", &[]);
+        engine.run_command(&run_ctx, "#c", "/aline @notes existing", &[]);
+        let loaded = engine.run_command(&run_ctx, "#c", "/loadbuf @notes notes.txt", &[]);
+        assert_eq!(
+            loaded,
+            vec![
+                Action::WindowLine {
+                    name: "@notes".into(),
+                    op: "add".into(),
+                    n: 0,
+                    text: "first".into(),
+                },
+                Action::WindowLine {
+                    name: "@notes".into(),
+                    op: "add".into(),
+                    n: 0,
+                    text: "second".into(),
+                },
+            ]
+        );
+        let count = engine.run_command(&run_ctx, "#c", "/msg #c $window(@notes).lines", &[]);
+        assert_eq!(count, vec![Action::Send("PRIVMSG #c :3".into())]);
+
+        engine.run_command(&run_ctx, "#c", "/loadbuf 1 -r @notes notes.txt", &[]);
+        let last = engine.run_command(&run_ctx, "#c", "/msg #c $line(@notes,1)", &[]);
+        assert_eq!(last, vec![Action::Send("PRIVMSG #c :second".into())]);
+        engine.run_command(&run_ctx, "#c", "/savebuf 1 @notes last.txt", &[]);
+        assert_eq!(
+            std::fs::read_to_string(data_dir.join("last.txt")).unwrap(),
+            "second\n"
+        );
+        std::fs::remove_dir_all(data_dir).unwrap();
     }
 
     #[test]

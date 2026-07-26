@@ -69,6 +69,19 @@ impl WindowStore {
         self.windows.remove(&key(name));
     }
 
+    pub fn set_title(&mut self, name: &str, title: &str) {
+        if let Some(window) = self.windows.get_mut(&key(name)) {
+            window.title = title.to_string();
+        }
+    }
+
+    pub fn replace_lines(&mut self, name: &str, lines: Vec<String>) {
+        if let Some(window) = self.windows.get_mut(&key(name)) {
+            window.lines = lines;
+            window.selected.clear();
+        }
+    }
+
     pub fn record_click(&mut self, name: &str, x: i32, y: i32) {
         if let Some(window) = self.windows.get_mut(&key(name)) {
             window.clicks.push((x, y));

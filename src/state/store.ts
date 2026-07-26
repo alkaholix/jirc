@@ -42,6 +42,8 @@ export interface Buffer {
   mention: boolean;
   /** For a custom `@window` (kind "window"): its display kind (listbox/text/…). */
   windowKind?: string;
+  /** Script-controlled display title; the stable buffer name remains unchanged. */
+  windowTitle?: string;
   /** One-based selected rows in a custom listbox window. */
   windowSelected?: number[];
   /** Retained canvas operations for a custom picture window. */
@@ -534,6 +536,11 @@ export const useStore = create<State>((set, get) => {
           }
           return { ...b, lines };
         });
+        break;
+      }
+      case "windowTitle": {
+        const key = ensureBuffer(sid, ev.name, "window");
+        patchBuffer(key, (buffer) => ({ ...buffer, windowTitle: ev.title }));
         break;
       }
       case "windowDraw": {

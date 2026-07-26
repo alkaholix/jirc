@@ -432,6 +432,7 @@ export type IrcEvent =
   | { type: "windowOpen"; serverId: string; name: string; kind: string; title: string }
   | { type: "windowClose"; serverId: string; name: string }
   | { type: "windowLine"; serverId: string; name: string; op: string; n: number; text: string }
+  | { type: "windowTitle"; serverId: string; name: string; title: string }
   | { type: "windowDraw"; serverId: string; name: string; op: string; args: string[] }
   | { type: "dccChatOpen"; serverId: string; id: string; nick: string; outgoing: boolean }
   | { type: "dccChatLine"; serverId: string; id: string; from: string; text: string }

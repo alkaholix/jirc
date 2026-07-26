@@ -223,6 +223,11 @@ pub enum Action {
         n: u32,
         text: String,
     },
+    /// Change the displayed title of a custom `@window`.
+    WindowTitle {
+        name: String,
+        title: String,
+    },
     /// A canvas operation for a picture `@window`.
     WindowDraw {
         name: String,
@@ -1602,6 +1607,9 @@ impl<'a> Runtime<'a> {
             "bread" => self.cmd_bread(raw_args),
             "bwrite" => self.cmd_bwrite(raw_args),
             "window" => self.cmd_window(raw_args),
+            "titlebar" => self.cmd_window_title(raw_args),
+            "loadbuf" => self.cmd_loadbuf(raw_args),
+            "savebuf" => self.cmd_savebuf(raw_args),
             "webview" => self.cmd_webview(raw_args),
             "aline" => self.cmd_window_line(raw_args, "add"),
             "rline" => self.cmd_window_line(raw_args, "replace"),
@@ -1882,12 +1890,11 @@ impl<'a> Runtime<'a> {
             }
             // We evaluate any parameters (for identifier side effects) and stop.
             // `/run` is deliberately a no-op — jIRC never launches programs.
-            "clearall" | "close" | "cline" | "fline" | "renwin" | "titlebar" | "editbox"
-            | "linesep" | "background" | "color" | "font" | "flash" | "beep" | "ebeeps"
-            | "speak" | "run" | "url" | "dns" | "debug" | "log" | "logview" | "timestamp"
-            | "donotdisturb" | "menubar" | "switchbar" | "treebar" | "mdi" | "save" | "loadbuf"
-            | "savebuf" | "showmirc" | "maximize" | "minimize" | "creq" | "sreq" | "clipboard"
-            | "resetidle" => {
+            "clearall" | "close" | "cline" | "fline" | "renwin" | "editbox" | "linesep"
+            | "background" | "color" | "font" | "flash" | "beep" | "ebeeps" | "speak" | "run"
+            | "url" | "dns" | "debug" | "log" | "logview" | "timestamp" | "donotdisturb"
+            | "menubar" | "switchbar" | "treebar" | "mdi" | "save" | "showmirc" | "maximize"
+            | "minimize" | "creq" | "sreq" | "clipboard" | "resetidle" => {
                 let _ = self.expand(raw_args);
             }
             _ => {
@@ -3260,6 +3267,123 @@ impl<'a> Runtime<'a> {
                 kind: kind.as_str().to_string(),
                 title: name.to_string(),
             });
+        }
+    }
+
+    /// `/titlebar @window <text>` — set a custom window's displayed title.
+    fn cmd_window_title(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        let mut parts = expanded.trim().splitn(2, char::is_whitespace);
+        let name = parts.next().unwrap_or("");
+        let title = parts.next().unwrap_or("").trim();
+        if !name.starts_with('@') || !self.windows.exists(name) {
+            return;
+        }
+        self.windows.set_title(name, title);
+        self.actions.push(Action::WindowTitle {
+            name: name.to_string(),
+            title: title.to_string(),
+        });
+    }
+
+    /// `/loadbuf [lines] [-r] @window <file>` — append UTF-8 lines from a file
+    /// in jIRC's script-data sandbox; `-r` clears the window first.
+    fn cmd_loadbuf(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        let mut rest = expanded.trim();
+        let mut range = None;
+        if let Some((first, more)) = rest.split_once(char::is_whitespace) {
+            if is_line_range(first) {
+                range = Some(first.to_string());
+                rest = more.trim();
+            }
+        }
+        let mut replace = false;
+        if rest.starts_with('-') {
+            let (switches, more) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+            replace = switches.contains('r');
+            rest = more.trim();
+        }
+        let mut parts = rest.splitn(2, char::is_whitespace);
+        let name = parts.next().unwrap_or("");
+        let file = parts.next().unwrap_or("").trim().trim_matches('"');
+        if !name.starts_with('@') || !self.windows.exists(name) || file.is_empty() {
+            return;
+        }
+        let Ok(content) = std::fs::read_to_string(sandbox_path(&self.data_dir, file)) else {
+            return;
+        };
+        let all_lines: Vec<String> = content.lines().map(str::to_string).collect();
+        let lines = select_line_range(&all_lines, range.as_deref());
+        if replace {
+            self.windows.replace_lines(name, lines.clone());
+            self.actions.push(Action::WindowLine {
+                name: name.to_string(),
+                op: "clear".to_string(),
+                n: 0,
+                text: String::new(),
+            });
+        }
+        for line in lines {
+            if !replace {
+                self.windows.aline(name, &line);
+            }
+            self.actions.push(Action::WindowLine {
+                name: name.to_string(),
+                op: "add".to_string(),
+                n: 0,
+                text: line,
+            });
+        }
+    }
+
+    /// `/savebuf [-a] [lines] @window <file>` — save UTF-8 window lines to a
+    /// file in jIRC's script-data sandbox; `-a` appends.
+    fn cmd_savebuf(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        let mut rest = expanded.trim();
+        let mut append = false;
+        if rest.starts_with('-') {
+            let (switches, more) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+            append = switches.contains('a');
+            rest = more.trim();
+        }
+        let mut range = None;
+        if let Some((first, more)) = rest.split_once(char::is_whitespace) {
+            if is_line_range(first) {
+                range = Some(first.to_string());
+                rest = more.trim();
+            }
+        }
+        let mut parts = rest.splitn(2, char::is_whitespace);
+        let name = parts.next().unwrap_or("");
+        let file = parts.next().unwrap_or("").trim().trim_matches('"');
+        let Some(window) = self.windows.get(name) else {
+            return;
+        };
+        if !name.starts_with('@') || file.is_empty() {
+            return;
+        }
+        let path = sandbox_path(&self.data_dir, file);
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let lines = select_line_range(&window.lines, range.as_deref());
+        let mut content = lines.join("\n");
+        if !content.is_empty() {
+            content.push('\n');
+        }
+        if append {
+            use std::io::Write;
+            if let Ok(mut output) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                let _ = output.write_all(content.as_bytes());
+            }
+        } else {
+            let _ = std::fs::write(path, content);
         }
     }
 
@@ -5802,6 +5926,40 @@ pub fn sandbox_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
         .file_name()
         .unwrap_or_else(|| std::ffi::OsStr::new("script.dat"));
     dir.join(file)
+}
+
+fn is_line_range(value: &str) -> bool {
+    value.parse::<usize>().is_ok()
+        || value
+            .split_once('-')
+            .is_some_and(|(from, to)| from.parse::<usize>().is_ok() && to.parse::<usize>().is_ok())
+}
+
+/// mIRC buffer ranges are one-based. A single N selects the last N lines;
+/// `N-M` selects that inclusive absolute range.
+fn select_line_range(lines: &[String], range: Option<&str>) -> Vec<String> {
+    let Some(range) = range else {
+        return lines.to_vec();
+    };
+    if let Some((from, to)) = range.split_once('-') {
+        let from = from.parse::<usize>().unwrap_or(1).max(1);
+        let to = to.parse::<usize>().unwrap_or(0);
+        if to < from {
+            return Vec::new();
+        }
+        return lines
+            .iter()
+            .skip(from - 1)
+            .take(to - from + 1)
+            .cloned()
+            .collect();
+    }
+    let count = range.parse::<usize>().unwrap_or(0);
+    lines
+        .iter()
+        .skip(lines.len().saturating_sub(count))
+        .cloned()
+        .collect()
 }
 
 /// Splits text on spaces at parenthesis depth 0, so `$ident(a b c)` (whose

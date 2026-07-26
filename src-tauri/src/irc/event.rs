@@ -314,6 +314,11 @@ pub enum UiEvent {
         n: u32,
         text: String,
     },
+    WindowTitle {
+        server_id: String,
+        name: String,
+        title: String,
+    },
     WindowDraw {
         server_id: String,
         name: String,
