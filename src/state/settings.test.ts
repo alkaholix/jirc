@@ -12,4 +12,18 @@ describe("timestamp settings migration", () => {
     expect(normalizeSavedSettings({}).showInputToolbar).toBe(true);
     expect(normalizeSavedSettings({ showInputToolbar: false }).showInputToolbar).toBe(false);
   });
+
+  it("enables native spell checking for existing settings and preserves language choices", () => {
+    expect(normalizeSavedSettings({}).spellCheck).toBe(true);
+    expect(normalizeSavedSettings({}).spellCheckLanguage).toBe("");
+    expect(
+      normalizeSavedSettings({
+        spellCheck: false,
+        spellCheckLanguage: "en-NZ",
+      })
+    ).toMatchObject({
+      spellCheck: false,
+      spellCheckLanguage: "en-NZ",
+    });
+  });
 });

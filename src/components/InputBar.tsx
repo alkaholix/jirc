@@ -23,6 +23,13 @@ const IRC_COLOR_NAMES = [
 ];
 const DEFAULT_FOREGROUND = 1;
 
+export function spellCheckAttributes(enabled: boolean, language: string) {
+  return {
+    spellCheck: enabled,
+    lang: language || undefined,
+  };
+}
+
 export function InputBar({ buffer }: { buffer: Buffer }) {
   const [value, setValue] = useState("");
   const [picker, setPicker] = useState(false);
@@ -33,6 +40,8 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
     background?: number;
   } | null>(null);
   const showInputToolbar = useSettings((state) => state.showInputToolbar);
+  const spellCheck = useSettings((state) => state.spellCheck);
+  const spellCheckLanguage = useSettings((state) => state.spellCheckLanguage);
   const inputRef = useRef<HTMLInputElement>(null);
   const history = useRef<string[]>([]);
   const histIdx = useRef(-1);
@@ -214,6 +223,7 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
           placeholder="Type a message or /command…"
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeyDown}
+          {...spellCheckAttributes(spellCheck, spellCheckLanguage)}
           autoFocus
         />
       </div>

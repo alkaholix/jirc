@@ -12,6 +12,14 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## ✍️ 26.7.83 — Message spell checking
+
+- Added platform-native spell checking to the message box, including the normal
+  misspelling underline and right-click correction menu supplied by each OS.
+- Settings → Appearance can disable checking or select an installed dictionary
+  language, with System language as the cross-platform default.
+- Existing settings migrate with spell checking enabled.
+
 ## 🔔 26.7.82 — Startup update notification
 
 - jIRC now checks once when the main app starts and notifies the user only when

@@ -38,6 +38,10 @@ export interface Settings {
   chatFontSize: number;
   /** Show mIRC bold/italic/underline/colour controls beside the message input. */
   showInputToolbar: boolean;
+  /** Use the platform WebView's installed spell-check dictionary in message inputs. */
+  spellCheck: boolean;
+  /** BCP-47 language tag; empty follows the operating-system language. */
+  spellCheckLanguage: string;
   /** Default /quit message when none is given. */
   quitMessage: string;
 
@@ -92,6 +96,8 @@ const DEFAULTS: Settings = {
   chatFont: "",
   chatFontSize: 0,
   showInputToolbar: true,
+  spellCheck: true,
+  spellCheckLanguage: "",
   quitMessage: "",
 
   rejoinOnKick: false,

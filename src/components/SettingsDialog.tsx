@@ -252,6 +252,34 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 />
               </label>
               {toggle("showInputToolbar", "Show colour and formatting input toolbar")}
+              <div className="row">
+                {toggle("spellCheck", "Check spelling while typing messages")}
+                <label className="grow">
+                  Spelling language
+                  <select
+                    value={settings.spellCheckLanguage}
+                    onChange={(event) =>
+                      settings.set("spellCheckLanguage", event.target.value)
+                    }
+                    disabled={!settings.spellCheck}
+                  >
+                    <option value="">System language</option>
+                    <option value="en-NZ">English (New Zealand)</option>
+                    <option value="en-AU">English (Australia)</option>
+                    <option value="en-GB">English (United Kingdom)</option>
+                    <option value="en-US">English (United States)</option>
+                    <option value="de">German</option>
+                    <option value="es">Spanish</option>
+                    <option value="fr">French</option>
+                    <option value="it">Italian</option>
+                    <option value="nl">Dutch</option>
+                    <option value="pl">Polish</option>
+                    <option value="pt-BR">Portuguese (Brazil)</option>
+                    <option value="pt-PT">Portuguese (Portugal)</option>
+                    <option value="sv">Swedish</option>
+                  </select>
+                </label>
+              </div>
               <label className="inline">
                 Default quit message
                 <input
