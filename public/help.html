@@ -972,6 +972,10 @@ goes to the server.</div>
   <tr><td><code>$ticks</code> · <code>$ticksqpc</code></td><td>process-relative millisecond counter · high-resolution counter</td></tr>
   <tr><td><code>$uptime(mirc|server,N)</code></td><td>jIRC or current-server uptime; <code>N=1</code> duration, <code>N=2</code> without seconds, <code>N=3</code> seconds, otherwise milliseconds. <code>system</code> returns <code>$null</code> because no reliable portable boot clock is available.</td></tr>
   <tr><td><code>$online</code> · <code>$onlineserver</code> · <code>$onlinetotal</code></td><td>seconds connected to the current server</td></tr>
+  <tr><td><code>$status</code></td><td>current server state: <code>disconnected</code>, <code>connecting</code>, or <code>connected</code></td></tr>
+  <tr><td><code>$portfree(port[,ip])</code></td><td><code>$true</code> when the TCP port can be bound on all interfaces or the specified IPv4/IPv6 interface</td></tr>
+  <tr><td><code>$remote</code></td><td>enabled remote-handler flags; jIRC returns <code>7</code> because CTCP, event, and raw handlers are active</td></tr>
+  <tr><td><code>$starting</code> · <code>$exiting</code></td><td>process transition flags; scripts run during jIRC's steady state, so both return <code>0</code></td></tr>
   <tr><td><code>$true</code> · <code>$false</code> · <code>$null</code></td><td>constants</td></tr>
 </table>
 <h3>Channels &amp; members (state-aware)</h3>

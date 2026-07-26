@@ -985,6 +985,12 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "true" => "$true".to_string(),
         "false" => "$false".to_string(),
         "null" => String::new(),
+        // jIRC loads remote scripts as one engine and currently keeps CTCP,
+        // event, and raw handlers enabled (mIRC bit flags 1 | 2 | 4).
+        "remote" => "7".to_string(),
+        // These are steady-state process flags. Startup scripts run after the
+        // engine has loaded, and scripts cannot execute during process teardown.
+        "starting" | "exiting" => "0".to_string(),
         // Whitespace constants (used heavily by socket scripts).
         "crlf" => "\r\n".to_string(),
         "cr" => "\r".to_string(),
@@ -1603,6 +1609,16 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 String::new()
             } else {
                 p.to_string()
+            }
+        }
+        "portfree" => bool_str(port_is_free(&a(0), &a(1))),
+        "status" => {
+            if rt.state.connect_time != 0 {
+                "connected".to_string()
+            } else if !rt.state.server_id.is_empty() {
+                "connecting".to_string()
+            } else {
+                "disconnected".to_string()
             }
         }
         "ssl" => bool_str(rt.state.tls),
@@ -3823,6 +3839,25 @@ fn format_duration_without_seconds(seconds: u64) -> String {
     }
 }
 
+fn port_is_free(port: &str, bind_ip: &str) -> bool {
+    let Ok(port) = port.trim().parse::<u16>() else {
+        return false;
+    };
+    if port == 0 {
+        return false;
+    }
+
+    let ip = if bind_ip.trim().is_empty() {
+        std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)
+    } else {
+        let Ok(ip) = bind_ip.trim().parse::<std::net::IpAddr>() else {
+            return false;
+        };
+        ip
+    };
+    std::net::TcpListener::bind((ip, port)).is_ok()
+}
+
 /// `$base(N, frombase, tobase, [zeropad])` — integer base conversion, 2..=36.
 /// The fractional part (if any) is dropped; output digits A–Z are uppercase.
 fn base_convert(n: &str, inb: u32, outb: u32, zeropad: usize) -> String {
@@ -5829,6 +5864,18 @@ mod tests {
     }
 
     #[test]
+    fn runtime_and_network_environment_identifiers() {
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port().to_string();
+        assert!(!port_is_free(&port, "127.0.0.1"));
+        drop(listener);
+        assert!(port_is_free(&port, "127.0.0.1"));
+        assert!(!port_is_free("0", ""));
+        assert!(!port_is_free("not-a-port", ""));
+        assert!(!port_is_free(&port, "not-an-ip"));
+    }
+
+    #[test]
     fn ident_round_base_concat() {
         use crate::script::ast::Script;
         use std::collections::HashMap;
@@ -5870,6 +5917,10 @@ mod tests {
         assert!(e("ticksqpc", &[]).parse::<u64>().is_ok());
         assert!(e("uptime", &["mirc", "3"]).parse::<u64>().is_ok());
         assert_eq!(e("uptime", &["system"]), "");
+        assert_eq!(e("remote", &[]), "7");
+        assert_eq!(e("starting", &[]), "0");
+        assert_eq!(e("exiting", &[]), "0");
+        assert_eq!(e("status", &[]), "disconnected");
         assert_eq!(e("gettok", &["a.b.c.d", "2-3", "46"]), "b.c");
         // $r letter range stays within bounds
         let r = e("r", &["a", "a"]);

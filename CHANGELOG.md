@@ -12,6 +12,13 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🌐 26.7.91 — mSL runtime and network state
+
+- Added `$portfree(port[,ip])` with IPv4 and IPv6 interface support.
+- Added `$status` values for disconnected, connecting, and connected sessions.
+- Added `$remote` handler flags and the steady-state `$starting` and `$exiting`
+  process identifiers.
+
 ## ⏱️ 26.7.90 — mSL time and runtime identifiers
 
 - Added `$timestamp`, `$timestampfmt`, `$logstamp`, and `$logstampfmt` using
