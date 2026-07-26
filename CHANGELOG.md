@@ -12,6 +12,15 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🔔 26.7.82 — Startup update notification
+
+- jIRC now checks once when the main app starts and notifies the user only when
+  a newer signed release is available.
+- Startup checks never download, install, or restart automatically, and stay
+  silent when jIRC is current or the update service cannot be reached.
+- Detached chat windows and React remounts share the same launch check, avoiding
+  duplicate update requests and notifications.
+
 ## 🪟 26.7.81 — Wider responsive settings
 
 - Widened the Settings dialog while keeping it within the available app window.

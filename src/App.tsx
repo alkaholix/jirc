@@ -45,6 +45,8 @@ import { ScriptToolbar } from "./components/ScriptToolbar";
 import { routePanelEvent } from "./state/panels";
 import { ScriptPanels } from "./components/ScriptPanels";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { notify as desktopNotify } from "./lib/notify";
+import { checkForUpdateOnStartup, updateNotificationBody } from "./lib/updater";
 
 const ScriptDialog = lazy(() =>
   import("./components/ScriptDialog").then((module) => ({ default: module.ScriptDialog }))
@@ -146,6 +148,20 @@ function MainApp() {
     const activeBuffer = s.active ? s.buffers[s.active] : undefined;
     return activeBuffer?.serverId ?? Object.keys(s.servers)[0] ?? "";
   });
+
+  useEffect(() => {
+    if (detachedKey !== null) return;
+    let cancelled = false;
+    void checkForUpdateOnStartup().then((status) => {
+      const body = updateNotificationBody(status);
+      if (!cancelled && body) {
+        void desktopNotify("jIRC update available", body);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [detachedKey]);
 
   useEffect(() => {
     const unlisten = listen<IrcEvent>("irc-event", (e) => {

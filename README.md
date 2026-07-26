@@ -34,7 +34,8 @@ Linux) and speaking both **standard IRC** (RFC 1459/2812 + IRCv3) and
   notification sounds with quiet hours, and highlight words
 - **Detachable windows** — pop any status, channel, query, or `@window` out into its own
   OS window and dock it back with one click (beyond mIRC's in-app MDI)
-- **Signed updates** — check, download, install, and restart from Settings →
+- **Signed updates** — silently check at startup, notify only when a release is
+  available, then review, download, install, and restart from Settings →
   Behaviour using platform-native update bundles published with each release
 - **Channel management** — nick right-click menu (whois/op/voice/kick/ban/ignore),
   topic editing, a server-aware channel-mode editor with access lists,

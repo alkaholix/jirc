@@ -10,6 +10,7 @@ export type UpdateStatus =
   | { state: "error"; message: string };
 
 let pendingUpdate: Awaited<ReturnType<typeof check>> = null;
+let startupCheck: Promise<UpdateStatus> | null = null;
 
 export async function checkForUpdate(): Promise<UpdateStatus> {
   pendingUpdate?.close();
@@ -28,6 +29,17 @@ export async function checkForUpdate(): Promise<UpdateStatus> {
       message: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+/** Checks once per app launch so remounts and extra windows cannot duplicate it. */
+export function checkForUpdateOnStartup(): Promise<UpdateStatus> {
+  startupCheck ??= checkForUpdate();
+  return startupCheck;
+}
+
+export function updateNotificationBody(status: UpdateStatus): string | null {
+  if (status.state !== "available") return null;
+  return `Version ${status.version} is ready. Open Settings → Behaviour to review and install it.`;
 }
 
 export async function installUpdate(
