@@ -12,6 +12,15 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🎨 26.7.87 — jIRC message-box menu
+
+- Replaced the generic WebView/browser right-click menu in the message box with
+  a focused jIRC menu, removing password import, device sharing, and other
+  unrelated browser actions.
+- Added selection-aware emoji insertion, formatting buttons, text/background
+  colour palettes, persistent Apply/Reset controls, and a spell-check toggle.
+- Kept standard Undo, Cut, Copy, Paste, and Select all actions in the new menu.
+
 ## 🪟 26.7.86 — Script window buffer commands
 
 - Implemented `/titlebar` for custom `@windows`, including live title updates

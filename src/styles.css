@@ -672,6 +672,47 @@ select {
   background: var(--err);
   color: #fff;
 }
+.input-menu-format,
+.input-menu-actions {
+  display: flex;
+  gap: 0.2rem;
+}
+.context-menu .input-menu-format button,
+.context-menu .input-menu-actions button {
+  flex: 1;
+  justify-content: center;
+  gap: 0.35rem;
+}
+.input-menu-palette {
+  padding: 0.25rem 0.5rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+.input-menu-palette > div {
+  display: grid;
+  grid-template-columns: repeat(9, 18px);
+  gap: 4px;
+  margin-top: 0.3rem;
+}
+.context-menu .input-menu-palette button {
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--fg) 32%, transparent);
+  border-radius: 4px;
+}
+.context-menu .input-menu-palette button:hover,
+.context-menu .input-menu-palette button.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.context-menu .input-menu-palette button.no-colour {
+  position: relative;
+  background:
+    linear-gradient(45deg, transparent 45%, var(--err) 46%, var(--err) 54%, transparent 55%),
+    var(--panel2);
+}
 .menu-sep {
   height: 1px;
   background: var(--border);
