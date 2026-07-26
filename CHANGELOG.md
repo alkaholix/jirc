@@ -12,6 +12,15 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🧩 26.7.88 — Script-controlled client UI
+
+- Implemented `/editbox` with active/status/window targeting, focus, appended
+  spacing, selection ranges, and submit support.
+- Implemented `/timestamp`, `/switchbar`, `/treebar`, and `/font` against
+  jIRC's existing timestamp modes, layouts, and installed-font settings.
+- Implemented `/clearall` buffer-type switches and `/close` query, DCC chat,
+  status, custom-window, wildcard, and connection scoping.
+
 ## 🎨 26.7.87 — jIRC message-box menu
 
 - Replaced the generic WebView/browser right-click menu in the message box with

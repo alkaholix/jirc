@@ -108,6 +108,12 @@ pub enum Action {
         operation: String,
         path: String,
     },
+    /// Apply a client/UI command in the WebView (`/editbox`, `/timestamp`, etc.).
+    ClientCommand {
+        command: String,
+        args: String,
+        current_target: String,
+    },
     /// Open a TCP socket (`/sockopen`); `tls` for `-e` (encrypted).
     SockOpen {
         name: String,
@@ -1888,12 +1894,22 @@ impl<'a> Runtime<'a> {
                     }
                 }
             }
+            "clearall" | "close" | "editbox" | "font" | "timestamp" | "switchbar"
+            | "treebar" => {
+                let args = self.expand(raw_args);
+                let current_target = self.reply_target();
+                self.actions.push(Action::ClientCommand {
+                    command: lname.to_string(),
+                    args,
+                    current_target,
+                });
+            }
             // We evaluate any parameters (for identifier side effects) and stop.
             // `/run` is deliberately a no-op — jIRC never launches programs.
-            "clearall" | "close" | "cline" | "fline" | "renwin" | "editbox" | "linesep"
-            | "background" | "color" | "font" | "flash" | "beep" | "ebeeps" | "speak" | "run"
-            | "url" | "dns" | "debug" | "log" | "logview" | "timestamp" | "donotdisturb"
-            | "menubar" | "switchbar" | "treebar" | "mdi" | "save" | "showmirc" | "maximize"
+            "cline" | "fline" | "renwin" | "linesep"
+            | "background" | "color" | "flash" | "beep" | "ebeeps" | "speak" | "run"
+            | "url" | "dns" | "debug" | "log" | "logview" | "donotdisturb"
+            | "menubar" | "mdi" | "save" | "showmirc" | "maximize"
             | "minimize" | "creq" | "sreq" | "clipboard" | "resetidle" => {
                 let _ = self.expand(raw_args);
             }

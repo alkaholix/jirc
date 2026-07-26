@@ -295,6 +295,13 @@ pub enum UiEvent {
         operation: String,
         path: String,
     },
+    /// A script command that mutates client UI rather than IRC state.
+    ClientCommand {
+        server_id: String,
+        command: String,
+        args: String,
+        current_target: String,
+    },
 
     // ---- Script-driven custom windows (@window) ----
     /// Open/create a custom window.

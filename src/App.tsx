@@ -44,6 +44,7 @@ import { scriptServerAutoReconnect } from "./lib/profileValidation";
 import { routeToolbarEvent } from "./state/toolbar";
 import { ScriptToolbar } from "./components/ScriptToolbar";
 import { routePanelEvent } from "./state/panels";
+import { routeClientCommand } from "./lib/clientCommands";
 import { ScriptPanels } from "./components/ScriptPanels";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAddressBook } from "./state/addressBook";
@@ -176,6 +177,9 @@ function MainApp() {
       routeModeEvent(e.payload);
       if (e.payload.type === "audio") {
         controlAudio(e.payload.operation, e.payload.path);
+      }
+      if (e.payload.type === "clientCommand") {
+        routeClientCommand(e.payload, () => setSettingsOpen(true));
       }
       routeToolbarEvent(e.payload);
       routePanelEvent(e.payload);

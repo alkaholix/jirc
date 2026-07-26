@@ -2490,6 +2490,21 @@ fn apply_actions_depth(
                     },
                 );
             }
+            Action::ClientCommand {
+                command,
+                args,
+                current_target,
+            } => {
+                let _ = app.emit(
+                    IRC_EVENT,
+                    UiEvent::ClientCommand {
+                        server_id: server_id.to_string(),
+                        command,
+                        args,
+                        current_target,
+                    },
+                );
+            }
             Action::WindowClose { name } => {
                 let _ = app.emit(
                     IRC_EVENT,
@@ -4400,6 +4415,29 @@ mod tests {
                 path: String::new(),
             }]
         );
+    }
+
+    #[test]
+    fn ui_commands_produce_client_actions_with_context() {
+        let engine = ScriptEngine::new();
+        for (command, args) in [
+            ("editbox", "-af hello"),
+            ("timestamp", "divider"),
+            ("switchbar", "on"),
+            ("treebar", "off"),
+            ("font", "14 Cascadia Code"),
+            ("clearall", "-nq"),
+            ("close", "-m nick"),
+        ] {
+            assert_eq!(
+                engine.run_command(&ctx(), "#c", &format!("/{command} {args}"), &[]),
+                vec![Action::ClientCommand {
+                    command: command.into(),
+                    args: args.into(),
+                    current_target: "#c".into(),
+                }]
+            );
+        }
     }
 
     #[test]

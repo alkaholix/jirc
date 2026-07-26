@@ -918,6 +918,12 @@ are intentionally not exposed.</p>
   <tr><td><code>/nickicon nick icon</code></td><td>Badge a nick in the nick list (emoji or image URL).</td></tr>
   <tr><td><code>/toolbar -a name "tip" icon "/command $!1"</code></td><td>Add or replace a script toolbar button. Also supports <code>-d</code> delete, <code>-c</code> clear, and <code>-t</code>/<code>-p</code>/<code>-l</code> updates. Icons may be text/emoji or an image URL; clicking supplies the button name as <code>$1</code> (use delayed <code>$!1</code> when defining it).</td></tr>
   <tr><td><code>/panel -a name "title"</code></td><td>Create a safe docked script panel. Add text with <code>-t name id "text"</code>, buttons with <code>-b name id "label" "/command $!1"</code>, delete an item/panel with <code>-d</code>, or clear all panels with <code>-c</code>.</td></tr>
+  <tr><td><code>/editbox [switches] [window] text</code></td><td>Fill the current, active (<code>-a</code>), or status (<code>-s</code>) message box. <code>-f</code> focuses, <code>-p</code> appends a space, <code>-n</code> submits, and <code>-bN</code>/<code>-eN</code> select a range.</td></tr>
+  <tr><td><code>/timestamp on|divider|off</code></td><td>Select inline timestamps, minute dividers, or no timestamps. <code>default</code> restores inline mode.</td></tr>
+  <tr><td><code>/switchbar on|off</code> · <code>/treebar on|off</code></td><td>Switch between jIRC's tab and tree navigation layouts.</td></tr>
+  <tr><td><code>/font [switches] [size font]</code></td><td>Open font settings with no arguments, apply the cross-platform chat font and size, or reset with <code>-z</code>.</td></tr>
+  <tr><td><code>/clearall [-snqmtgua]</code></td><td>Clear status, channel, query, DCC chat, or custom-window buffers; <code>-a</code> includes all connections.</td></tr>
+  <tr><td><code>/close [switches] [name…]</code></td><td>Close matching queries (<code>-m</code>), DCC chats (<code>-c</code>), status windows (<code>-t</code>), or custom windows (<code>-@</code>); names accept wildcards and <code>-a</code> includes all connections.</td></tr>
   <tr><td><code>/timer[name] reps secs cmd</code></td><td>Schedule a command (named; see Timers).</td></tr>
   <tr><td><code>/return value</code></td><td>Return a value from an alias.</td></tr>
   <tr><td><code>/goto label</code></td><td>Jump to a <code>:label</code> (see Control flow).</td></tr>

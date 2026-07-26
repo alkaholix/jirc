@@ -396,6 +396,13 @@ export type IrcEvent =
       path: string;
     }
   | {
+      type: "clientCommand";
+      serverId: string;
+      command: string;
+      args: string;
+      currentTarget: string;
+    }
+  | {
       type: "isupport";
       serverId: string;
       chanTypes: string;

@@ -1,4 +1,4 @@
-import { KeyboardEvent, MouseEvent, useRef, useState } from "react";
+import { KeyboardEvent, MouseEvent, useEffect, useRef, useState } from "react";
 import { Buffer } from "../state/store";
 import { handleInput } from "../lib/slash";
 import { emojiPicker } from "../lib/emoji";
@@ -9,6 +9,10 @@ import {
   IRC_FORMAT,
 } from "../lib/inputFormatting";
 import { useSettings } from "../state/settings";
+import {
+  EDITBOX_COMMAND_EVENT,
+  EditboxCommand,
+} from "../lib/clientCommands";
 
 const IRC_COLORS = [
   "#ffffff", "#000000", "#00007f", "#009300",
@@ -59,6 +63,35 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const history = useRef<string[]>([]);
   const histIdx = useRef(-1);
+
+  useEffect(() => {
+    const listener = (event: Event) => {
+      const command = (event as CustomEvent<EditboxCommand>).detail;
+      if (
+        command.serverId !== buffer.serverId ||
+        command.target.toLowerCase() !== buffer.name.toLowerCase()
+      ) {
+        return;
+      }
+      const next = command.text + (command.appendSpace ? " " : "");
+      setValue(command.submit ? "" : next);
+      if (command.submit && next.trim()) {
+        history.current.push(next);
+        histIdx.current = history.current.length;
+        void handleInput(next, buffer);
+      }
+      requestAnimationFrame(() => {
+        const input = inputRef.current;
+        if (!input) return;
+        const start = Math.min(command.selectionStart ?? next.length, next.length);
+        const end = Math.min(command.selectionEnd ?? start, next.length);
+        input.setSelectionRange(start, end);
+        if (command.focus || command.submit) input.focus();
+      });
+    };
+    window.addEventListener(EDITBOX_COMMAND_EVENT, listener);
+    return () => window.removeEventListener(EDITBOX_COMMAND_EVENT, listener);
+  }, [buffer.name, buffer.serverId]);
 
   const insertEmoji = (s: string) => {
     const input = inputRef.current;
