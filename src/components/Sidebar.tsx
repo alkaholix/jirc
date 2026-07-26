@@ -89,12 +89,14 @@ export function Sidebar({
   onOpenScripts,
   onOpenAutoJoin,
   onOpenAbout,
+  onOpenAddressBook,
 }: {
   onAddServer: () => void;
   onOpenSettings: () => void;
   onOpenScripts: () => void;
   onOpenAutoJoin: () => void;
   onOpenAbout: () => void;
+  onOpenAddressBook: () => void;
 }) {
   const servers = useStore((s) => s.servers);
   const buffers = useStore((s) => s.buffers);
@@ -119,6 +121,9 @@ export function Sidebar({
           </button>
           <button className="icon-btn" onClick={onOpenScripts} title="Scripts">
             ⟨⟩
+          </button>
+          <button className="icon-btn" onClick={onOpenAddressBook} title="Address book">
+            ♙
           </button>
           <button className="icon-btn" onClick={onOpenAutoJoin} title="Auto-join channels">
             #

@@ -12,6 +12,14 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 📇 26.7.85 — Address book and user notes
+
+- Added a searchable local address book for nick, network, real name, email,
+  website, and private free-form notes.
+- Contacts can be opened from either main layout and directly from a channel
+  nick's context menu, which pre-fills the nick and network.
+- Entries persist locally, migrate defensively, and can be edited or removed.
+
 ## ▶️ 26.7.84 — Perform commands on connect
 
 - Saved server profiles now include an ordered, multi-line Perform command list.

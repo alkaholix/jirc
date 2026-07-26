@@ -13,6 +13,7 @@ import { InputBar } from "./components/InputBar";
 import { ConnectDialog } from "./components/ConnectDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { AboutDialog } from "./components/AboutDialog";
+import { AddressBookDialog } from "./components/AddressBookDialog";
 import { ChannelListDialog } from "./components/ChannelListDialog";
 import { AutoJoinDialog } from "./components/AutoJoinDialog";
 import { TransfersPanel } from "./components/TransfersPanel";
@@ -45,6 +46,7 @@ import { ScriptToolbar } from "./components/ScriptToolbar";
 import { routePanelEvent } from "./state/panels";
 import { ScriptPanels } from "./components/ScriptPanels";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useAddressBook } from "./state/addressBook";
 import { notify as desktopNotify } from "./lib/notify";
 import { checkForUpdateOnStartup, updateNotificationBody } from "./lib/updater";
 
@@ -437,6 +439,7 @@ function MainApp() {
     onOpenScripts: () => setScriptOpen(true),
     onOpenAutoJoin: () => setAutoJoinOpen(true),
     onOpenAbout: () => setAboutOpen(true),
+    onOpenAddressBook: () => useAddressBook.getState().show(),
   };
 
   return (
@@ -531,6 +534,7 @@ function MainApp() {
       {dialogOpen && <ConnectDialog onClose={() => setDialogOpen(false)} onConnect={onConnect} />}
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
       {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
+      <AddressBookDialog />
       {scriptOpen && <ScriptEditorDialog onClose={() => setScriptOpen(false)} />}
       {autoJoinOpen && <AutoJoinDialog onClose={() => setAutoJoinOpen(false)} />}
       <ChannelListDialog />

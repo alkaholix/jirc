@@ -61,12 +61,14 @@ export function SwitchBar({
   onOpenScripts,
   onOpenAutoJoin,
   onOpenAbout,
+  onOpenAddressBook,
 }: {
   onAddServer: () => void;
   onOpenSettings: () => void;
   onOpenScripts: () => void;
   onOpenAutoJoin: () => void;
   onOpenAbout: () => void;
+  onOpenAddressBook: () => void;
 }) {
   const buffers = useStore((s) => s.buffers);
   const order = useStore((s) => s.order);
@@ -80,6 +82,9 @@ export function SwitchBar({
         </button>
         <button className="icon-btn" onClick={onOpenScripts} title="Scripts">
           ⟨⟩
+        </button>
+        <button className="icon-btn" onClick={onOpenAddressBook} title="Address book">
+          ♙
         </button>
         <button className="icon-btn" onClick={onOpenAutoJoin} title="Auto-join channels">
           #

@@ -42,6 +42,8 @@ Linux) and speaking both **standard IRC** (RFC 1459/2812 + IRCv3) and
   **/list & IRCX /listx channel browser**, and
   an **auto-join channels folder** (per-network add/remove + Join-now)
 - **Alternative nickname** with automatic fallback when your nick is in use
+- **Address book and notes** — searchable per-nick/network contacts, available
+  from the toolbar and nick context menu
 - **Ignore list**, CTCP auto-replies (VERSION/PING/TIME/FINGER/USERINFO/SOURCE/CLIENTINFO), emoji shortcodes
 - **Behaviour settings** — rejoin on kick, rejoin after reconnect, skip MOTD,
   data-folder selection, DCC address/ports/passive mode, DCC Server, ping?/pong!

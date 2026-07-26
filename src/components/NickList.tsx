@@ -9,6 +9,7 @@ import { promptDialog } from "../state/prompt";
 import { iconKey, useNickIcons } from "../state/nickIcons";
 import { open } from "@tauri-apps/plugin-dialog";
 import { PopupItems } from "./popupMenu";
+import { useAddressBook } from "../state/addressBook";
 
 const isUrl = (s: string) => /^(https?:|data:)/i.test(s);
 
@@ -177,6 +178,10 @@ export function NickList({ buffer }: { buffer: Buffer }) {
               <>
                 <button onClick={() => raw(`WHOIS ${menu.nick}`)}>Whois</button>
                 <button onClick={() => openQuery(menu.nick)}>Query</button>
+                <button onClick={() => {
+                  useAddressBook.getState().show(menu.nick, server?.name ?? "");
+                  setMenu(null);
+                }}>Address book / notes…</button>
                 <button onClick={() => whisper(menu.nick)}>Whisper…</button>
                 <div className="menu-sep" />
                 <button onClick={() => dccChat(menu.nick)}>DCC Chat</button>
