@@ -12,6 +12,35 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🔌 26.7.67 — Complete DCC Server mode
+
+### Added
+- Added the mIRC-compatible direct DCC Server listener with Chat, Send, and
+  Fileserver services, configurable port and independent service switches.
+- Added direct DCC Server clients: `/dcc chat IP[:port]`,
+  `/dcc send IP[:port] file`, and `/dcc fserve IP[:port]`.
+- Added `/dccserver [+|-scf] [on|off] [port]`, `$dccport`, and fully selected
+  `on DCCSERVER` events with `$nick`, `$address`, and `$filename`.
+- `/halt` in `on DCCSERVER` rejects the request before any chat, file, or
+  fileserver session is opened.
+- Added persisted DCC Server settings and safe received-file naming under the
+  existing jIRC DCC download directory.
+
+### Compatibility and safety
+- Implements protocol replies 101/111/121 and unavailable/rejected responses,
+  the 15-second initial request timeout, resume positions for direct sends, IPv4,
+  IPv6, explicit non-default ports, and filenames containing spaces.
+- Incoming services are disabled until the user explicitly enables DCC Server;
+  individual Chat, Send, and Fileserver services can be disabled separately.
+- Updated HelpMe, README, parity, implementation audit, and roadmap status.
+
+### Verified
+- Focused DCC protocol/parser/script-event tests, frontend type-check and
+  production build, complete frontend and non-live Rust suites, and a Tauri
+  release build.
+
+---
+
 ## 🧩 26.7.66 — Complete cross-platform script dialogs
 
 ### Added

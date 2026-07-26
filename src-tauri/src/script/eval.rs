@@ -11,6 +11,10 @@ use super::ident;
 pub enum Action {
     /// A raw line to send to the server.
     Send(String),
+    /// Configure the application DCC Server listener.
+    DccServer {
+        args: String,
+    },
     /// Text to display locally in `target` (channel/query/status).
     Echo {
         target: String,
@@ -436,6 +440,8 @@ pub struct EventVars {
     pub sock_error: i32,
     /// Full local path for DCC file events (`$filename`).
     pub filename: String,
+    /// Direct peer address for events that are not associated with the IRC IAL.
+    pub peer_address: String,
     /// Transfer/session id for DCC event-local identifiers.
     pub dcc_id: String,
 }
@@ -716,12 +722,17 @@ pub struct DccInfo {
 
 pub trait ScriptDcc: Send + Sync {
     fn snapshot(&self, server_id: &str) -> Vec<DccInfo>;
+    fn server_port(&self) -> Option<u16>;
 }
 
 pub struct NoDcc;
 impl ScriptDcc for NoDcc {
     fn snapshot(&self, _: &str) -> Vec<DccInfo> {
         Vec::new()
+    }
+
+    fn server_port(&self) -> Option<u16> {
+        None
     }
 }
 
@@ -1440,6 +1451,10 @@ impl<'a> Runtime<'a> {
             "dcc" => {
                 let args = self.expand(raw_args);
                 self.actions.push(Action::Dcc { args });
+            }
+            "dccserver" => {
+                let args = self.expand(raw_args);
+                self.actions.push(Action::DccServer { args });
             }
             "fserve" => {
                 let args = split_params(&self.expand(raw_args));

@@ -12,7 +12,7 @@
 //! **offerer listens** on `<port>` while the **receiver connects** to it.
 
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -289,6 +289,8 @@ fn format_resume(
 pub enum DccCommand {
     /// `/dcc chat <nick>` — offer/open a direct chat.
     Chat { nick: String },
+    /// `/dcc fserve <ip[:port]>` — connect to a DCC Server fileserver.
+    Fserve { target: String },
     /// `/dcc send <nick> <file>` — offer a file.
     Send { nick: String, file: String },
     /// `/dcc get [nick]` — accept a pending incoming offer.
@@ -321,6 +323,9 @@ pub fn parse_dcc_command(args: &str) -> Option<DccCommand> {
                 nick: nick.to_string(),
             })
         }
+        "fserve" => Some(DccCommand::Fserve {
+            target: t.next()?.to_string(),
+        }),
         "send" => {
             let first = t.next()?;
             let nick = if first.starts_with('-') {
@@ -402,6 +407,7 @@ enum RetrySpec {
         offer: DccOffer,
         path: std::path::PathBuf,
     },
+    ServerDirect,
 }
 
 #[derive(Debug, Clone)]
@@ -480,6 +486,76 @@ struct PassiveEndpoint {
     size: u64,
 }
 
+struct DccServer {
+    task: tauri::async_runtime::JoinHandle<()>,
+    server_id: String,
+    port: u16,
+    chat: bool,
+    send: bool,
+    fserve: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DccServerRequest {
+    Chat {
+        nick: String,
+    },
+    Fserve {
+        nick: String,
+    },
+    Send {
+        nick: String,
+        size: u64,
+        filename: String,
+    },
+    Get {
+        nick: String,
+        filename: String,
+    },
+}
+
+fn parse_server_request(request: &str) -> Option<DccServerRequest> {
+    let mut fields = request.trim().splitn(4, char::is_whitespace);
+    let code = fields.next()?;
+    let nick = fields.next()?.trim();
+    if nick.is_empty() || nick.len() > 64 {
+        return None;
+    }
+    match code {
+        "100" => Some(DccServerRequest::Chat { nick: nick.into() }),
+        "110" => Some(DccServerRequest::Fserve { nick: nick.into() }),
+        "120" => {
+            let size = fields.next()?.trim().parse::<u64>().ok()?;
+            let filename = fields.next()?.trim();
+            if size == 0 || filename.is_empty() {
+                return None;
+            }
+            Some(DccServerRequest::Send {
+                nick: nick.into(),
+                size,
+                filename: filename.into(),
+            })
+        }
+        "130" => {
+            let first = fields.next()?.trim();
+            let second = fields.next().unwrap_or("").trim();
+            let filename = if second.is_empty() {
+                first.to_string()
+            } else {
+                format!("{first} {second}")
+            };
+            if filename.is_empty() {
+                return None;
+            }
+            Some(DccServerRequest::Get {
+                nick: nick.into(),
+                filename,
+            })
+        }
+        _ => None,
+    }
+}
+
 const OFFER_TIMEOUT: Duration = Duration::from_secs(120);
 const IO_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_TRANSFER_HISTORY: usize = 256;
@@ -495,6 +571,8 @@ pub struct DccManager {
     pending_resumes: Mutex<HashMap<DccKey, PendingResume>>,
     passive_endpoints: Mutex<HashMap<DccKey, PassiveEndpoint>>,
     incoming_offers: Mutex<Vec<(String, String, DccOffer)>>,
+    server: Mutex<Option<DccServer>>,
+    server_gets: Mutex<HashMap<(IpAddr, String), (String, std::path::PathBuf, Instant)>>,
 }
 
 impl DccManager {
@@ -520,9 +598,158 @@ impl DccManager {
         self.config.lock().unwrap().passive
     }
 
+    /// Starts or reconfigures mIRC's direct DCC Server protocol listener.
+    pub fn configure_server(
+        &self,
+        app: AppHandle,
+        server_id: String,
+        enabled: bool,
+        port: u16,
+        chat: bool,
+        send: bool,
+        fserve: bool,
+    ) -> Result<(), String> {
+        let previous = self.server.lock().unwrap().take();
+        let had_server = previous.is_some();
+        if let Some(old) = previous {
+            old.task.abort();
+        }
+        if !enabled {
+            if had_server {
+                dcc_notice(&app, &server_id, "DCC server is off");
+            }
+            return Ok(());
+        }
+        let listener = match std::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)) {
+            Ok(listener) => listener,
+            Err(error) => {
+                let message = format!("cannot listen for DCC Server on port {port}: {error}");
+                dcc_notice(&app, &server_id, &format!("DCC server: {message}"));
+                return Err(message);
+            }
+        };
+        listener
+            .set_nonblocking(true)
+            .map_err(|error| error.to_string())?;
+        let actual_port = listener.local_addr().map_err(|e| e.to_string())?.port();
+        let listener = TcpListener::from_std(listener).map_err(|e| e.to_string())?;
+        let app2 = app.clone();
+        let sid = server_id.clone();
+        let task = tauri::async_runtime::spawn(async move {
+            loop {
+                match listener.accept().await {
+                    Ok((stream, peer)) => {
+                        let app3 = app2.clone();
+                        let sid2 = sid.clone();
+                        tauri::async_runtime::spawn(async move {
+                            handle_server_connection(
+                                app3,
+                                sid2,
+                                stream,
+                                peer.ip(),
+                                chat,
+                                send,
+                                fserve,
+                            )
+                            .await;
+                        });
+                    }
+                    Err(error) => {
+                        dcc_notice(&app2, &sid, &format!("DCC server stopped: {error}"));
+                        break;
+                    }
+                }
+            }
+        });
+        *self.server.lock().unwrap() = Some(DccServer {
+            task,
+            server_id: server_id.clone(),
+            port: actual_port,
+            chat,
+            send,
+            fserve,
+        });
+        dcc_notice(
+            &app,
+            &server_id,
+            &format!(
+                "DCC server listening on port {actual_port} ({})",
+                server_services(chat, send, fserve)
+            ),
+        );
+        Ok(())
+    }
+
+    pub fn server_snapshot(&self) -> Option<(String, u16, bool, bool, bool)> {
+        self.server.lock().unwrap().as_ref().map(|server| {
+            (
+                server.server_id.clone(),
+                server.port,
+                server.chat,
+                server.send,
+                server.fserve,
+            )
+        })
+    }
+
+    fn accept_server_chat(
+        &self,
+        app: AppHandle,
+        server_id: String,
+        nick: String,
+        ip: IpAddr,
+        stream: TcpStream,
+    ) -> Result<(), String> {
+        let id = format!("={nick}");
+        let key = chat_key(&server_id, &id);
+        if self.chats.lock().unwrap().contains_key(&key) {
+            return Err(format!("DCC CHAT with {nick} is already open"));
+        }
+        let (tx, rx) = mpsc::unbounded_channel();
+        let connected = Arc::new(AtomicBool::new(true));
+        let app2 = app.clone();
+        let sid = server_id.clone();
+        let id2 = id.clone();
+        let who = nick.clone();
+        let connected2 = connected.clone();
+        let (start_tx, start_rx) = oneshot::channel();
+        let task = tauri::async_runtime::spawn(async move {
+            if start_rx.await.is_err() {
+                return;
+            }
+            run_chat(app2, sid, id2, who, stream, rx, connected2).await
+        });
+        let _ = app.emit(
+            IRC_EVENT,
+            UiEvent::DccChatOpen {
+                server_id: server_id.clone(),
+                id: id.clone(),
+                nick: nick.clone(),
+                outgoing: false,
+            },
+        );
+        self.chats.lock().unwrap().insert(
+            key,
+            DccChat {
+                tx,
+                task,
+                server_id,
+                nick,
+                ip: ip.to_string(),
+                opened: Instant::now(),
+                connected,
+            },
+        );
+        let _ = start_tx.send(());
+        Ok(())
+    }
+
     /// `/dcc chat <nick>` — listen on an ephemeral port, send the peer a CHAT
     /// offer over IRC, and accept their connection.
     pub fn chat(&self, app: AppHandle, server_id: String, nick: String) -> Result<(), String> {
+        if let Some((ip, port)) = parse_server_target(&nick) {
+            return self.chat_server(app, server_id, nick, ip, port, 100);
+        }
         let cfg = self.config.lock().unwrap().clone();
         let ip = resolve_dcc_ip(&cfg.ip)?;
         let id = format!("={nick}");
@@ -632,6 +859,91 @@ impl DccManager {
             },
         );
         let _ = start.send(());
+        Ok(())
+    }
+
+    fn chat_server(
+        &self,
+        app: AppHandle,
+        server_id: String,
+        target: String,
+        ip: IpAddr,
+        port: u16,
+        request_code: u16,
+    ) -> Result<(), String> {
+        let id = format!("={target}");
+        let key = chat_key(&server_id, &id);
+        if self.chats.lock().unwrap().contains_key(&key) {
+            return Err(format!("DCC CHAT with {target} is already open"));
+        }
+        let (tx, rx) = mpsc::unbounded_channel();
+        let connected = Arc::new(AtomicBool::new(false));
+        let connected2 = connected.clone();
+        let app2 = app.clone();
+        let sid = server_id.clone();
+        let id2 = id.clone();
+        let who = target.clone();
+        let (start_tx, start_rx) = oneshot::channel();
+        let task = tauri::async_runtime::spawn(async move {
+            if start_rx.await.is_err() {
+                return;
+            }
+            let result = async {
+                let mut stream = timeout(IO_TIMEOUT, TcpStream::connect((ip, port)))
+                    .await
+                    .map_err(|_| "DCC Server connection timed out".to_string())?
+                    .map_err(|error| error.to_string())?;
+                let nick = server_nick(&app2, &sid);
+                server_line(&mut stream, &format!("{request_code} {nick}"))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let reply = read_server_request(&mut stream)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let expected = if request_code == 110 { "111 " } else { "101 " };
+                if !reply.starts_with(expected) {
+                    return Err(format!("DCC Server rejected request: {reply}"));
+                }
+                run_chat(
+                    app2.clone(),
+                    sid.clone(),
+                    id2.clone(),
+                    who.clone(),
+                    stream,
+                    rx,
+                    connected2,
+                )
+                .await;
+                Ok(())
+            }
+            .await;
+            if let Err(error) = result {
+                dcc_notice(&app2, &sid, &error);
+                emit_closed_and_script(&app2, &sid, &id2, &who);
+            }
+        });
+        let _ = app.emit(
+            IRC_EVENT,
+            UiEvent::DccChatOpen {
+                server_id: server_id.clone(),
+                id: id.clone(),
+                nick: target.clone(),
+                outgoing: true,
+            },
+        );
+        self.chats.lock().unwrap().insert(
+            key,
+            DccChat {
+                tx,
+                task,
+                server_id,
+                nick: target,
+                ip: ip.to_string(),
+                opened: Instant::now(),
+                connected,
+            },
+        );
+        let _ = start_tx.send(());
         Ok(())
     }
 
@@ -784,6 +1096,9 @@ impl DccManager {
                 std::fs::read_to_string(path).map_err(|error| error.to_string())
             })
             .transpose()?;
+        if let Some((ip, port)) = parse_server_target(&nick) {
+            return self.chat_server(app, server_id, nick, ip, port, 110);
+        }
         let key = chat_key(&server_id, &format!("fserve:{nick}"));
         if self.fserves.lock().unwrap().contains_key(&key) {
             return Err(format!("fserve for {nick} is already waiting"));
@@ -813,6 +1128,7 @@ impl DccManager {
                     home,
                     max_gets,
                     welcome_text,
+                    None,
                 )
                 .await
             }
@@ -1112,6 +1428,9 @@ impl DccManager {
             .map(|s| s.to_string_lossy().to_string())
             .filter(|s| !s.is_empty())
             .ok_or("bad filename")?;
+        if let Some((ip, port)) = parse_server_target(&nick) {
+            return self.send_file_to_server(app, server_id, nick, ip, port, path, base, size);
+        }
         let cfg = self.config.lock().unwrap().clone();
         let ip = resolve_dcc_ip(&cfg.ip)?;
         let xid = format!("send-{}", NEXT_XFER.fetch_add(1, Ordering::Relaxed));
@@ -1248,6 +1567,90 @@ impl DccManager {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn send_file_to_server(
+        &self,
+        app: AppHandle,
+        server_id: String,
+        target: String,
+        ip: IpAddr,
+        port: u16,
+        path: std::path::PathBuf,
+        base: String,
+        size: u64,
+    ) -> Result<(), String> {
+        let xid = format!("send-{}", NEXT_XFER.fetch_add(1, Ordering::Relaxed));
+        let app2 = app.clone();
+        let sid = server_id.clone();
+        let who = target.clone();
+        let path2 = path.clone();
+        let base2 = base.clone();
+        let xid2 = xid.clone();
+        let (start_tx, start_rx) = oneshot::channel();
+        let task = tauri::async_runtime::spawn(async move {
+            if start_rx.await.is_err() {
+                return;
+            }
+            let result = async {
+                let mut stream = timeout(IO_TIMEOUT, TcpStream::connect((ip, port)))
+                    .await
+                    .map_err(|_| timeout_error("DCC Server connection timed out"))??;
+                let nick = server_nick(&app2, &sid);
+                server_line(
+                    &mut stream,
+                    &format!("120 {nick} {size} {}", base2.replace(['\r', '\n'], "_")),
+                )
+                .await?;
+                let reply = read_server_request(&mut stream).await?;
+                let mut fields = reply.split_whitespace();
+                if fields.next() != Some("121") {
+                    return Err(std::io::Error::other(format!(
+                        "DCC Server rejected send: {reply}"
+                    )));
+                }
+                let _remote_nick = fields.next();
+                let offset = fields
+                    .next()
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .filter(|offset| *offset <= size)
+                    .ok_or_else(|| std::io::Error::other("invalid DCC Server resume position"))?;
+                mark_transfer_active(&app2, &xid2, offset);
+                send_into(
+                    &app2, &sid, &xid2, &who, &base2, &path2, stream, size, offset,
+                )
+                .await
+            }
+            .await;
+            finish_transfer(&app2, &xid2, result);
+        });
+        self.register_transfer(
+            &app,
+            DccTransferSnapshot {
+                server_id: server_id.clone(),
+                id: xid.clone(),
+                kind: "send".into(),
+                nick: target.clone(),
+                filename: base,
+                path: path.to_string_lossy().into_owned(),
+                ip: ip.to_string(),
+                status: "waiting".into(),
+                transferred: 0,
+                size,
+                resume: 0,
+                last_ack: 0,
+                opened: Instant::now(),
+            },
+            RetrySpec::Send {
+                server_id,
+                nick: target,
+                path,
+            },
+        );
+        self.set_transfer_task(&xid, task);
+        let _ = start_tx.send(());
+        Ok(())
+    }
+
     fn register_transfer(&self, app: &AppHandle, snapshot: DccTransferSnapshot, retry: RetrySpec) {
         let xid = snapshot.id.clone();
         let mut records = self.transfers.lock().unwrap();
@@ -1354,6 +1757,9 @@ impl DccManager {
                     self.recv_offer(app, server_id, nick, offer, true, Some(path))
                 }
             }
+            RetrySpec::ServerDirect => {
+                Err("DCC Server receives must be retried by the peer".into())
+            }
         }
     }
 
@@ -1396,6 +1802,11 @@ impl DccManager {
         let command = parse_dcc_command(args).ok_or("invalid /dcc command")?;
         match command {
             DccCommand::Chat { nick } => self.chat(app, server_id.to_string(), nick),
+            DccCommand::Fserve { target } => {
+                let (ip, port) =
+                    parse_server_target(&target).ok_or("DCC fserve requires an IP address")?;
+                self.chat_server(app, server_id.to_string(), target, ip, port, 110)
+            }
             DccCommand::Send { nick, file } => {
                 // Script file access follows jIRC's intentional sandbox: a
                 // remote script may send a file from scriptdata, never an
@@ -1449,6 +1860,71 @@ impl DccManager {
                 Ok(())
             }
         }
+    }
+
+    pub fn run_server_command(
+        &self,
+        app: AppHandle,
+        server_id: &str,
+        args: &str,
+    ) -> Result<(), String> {
+        let current = self.server_snapshot();
+        let mut chat = current.as_ref().map_or(true, |value| value.2);
+        let mut send = current.as_ref().map_or(true, |value| value.3);
+        let mut fserve = current.as_ref().map_or(true, |value| value.4);
+        let mut enabled = current.is_some();
+        let mut port = current.as_ref().map_or(59, |value| value.1);
+        let words = args.split_whitespace().collect::<Vec<_>>();
+        if words.is_empty() {
+            dcc_notice(
+                &app,
+                server_id,
+                &current.map_or_else(
+                    || "DCC server is off".to_string(),
+                    |(_, port, chat, send, fserve)| {
+                        format!(
+                            "DCC server is on at port {port} ({})",
+                            server_services(chat, send, fserve)
+                        )
+                    },
+                ),
+            );
+            return Ok(());
+        }
+        for word in words {
+            let lower = word.to_ascii_lowercase();
+            if lower == "on" {
+                enabled = true;
+            } else if lower == "off" {
+                enabled = false;
+            } else if let Ok(value) = lower.parse::<u16>() {
+                if value == 0 {
+                    return Err("port must be between 1 and 65535".into());
+                }
+                port = value;
+            } else if lower.starts_with('+') || lower.starts_with('-') {
+                let value = lower.starts_with('+');
+                for switch in lower[1..].chars() {
+                    match switch {
+                        'c' => chat = value,
+                        's' => send = value,
+                        'f' => fserve = value,
+                        _ => return Err(format!("unknown /dccserver switch {switch}")),
+                    }
+                }
+            } else {
+                return Err("usage: /dccserver [+|-scf] [on|off] [port]".into());
+            }
+        }
+        self.configure_server(
+            app,
+            server_id.to_string(),
+            enabled,
+            port,
+            chat,
+            send,
+            fserve,
+        )
     }
 
     pub fn transfer_snapshots(
@@ -1545,6 +2021,324 @@ impl crate::script::eval::ScriptDcc for EngineDcc {
         items.sort_by_key(|(opened, _)| *opened);
         items.into_iter().map(|(_, info)| info).collect()
     }
+
+    fn server_port(&self) -> Option<u16> {
+        self.app
+            .try_state::<DccManager>()
+            .and_then(|manager| manager.server_snapshot().map(|snapshot| snapshot.1))
+    }
+}
+
+fn server_services(chat: bool, send: bool, fserve: bool) -> String {
+    let mut services = Vec::new();
+    if chat {
+        services.push("chat");
+    }
+    if send {
+        services.push("send");
+    }
+    if fserve {
+        services.push("fserve");
+    }
+    if services.is_empty() {
+        "no services".into()
+    } else {
+        services.join(", ")
+    }
+}
+
+fn server_nick(app: &AppHandle, server_id: &str) -> String {
+    app.try_state::<crate::irc::state::StateStore>()
+        .map(|store| store.get(server_id).nick.clone())
+        .filter(|nick| !nick.is_empty())
+        .unwrap_or_else(|| "jIRC".into())
+}
+
+async fn server_line(stream: &mut TcpStream, line: &str) -> std::io::Result<()> {
+    timeout(
+        Duration::from_secs(15),
+        stream.write_all(format!("{line}\r\n").as_bytes()),
+    )
+    .await
+    .map_err(|_| timeout_error("DCC Server response timed out"))?
+}
+
+async fn read_server_request(stream: &mut TcpStream) -> std::io::Result<String> {
+    let mut line = Vec::new();
+    timeout(Duration::from_secs(15), async {
+        loop {
+            let mut byte = [0u8; 1];
+            if stream.read(&mut byte).await? == 0 {
+                break;
+            }
+            line.push(byte[0]);
+            if byte[0] == b'\n' {
+                break;
+            }
+            if line.len() > 4096 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "DCC Server request is too long",
+                ));
+            }
+        }
+        Ok::<(), std::io::Error>(())
+    })
+    .await
+    .map_err(|_| timeout_error("DCC Server request timed out"))??;
+    if line.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "DCC Server connection closed before a request",
+        ));
+    }
+    Ok(String::from_utf8_lossy(&line)
+        .trim_end_matches(['\r', '\n'])
+        .to_string())
+}
+
+async fn handle_server_connection(
+    app: AppHandle,
+    server_id: String,
+    mut stream: TcpStream,
+    peer_ip: IpAddr,
+    allow_chat: bool,
+    allow_send: bool,
+    allow_fserve: bool,
+) {
+    let request = match read_server_request(&mut stream).await {
+        Ok(request) => request,
+        Err(_) => return,
+    };
+    let parsed = match parse_server_request(&request) {
+        Some(parsed) => parsed,
+        None => {
+            let _ = server_line(&mut stream, "150 unavailable").await;
+            return;
+        }
+    };
+    let (service, nick, filename, filesize) = match parsed {
+        DccServerRequest::Chat { nick } => ("chat", nick, String::new(), 0),
+        DccServerRequest::Fserve { nick } => ("fserve", nick, String::new(), 0),
+        DccServerRequest::Send {
+            nick,
+            size,
+            filename,
+        } => ("send", nick, filename, size),
+        DccServerRequest::Get { nick, filename } => ("get", nick, filename, 0),
+    };
+    let allowed = match service {
+        "chat" => allow_chat,
+        "send" => allow_send,
+        "fserve" => allow_fserve,
+        "get" => allow_fserve,
+        _ => false,
+    };
+    if !allowed {
+        let _ = server_line(&mut stream, "150 unavailable").await;
+        return;
+    }
+    if service != "get"
+        && fire_dcc_server_event(&app, &server_id, service, &nick, peer_ip, &filename)
+    {
+        let _ = server_line(&mut stream, "151 rejected").await;
+        return;
+    }
+    let my_nick = server_nick(&app, &server_id);
+    match service {
+        "chat" => {
+            if server_line(&mut stream, &format!("101 {my_nick}"))
+                .await
+                .is_err()
+            {
+                return;
+            }
+            if let Some(manager) = app.try_state::<DccManager>() {
+                if let Err(error) = manager.accept_server_chat(
+                    app.clone(),
+                    server_id.clone(),
+                    nick,
+                    peer_ip,
+                    stream,
+                ) {
+                    dcc_notice(&app, &server_id, &format!("DCC Server chat: {error}"));
+                }
+            }
+        }
+        "fserve" => {
+            if server_line(&mut stream, &format!("111 {my_nick}"))
+                .await
+                .is_err()
+            {
+                return;
+            }
+            let root = crate::script::script_data_dir(&app);
+            let result = run_fserve(
+                app.clone(),
+                server_id.clone(),
+                nick.clone(),
+                stream,
+                root,
+                3,
+                None,
+                Some(peer_ip),
+            )
+            .await;
+            if let Err(error) = result {
+                dcc_notice(
+                    &app,
+                    &server_id,
+                    &format!("DCC Server fserve for {nick}: {error}"),
+                );
+            }
+        }
+        "send" => {
+            if server_line(&mut stream, &format!("121 {my_nick} 0"))
+                .await
+                .is_err()
+            {
+                return;
+            }
+            receive_server_file(app, server_id, nick, peer_ip, filename, filesize, stream).await;
+        }
+        "get" => {
+            send_server_get(app, server_id, nick, peer_ip, filename, stream).await;
+        }
+        _ => {}
+    }
+}
+
+async fn receive_server_file(
+    app: AppHandle,
+    server_id: String,
+    nick: String,
+    peer_ip: IpAddr,
+    filename: String,
+    size: u64,
+    stream: TcpStream,
+) {
+    let Some(manager) = app.try_state::<DccManager>() else {
+        return;
+    };
+    let dir = match crate::storage::dcc_dir(&app) {
+        Ok(dir) => dir,
+        Err(error) => {
+            dcc_notice(&app, &server_id, &format!("DCC Server receive: {error}"));
+            return;
+        }
+    };
+    let base = safe_basename(&filename);
+    let path = match reserve_destination(&dir, &base) {
+        Ok(path) => path,
+        Err(error) => {
+            dcc_notice(&app, &server_id, &format!("DCC Server receive: {error}"));
+            return;
+        }
+    };
+    let xid = format!("recv-{}", NEXT_XFER.fetch_add(1, Ordering::Relaxed));
+    manager.register_transfer(
+        &app,
+        DccTransferSnapshot {
+            server_id: server_id.clone(),
+            id: xid.clone(),
+            kind: "recv".into(),
+            nick: nick.clone(),
+            filename: base.clone(),
+            path: path.to_string_lossy().into_owned(),
+            ip: peer_ip.to_string(),
+            status: "active".into(),
+            transferred: 0,
+            size,
+            resume: 0,
+            last_ack: 0,
+            opened: Instant::now(),
+        },
+        RetrySpec::ServerDirect,
+    );
+    let result = recv_into(&app, &server_id, &xid, &nick, &base, &path, stream, size, 0).await;
+    finish_transfer(&app, &xid, result);
+}
+
+async fn send_server_get(
+    app: AppHandle,
+    server_id: String,
+    nick: String,
+    peer_ip: IpAddr,
+    filename: String,
+    mut stream: TcpStream,
+) {
+    let Some(manager) = app.try_state::<DccManager>() else {
+        return;
+    };
+    let key = (peer_ip, safe_basename(&filename).to_ascii_lowercase());
+    let pending = manager.server_gets.lock().unwrap().remove(&key);
+    let Some((session_nick, path, opened)) = pending else {
+        let _ = server_line(&mut stream, "151 rejected").await;
+        return;
+    };
+    if opened.elapsed() > OFFER_TIMEOUT || !session_nick.eq_ignore_ascii_case(&nick) {
+        let _ = server_line(&mut stream, "151 rejected").await;
+        return;
+    }
+    let size = match std::fs::metadata(&path) {
+        Ok(metadata) if metadata.is_file() => metadata.len(),
+        _ => {
+            let _ = server_line(&mut stream, "151 rejected").await;
+            return;
+        }
+    };
+    let my_nick = server_nick(&app, &server_id);
+    if server_line(&mut stream, &format!("131 {my_nick} {size}"))
+        .await
+        .is_err()
+    {
+        return;
+    }
+    let reply = match read_server_request(&mut stream).await {
+        Ok(reply) => reply,
+        Err(_) => return,
+    };
+    let mut fields = reply.split_whitespace();
+    if fields.next() != Some("132") {
+        return;
+    }
+    let _client_nick = fields.next();
+    let Some(offset) = fields
+        .next()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|offset| *offset <= size)
+    else {
+        return;
+    };
+    let base = path
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| safe_basename(&filename));
+    let xid = format!("send-{}", NEXT_XFER.fetch_add(1, Ordering::Relaxed));
+    manager.register_transfer(
+        &app,
+        DccTransferSnapshot {
+            server_id: server_id.clone(),
+            id: xid.clone(),
+            kind: "send".into(),
+            nick: nick.clone(),
+            filename: base.clone(),
+            path: path.to_string_lossy().into_owned(),
+            ip: peer_ip.to_string(),
+            status: "active".into(),
+            transferred: offset,
+            size,
+            resume: offset,
+            last_ack: offset,
+            opened: Instant::now(),
+        },
+        RetrySpec::ServerDirect,
+    );
+    let result = send_into(
+        &app, &server_id, &xid, &nick, &base, &path, stream, size, offset,
+    )
+    .await;
+    finish_transfer(&app, &xid, result);
 }
 
 async fn run_chat(
@@ -1610,6 +2404,7 @@ async fn run_fserve(
     root: std::path::PathBuf,
     max_gets: usize,
     welcome: Option<String>,
+    direct_peer: Option<IpAddr>,
 ) -> Result<(), String> {
     let (read_half, mut write_half) = tokio::io::split(stream);
     let mut reader = BufReader::new(read_half);
@@ -1691,6 +2486,23 @@ async fn run_fserve(
                 }
                 match resolve_fserve_input(&root, &cwd, argument, false) {
                     Ok(path) => {
+                        if let Some(peer_ip) = direct_peer {
+                            let name = path
+                                .file_name()
+                                .map(|value| value.to_string_lossy().to_string())
+                                .ok_or("invalid fileserver filename")?;
+                            app.try_state::<DccManager>()
+                                .ok_or("DCC manager is unavailable".to_string())?
+                                .server_gets
+                                .lock()
+                                .unwrap()
+                                .insert(
+                                    (peer_ip, name.to_ascii_lowercase()),
+                                    (nick.clone(), path, Instant::now()),
+                                );
+                            write_fserve_line(&mut write_half, "DCC Server GET is ready.").await?;
+                            continue;
+                        }
                         let result = app
                             .try_state::<DccManager>()
                             .ok_or("DCC manager is unavailable".to_string())?
@@ -2193,6 +3005,13 @@ fn safe_basename(filename: &str) -> String {
         .to_string()
 }
 
+fn parse_server_target(target: &str) -> Option<(IpAddr, u16)> {
+    if let Ok(address) = target.parse::<SocketAddr>() {
+        return Some((address.ip(), address.port()));
+    }
+    target.parse::<IpAddr>().ok().map(|ip| (ip, 59))
+}
+
 /// Never silently overwrites an existing download. `file.ext`, `file (1).ext`, …
 fn unused_destination(dir: &std::path::Path, filename: &str) -> std::path::PathBuf {
     let direct = dir.join(filename);
@@ -2300,6 +3119,51 @@ fn fire_dcc_script(
     };
     let actions = engine.dispatch_event(&ctx, kind, vars);
     crate::script::apply_actions(app, server_id, &my_nick, &network, &server, actions);
+}
+
+fn fire_dcc_server_event(
+    app: &AppHandle,
+    server_id: &str,
+    service: &str,
+    nick: &str,
+    address: IpAddr,
+    filename: &str,
+) -> bool {
+    let (Some(engine), Some(store)) = (
+        app.try_state::<crate::script::ScriptEngine>(),
+        app.try_state::<crate::irc::state::StateStore>(),
+    ) else {
+        return false;
+    };
+    let state = store.get(server_id);
+    let my_nick = state.nick.clone();
+    let (network, server) = engine.connection_context(server_id).unwrap_or_default();
+    let ctx = crate::script::RunCtx {
+        my_nick: &my_nick,
+        network: &network,
+        server: &server,
+        data_dir: crate::script::script_data_dir(app),
+        state,
+    };
+    let (actions, halted) = engine.dispatch_event_halt(
+        &ctx,
+        "DCCSERVER",
+        crate::script::eval::EventVars {
+            nick: nick.to_string(),
+            target: nick.to_string(),
+            text: service.to_string(),
+            params: if filename.is_empty() {
+                Vec::new()
+            } else {
+                vec![filename.to_string()]
+            },
+            filename: filename.to_string(),
+            peer_address: address.to_string(),
+            ..Default::default()
+        },
+    );
+    crate::script::apply_actions(app, server_id, &my_nick, &network, &server, actions);
+    halted
 }
 
 /// The machine's primary local IPv4, found from the local address a UDP socket
@@ -2596,5 +3460,55 @@ mod tests {
         );
         assert_eq!(parse_dcc_command("chat"), None); // missing nick
         assert_eq!(parse_dcc_command("wat"), None);
+    }
+
+    #[test]
+    fn parses_dcc_server_protocol_requests_without_losing_spaces() {
+        assert_eq!(
+            parse_server_request("100 visitor\r\n"),
+            Some(DccServerRequest::Chat {
+                nick: "visitor".into()
+            })
+        );
+        assert_eq!(
+            parse_server_request("110 visitor"),
+            Some(DccServerRequest::Fserve {
+                nick: "visitor".into()
+            })
+        );
+        assert_eq!(
+            parse_server_request("120 visitor 42 file name.txt"),
+            Some(DccServerRequest::Send {
+                nick: "visitor".into(),
+                size: 42,
+                filename: "file name.txt".into(),
+            })
+        );
+        assert_eq!(
+            parse_server_request("130 visitor wanted file.txt"),
+            Some(DccServerRequest::Get {
+                nick: "visitor".into(),
+                filename: "wanted file.txt".into(),
+            })
+        );
+        assert_eq!(parse_server_request("120 visitor nope file.txt"), None);
+        assert_eq!(parse_server_request("999 visitor"), None);
+    }
+
+    #[test]
+    fn parses_direct_server_targets() {
+        assert_eq!(
+            parse_server_target("192.0.2.1"),
+            Some(("192.0.2.1".parse().unwrap(), 59))
+        );
+        assert_eq!(
+            parse_server_target("192.0.2.1:50059"),
+            Some(("192.0.2.1".parse().unwrap(), 50059))
+        );
+        assert_eq!(
+            parse_server_target("[2001:db8::1]:50059"),
+            Some(("2001:db8::1".parse().unwrap(), 50059))
+        );
+        assert_eq!(parse_server_target("nickname"), None);
     }
 }

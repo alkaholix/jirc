@@ -467,6 +467,25 @@ pub fn dcc_configure(
     dcc.configure(ip, port_from, port_to, passive);
 }
 
+/// Starts/stops the direct DCC Server protocol listener.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn dcc_server_configure(
+    app: AppHandle,
+    dcc: State<'_, crate::irc::dcc::DccManager>,
+    server_id: String,
+    enabled: bool,
+    port: u16,
+    chat: bool,
+    send: bool,
+    fserve: bool,
+) -> Result<(), String> {
+    if server_id.is_empty() && enabled {
+        return Err("connect to an IRC server before enabling DCC Server".into());
+    }
+    dcc.configure_server(app, server_id, enabled, port, chat, send, fserve)
+}
+
 /// Cancels an active/waiting DCC transfer.
 #[tauri::command]
 pub fn dcc_cancel_transfer(

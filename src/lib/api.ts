@@ -125,6 +125,15 @@ export const api = {
     invoke("dcc_send_file", { serverId, nick, path }),
   dccConfigure: (ip: string, portFrom: number, portTo: number, passive: boolean) =>
     invoke("dcc_configure", { ip, portFrom, portTo, passive }),
+  dccServerConfigure: (
+    serverId: string,
+    enabled: boolean,
+    port: number,
+    chat: boolean,
+    send: boolean,
+    fserve: boolean
+  ) =>
+    invoke("dcc_server_configure", { serverId, enabled, port, chat, send, fserve }),
   dccCancelTransfer: (id: string) => invoke("dcc_cancel_transfer", { id }),
   dccRetryTransfer: (id: string) => invoke("dcc_retry_transfer", { id }),
   dccLocalIp: () => invoke<string>("dcc_local_ip"),

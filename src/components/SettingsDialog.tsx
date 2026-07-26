@@ -400,6 +400,36 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 port-forwarding needed). Otherwise set your public IPv4 + a port range
                 and forward that range on your router. On a single LAN, leave blank.
               </p>
+              <div className="settings-label">DCC Server</div>
+              {toggle(
+                "dccServerEnabled",
+                "Listen for direct mIRC-compatible DCC Server connections"
+              )}
+              <label>
+                Server listen port
+                <input
+                  type="number"
+                  min={1}
+                  max={65535}
+                  value={settings.dccServerPort}
+                  onChange={(e) =>
+                    settings.set(
+                      "dccServerPort",
+                      Math.max(1, Math.min(65535, Number(e.target.value) || 59))
+                    )
+                  }
+                />
+              </label>
+              <div className="row">
+                {toggle("dccServerChat", "Chat")}
+                {toggle("dccServerSend", "File sends")}
+                {toggle("dccServerFserve", "Fileserver")}
+              </div>
+              <p className="cheat-tip">
+                Port 59 is the mIRC default and may require elevated privileges on
+                Unix-like systems. You can select a higher forwarded port and connect
+                with <code>/dcc chat IP:port</code>.
+              </p>
             </>
           )}
 

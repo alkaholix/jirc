@@ -1593,6 +1593,9 @@ fn matches(
             pattern.is_empty() || pattern == "*" || dialog_id_matches(pattern, &ev.dialog_control);
         return name_ok && event_ok && id_ok;
     }
+    if kind == "DCCSERVER" {
+        return selector.is_empty() || selector == "*" || selector.eq_ignore_ascii_case(&ev.text);
+    }
     if kind == "RAW" {
         let selector_ok =
             selector.is_empty() || selector == "*" || wildcard_match(selector, &ev.text);
@@ -2193,6 +2196,20 @@ fn apply_actions_depth(
                 }
                 if let Some(m) = &manager {
                     let _ = m.send(server_id, line);
+                }
+            }
+            Action::DccServer { args } => {
+                if let Some(dcc) = app.try_state::<crate::irc::dcc::DccManager>() {
+                    if let Err(error) = dcc.run_server_command(app.clone(), server_id, &args) {
+                        let _ = app.emit(
+                            IRC_EVENT,
+                            UiEvent::Echo {
+                                server_id: server_id.to_string(),
+                                target: "(status)".to_string(),
+                                text: format!("DCC server: {error}"),
+                            },
+                        );
+                    }
                 }
             }
             Action::Echo { target, text } => {
@@ -9876,11 +9893,45 @@ mod tests {
     #[test]
     fn dcc_command_is_client_local_not_a_raw_irc_line() {
         let engine = ScriptEngine::new();
-        engine.load("alias p { dcc passive on }");
+        engine.load(
+            "alias p { dcc passive on }\n\
+             alias s { dccserver +scf on 50059 }",
+        );
         assert_eq!(
             engine.run_alias(&ctx(), "", "p", ""),
             vec![Action::Dcc {
                 args: "passive on".into(),
+            }]
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "s", ""),
+            vec![Action::DccServer {
+                args: "+scf on 50059".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn dccserver_event_matches_service_and_can_reject() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "on 1:DCCSERVER:Send:{ echo -s $nick $address $filename | halt }\n\
+             on 1:DCCSERVER:Chat:{ echo -s chat }",
+        );
+        let event = EventVars {
+            nick: "visitor".into(),
+            text: "send".into(),
+            filename: "payload.bin".into(),
+            peer_address: "192.0.2.5".into(),
+            ..Default::default()
+        };
+        let (actions, halted) = engine.dispatch_event_halt(&ctx(), "DCCSERVER", event);
+        assert!(halted);
+        assert_eq!(
+            actions,
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "visitor 192.0.2.5 payload.bin".into(),
             }]
         );
     }

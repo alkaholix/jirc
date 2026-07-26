@@ -112,6 +112,7 @@ pub fn run() {
             commands::dcc_recv,
             commands::dcc_send_file,
             commands::dcc_configure,
+            commands::dcc_server_configure,
             commands::dcc_cancel_transfer,
             commands::dcc_retry_transfer,
             commands::dcc_local_ip,

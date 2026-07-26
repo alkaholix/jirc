@@ -123,6 +123,11 @@ function MainApp() {
   const dccPortFrom = useSettings((s) => s.dccPortFrom);
   const dccPortTo = useSettings((s) => s.dccPortTo);
   const dccPassive = useSettings((s) => s.dccPassive);
+  const dccServerEnabled = useSettings((s) => s.dccServerEnabled);
+  const dccServerPort = useSettings((s) => s.dccServerPort);
+  const dccServerChat = useSettings((s) => s.dccServerChat);
+  const dccServerSend = useSettings((s) => s.dccServerSend);
+  const dccServerFserve = useSettings((s) => s.dccServerFserve);
   const floodEnabled = useSettings((s) => s.floodEnabled);
   const floodMessages = useSettings((s) => s.floodMessages);
   const floodSeconds = useSettings((s) => s.floodSeconds);
@@ -134,6 +139,10 @@ function MainApp() {
   const active = useStore((s) => (s.active ? s.buffers[s.active] : null));
   const activePoppedOut = useStore((s) => (s.active ? !!s.poppedOut[s.active] : false));
   const hasServers = useStore((s) => Object.keys(s.servers).length > 0);
+  const dccServerId = useStore((s) => {
+    const activeBuffer = s.active ? s.buffers[s.active] : undefined;
+    return activeBuffer?.serverId ?? Object.keys(s.servers)[0] ?? "";
+  });
 
   useEffect(() => {
     const unlisten = listen<IrcEvent>("irc-event", (e) => {
@@ -317,6 +326,28 @@ function MainApp() {
   useEffect(() => {
     api.dccConfigure(dccIp, dccPortFrom, dccPortTo, dccPassive).catch(() => {});
   }, [dccIp, dccPortFrom, dccPortTo, dccPassive]);
+
+  useEffect(() => {
+    if (detachedKey !== null) return;
+    api
+      .dccServerConfigure(
+        dccServerId,
+        dccServerEnabled && !!dccServerId,
+        dccServerPort,
+        dccServerChat,
+        dccServerSend,
+        dccServerFserve
+      )
+      .catch(() => {});
+  }, [
+    detachedKey,
+    dccServerId,
+    dccServerEnabled,
+    dccServerPort,
+    dccServerChat,
+    dccServerSend,
+    dccServerFserve,
+  ]);
 
   useEffect(() => {
     api.configureFlood(floodEnabled, floodMessages, floodSeconds).catch(() => {});

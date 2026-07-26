@@ -14,6 +14,11 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         // Full local path in on FILESENT/FILERCVD/GETFAIL/SENDFAIL.
         "filename" => rt.event.filename.clone(),
         "dccid" => rt.event.dcc_id.clone(),
+        "dccport" => rt
+            .dcc
+            .server_port()
+            .map(|port| port.to_string())
+            .unwrap_or_default(),
         "me" => rt.my_nick.to_string(),
         "pnick" => rt.event.pnick.clone(),
         "mnick" => rt.state.main_nick.clone(),
@@ -495,6 +500,9 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             } else {
                 rt.state.isupport.casefold(&a(0))
             };
+            if args.is_empty() && !rt.event.peer_address.is_empty() {
+                return rt.event.peer_address.clone();
+            }
             match rt
                 .state
                 .ial

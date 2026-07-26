@@ -49,6 +49,11 @@ export interface Settings {
   dccPortTo: number;
   /** Use mIRC's passive/reverse DCC negotiation for outgoing offers. */
   dccPassive: boolean;
+  dccServerEnabled: boolean;
+  dccServerPort: number;
+  dccServerChat: boolean;
+  dccServerSend: boolean;
+  dccServerFserve: boolean;
 }
 
 const DEFAULTS: Settings = {
@@ -83,6 +88,11 @@ const DEFAULTS: Settings = {
   dccPortFrom: 0,
   dccPortTo: 0,
   dccPassive: false,
+  dccServerEnabled: false,
+  dccServerPort: 59,
+  dccServerChat: true,
+  dccServerSend: true,
+  dccServerFserve: true,
 };
 
 const STORAGE_KEY = "jirc.settings";

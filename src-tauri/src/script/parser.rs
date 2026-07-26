@@ -562,6 +562,13 @@ fn parse_event_header(header: &str, body: Vec<Stmt>) -> Option<Event> {
         let event = fields.next().unwrap_or("*").trim().to_ascii_lowercase();
         let id = fields.next().unwrap_or("*").trim().to_string();
         (id, event, name)
+    } else if kind == "DCCSERVER" {
+        let service = rest.split_once(':').map_or(rest, |(value, _)| value);
+        (
+            String::new(),
+            service.trim().to_ascii_lowercase(),
+            String::new(),
+        )
     } else if kind == "RAW" {
         let selector = rest.split_once(':').map_or(rest, |(value, _)| value);
         ("*".to_string(), selector.trim().to_string(), String::new())
@@ -626,7 +633,12 @@ fn parse_braceless_event(header: &str, source_line: usize) -> Option<Event> {
     }
     let rest = ev.next().unwrap_or("");
     let regex_match = base_level.contains('$');
-    let (pattern, selector, target, command) = if kind == "RAW" {
+    let (pattern, selector, target, command) = if kind == "DCCSERVER" {
+        let mut p = rest.splitn(2, ':');
+        let selector = p.next().unwrap_or("").trim().to_ascii_lowercase();
+        let command = p.next().unwrap_or("").trim().to_string();
+        (String::new(), selector, String::new(), command)
+    } else if kind == "RAW" {
         // Existing jIRC compatibility form: `on *:RAW:001:<command>`.
         let mut p = rest.splitn(2, ':');
         let selector = p.next().unwrap_or("").trim().to_string();
@@ -1476,6 +1488,16 @@ mod tests {
         assert_eq!(s.events[1].pattern, "*.zip");
         assert!(s.events[1].target.is_empty());
         assert_eq!(s.events[2].kind, "GETFAIL");
+    }
+
+    #[test]
+    fn parses_dccserver_service_selector() {
+        let script = parse("on 1:DCCSERVER:Send:echo -s $nick $address $filename");
+        assert_eq!(script.events.len(), 1);
+        assert_eq!(script.events[0].kind, "DCCSERVER");
+        assert_eq!(script.events[0].selector, "send");
+        assert!(script.events[0].pattern.is_empty());
+        assert!(script.events[0].target.is_empty());
     }
 
     #[test]

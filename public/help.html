@@ -1115,6 +1115,33 @@ the cookie name and <code>$3-</code> for its value.</p>
 }
 </code></pre>
 
+<h2 id="dccserver">DCC Server</h2>
+<p>jIRC implements the cross-platform mIRC DCC Server protocol for direct Chat,
+Send, and Fileserver connections. Enable it in <strong>Settings → Behaviour →
+DCC Server</strong>, or from a script:</p>
+<pre><code><span class="k">/dccserver</span> +scf on 59
+<span class="k">/dccserver</span> off
+</code></pre>
+<p>The <code>s</code>, <code>c</code>, and <code>f</code> switches control incoming
+Send, Chat, and Fileserver services. Port 59 is the mIRC default; on systems that
+reserve low ports, select a higher forwarded port. <code>$dccport</code> returns
+the active listener port, or <code>$null</code> while it is off.</p>
+<p>Connect directly to another compatible server by using an IP address instead
+of a nickname. An explicit port can be appended when it is not 59:</p>
+<pre><code><span class="k">/dcc</span> chat 192.0.2.10:50059
+<span class="k">/dcc</span> send 192.0.2.10:50059 report.txt
+<span class="k">/dcc</span> fserve 192.0.2.10:50059
+</code></pre>
+<p><code>on DCCSERVER</code> runs before a request is accepted. The selector is
+<code>Chat</code>, <code>Send</code>, or <code>Fserve</code>;
+<code>$nick</code> is the direct peer's supplied nickname, <code>$address</code>
+is its IP address, and <code>$filename</code> is populated for Send. Use
+<code>/halt</code> to reject a connection:</p>
+<pre><code><span class="k">on</span> 1:DCCSERVER:Send:{
+  <span class="k">if</span> (*.exe iswm <span class="i">$filename</span>) <span class="k">halt</span>
+}
+</code></pre>
+
 <h2 id="safety">Safety: other people's text stays text</h2>
 <p>This is one place jIRC deliberately behaves differently from mIRC — and it's
 in your favour. In mIRC, a few things get <strong>evaluated twice</strong>, which
@@ -1174,7 +1201,8 @@ IRCX owner/host keys, <strong>user access lists</strong>
 (<code>/auser</code>/<code>$ulevel</code> + level-gated events like <code>on 10:TEXT</code>),
 <strong>dynamic variables</strong> (<code>%v. [ $+ [ $nick ] ]</code>), and window /
 notify / lifecycle events (<code>on OPEN</code>/<code>CLOSE</code>/<code>NOTIFY</code>/<code>START</code>/<code>EXIT</code>).
-Also supported: DCC chat/send/get/resume/passive transfers, <code>/play</code>,
+Also supported: DCC chat/send/get/resume/passive transfers and DCC Server,
+<code>/play</code>,
 PARSELINE, UDP/STARTTLS script sockets, echo-message, and SASL EXTERNAL/SCRAM-SHA-256.
 Some aren't in the reference tables above yet.
 </div>
@@ -1183,7 +1211,6 @@ Some aren't in the reference tables above yet.
 <div class="note warn">
 Planned or possible future work — scripts using these won't work today:
 <ul style="margin:.5rem 0 0">
-  <li>DCC server mode (<code>/dccserver</code>).</li>
   <li>Richer script panel controls beyond the current safe text and button controls.</li>
   <li>A few <strong>property suffixes</strong> such as <code>$chan(#).topic</code> — most
     now work, just not every one.</li>
