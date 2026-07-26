@@ -38,6 +38,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [customPath, setCustomPath] = useState("");
   const [dataMsg, setDataMsg] = useState("");
   const [dccMsg, setDccMsg] = useState("");
+  const [systemFonts, setSystemFonts] = useState<string[]>([]);
+  const [fontsLoading, setFontsLoading] = useState(true);
 
   useEffect(() => {
     api
@@ -47,6 +49,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
         setCustomPath(d.custom);
       })
       .catch(() => {});
+    api
+      .systemFonts()
+      .then(setSystemFonts)
+      .catch(() => setSystemFonts([]))
+      .finally(() => setFontsLoading(false));
   }, []);
 
   const saveDataLoc = async () => {
@@ -186,13 +193,27 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   {"<your nick>"}
                 </span>
               </label>
-              <label className="inline">
+              <label>
                 Chat font
-                <input
+                <select
                   value={settings.chatFont}
                   onChange={(e) => settings.set("chatFont", e.target.value)}
-                  placeholder="theme default"
-                />
+                  style={{ fontFamily: settings.chatFont || undefined }}
+                  disabled={fontsLoading}
+                >
+                  <option value="">
+                    {fontsLoading ? "Loading installed fonts…" : "Theme default"}
+                  </option>
+                  {settings.chatFont &&
+                    !systemFonts.some(
+                      (font) => font.toLowerCase() === settings.chatFont.toLowerCase()
+                    ) && <option value={settings.chatFont}>{settings.chatFont}</option>}
+                  {systemFonts.map((font) => (
+                    <option key={font} value={font} style={{ fontFamily: font }}>
+                      {font}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label className="inline">
                 Chat font size (px)

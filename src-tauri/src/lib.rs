@@ -79,6 +79,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::core_version,
+            commands::system_fonts,
             commands::open_help,
             commands::open_url,
             commands::open_detached_window,

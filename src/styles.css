@@ -924,68 +924,111 @@ img.nick-icon {
 .inputbar {
   position: relative;
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.8rem;
+  flex-direction: column;
+  align-items: stretch;
   border-top: 1px solid var(--border);
   background: var(--bg2);
 }
-.inputbar input {
+.composer-input-row {
+  display: flex;
+  padding: 0.45rem 0.8rem 0.55rem;
+}
+.composer-input-row input {
   flex: 1;
 }
-.emoji-btn {
-  background: transparent;
-  border: none;
-  font-size: 1.2rem;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0 0.15rem;
-}
-.input-format-toolbar {
+.composer-toolbar {
   display: flex;
   align-items: center;
-  gap: 0.2rem;
-  flex: none;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  min-height: 2.55rem;
+  padding: 0.35rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
 }
-.input-format-toolbar button,
-.input-format-toolbar select {
-  min-width: 1.8rem;
-  height: 1.8rem;
-  padding: 0.15rem 0.35rem;
+.composer-toolbar button,
+.composer-toolbar select {
+  height: 1.9rem;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 5px;
   background-color: var(--panel2);
   color: var(--fg);
+}
+.composer-toolbar button {
+  padding: 0.2rem 0.55rem;
   cursor: pointer;
 }
-.input-format-toolbar button:hover {
+.composer-toolbar button:hover {
   border-color: var(--accent);
+  background-color: var(--bg2);
 }
-.input-format-toolbar label {
+.emoji-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.emoji-btn span {
+  font-size: 1.05rem;
+}
+.composer-divider {
+  width: 1px;
+  height: 1.6rem;
+  margin: 0 0.15rem;
+  background: var(--border);
+}
+.input-format-buttons {
   display: flex;
   align-items: center;
   gap: 0.2rem;
 }
-.input-format-toolbar label > span {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
+.input-format-buttons button {
+  min-width: 1.8rem;
+  padding-inline: 0.35rem;
 }
-.input-format-toolbar select {
-  width: 2.8rem;
+.composer-color-control {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding-left: 0.35rem;
+  color: var(--muted);
+  font-size: 0.8rem;
 }
-.input-format-toolbar .input-color-apply {
+.composer-color-control select {
+  max-width: 7.5rem;
+  padding: 0.15rem 1.5rem 0.15rem 0.4rem;
+  cursor: pointer;
+}
+.composer-color-swatch {
+  width: 0.85rem;
+  height: 0.85rem;
+  flex: none;
+  border: 1px solid var(--muted);
+  border-radius: 3px;
+}
+.composer-color-swatch.none {
+  background:
+    linear-gradient(45deg, transparent 43%, var(--err) 44%, var(--err) 56%, transparent 57%),
+    var(--panel2);
+}
+.composer-toolbar .input-color-apply {
   font-weight: 700;
   text-shadow: 0 0 2px #000;
 }
 @media (max-width: 760px) {
-  .input-format-toolbar label {
-    display: none;
+  .composer-color-control {
+    font-size: 0;
+    padding-left: 0;
+    gap: 0.2rem;
   }
-  .input-format-toolbar button:last-child {
-    display: none;
+  .composer-color-control select {
+    width: 4.75rem;
+  }
+  .composer-toolbar .input-color-apply {
+    font-size: 0;
+  }
+  .composer-toolbar .input-color-apply::after {
+    content: "Apply";
+    font-size: 0.8rem;
   }
 }
 .emoji-backdrop {

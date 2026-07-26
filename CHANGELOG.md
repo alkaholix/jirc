@@ -12,6 +12,15 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## ✨ 26.7.72 — Polished composer and system font picker
+
+- Rebuilt the composer into a dedicated toolbar above the message field, with
+  Emoji and text-style controls grouped cleanly.
+- Replaced unexplained numeric colour boxes with labelled **Text colour** and
+  **Background** selectors, named colours, swatches, and an Apply colours preview.
+- Settings now discovers and lists installed font families through one
+  cross-platform Windows/macOS/Linux/BSD backend instead of requiring manual entry.
+
 ## 🎨 26.7.71 — Input formatting toolbar
 
 - Added optional message-input controls for mIRC bold, italic, underline,

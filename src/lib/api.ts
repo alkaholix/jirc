@@ -167,6 +167,7 @@ export const api = {
   profilesDelete: (id: string) => invoke("profiles_delete", { id }),
   keyringAvailable: () => invoke<boolean>("keyring_available"),
   dataLocation: () => invoke<DataLocation>("data_location"),
+  systemFonts: () => invoke<string[]>("system_fonts"),
   setDataLocation: (path: string | null) => invoke("set_data_location", { path }),
   logAppend: (network: string, buffer: string, line: string) =>
     invoke("log_append", { network, buffer, line }),

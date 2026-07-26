@@ -15,6 +15,12 @@ const IRC_COLORS = [
   "#ffff00", "#00fc00", "#009393", "#00ffff",
   "#0000fc", "#ff00ff", "#7f7f7f", "#d2d2d2",
 ];
+const IRC_COLOR_NAMES = [
+  "White", "Black", "Navy", "Green",
+  "Red", "Maroon", "Purple", "Orange",
+  "Yellow", "Lime", "Teal", "Cyan",
+  "Blue", "Pink", "Grey", "Light grey",
+];
 
 export function InputBar({ buffer }: { buffer: Buffer }) {
   const [value, setValue] = useState("");
@@ -104,81 +110,93 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
           </div>
         </>
       )}
-      <button
-        type="button"
-        className="emoji-btn"
-        title="Emoji"
-        onClick={() => setPicker((p) => !p)}
-      >
-        😀
-      </button>
-      {showInputToolbar && (
-        <div className="input-format-toolbar" role="toolbar" aria-label="Message formatting">
-          <button type="button" title="Bold" aria-label="Bold" onClick={() => applyControl(IRC_FORMAT.bold)}>
-            <strong>B</strong>
-          </button>
-          <button type="button" title="Italic" aria-label="Italic" onClick={() => applyControl(IRC_FORMAT.italic)}>
-            <em>I</em>
-          </button>
-          <button type="button" title="Underline" aria-label="Underline" onClick={() => applyControl(IRC_FORMAT.underline)}>
-            <u>U</u>
-          </button>
-          <label title="Text colour">
-            <span>Text</span>
-            <select
-              aria-label="Text colour"
-              value={foreground}
-              style={{ backgroundColor: IRC_COLORS[foreground], color: foreground === 0 ? "#000" : "#fff" }}
-              onChange={(event) => setForeground(Number(event.target.value))}
+      <div className="composer-toolbar" role="toolbar" aria-label="Message tools">
+        <button
+          type="button"
+          className="emoji-btn"
+          title="Choose an emoji"
+          onClick={() => setPicker((p) => !p)}
+        >
+          <span aria-hidden="true">😀</span> Emoji
+        </button>
+        {showInputToolbar && (
+          <>
+            <span className="composer-divider" />
+            <div className="input-format-buttons" aria-label="Text style">
+              <button type="button" title="Bold" aria-label="Bold" onClick={() => applyControl(IRC_FORMAT.bold)}>
+                <strong>B</strong>
+              </button>
+              <button type="button" title="Italic" aria-label="Italic" onClick={() => applyControl(IRC_FORMAT.italic)}>
+                <em>I</em>
+              </button>
+              <button type="button" title="Underline" aria-label="Underline" onClick={() => applyControl(IRC_FORMAT.underline)}>
+                <u>U</u>
+              </button>
+            </div>
+            <label className="composer-color-control">
+              <span className="composer-color-swatch" style={{ backgroundColor: IRC_COLORS[foreground] }} />
+              Text colour
+              <select
+                aria-label="Text colour"
+                value={foreground}
+                onChange={(event) => setForeground(Number(event.target.value))}
+              >
+                {IRC_COLORS.map((color, index) => (
+                  <option key={index} value={index} style={{ backgroundColor: color }}>
+                    {IRC_COLOR_NAMES[index]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="composer-color-control">
+              <span
+                className={`composer-color-swatch${background === undefined ? " none" : ""}`}
+                style={background === undefined ? undefined : { backgroundColor: IRC_COLORS[background] }}
+              />
+              Background
+              <select
+                aria-label="Background colour"
+                value={background ?? ""}
+                onChange={(event) =>
+                  setBackground(event.target.value === "" ? undefined : Number(event.target.value))
+                }
+              >
+                <option value="">None</option>
+                {IRC_COLORS.map((color, index) => (
+                  <option key={index} value={index} style={{ backgroundColor: color }}>
+                    {IRC_COLOR_NAMES[index]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              title="Apply the selected text and background colours"
+              className="input-color-apply"
+              style={{
+                color: IRC_COLORS[foreground],
+                backgroundColor: background === undefined ? undefined : IRC_COLORS[background],
+              }}
+              onClick={() => applyControl(colorControl(foreground, background), IRC_FORMAT.reset)}
             >
-              {IRC_COLORS.map((color, index) => (
-                <option key={index} value={index} style={{ backgroundColor: color }}>
-                  {index.toString().padStart(2, "0")}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label title="Background colour">
-            <span>Back</span>
-            <select
-              aria-label="Background colour"
-              value={background ?? ""}
-              style={background === undefined ? undefined : { backgroundColor: IRC_COLORS[background], color: background === 0 ? "#000" : "#fff" }}
-              onChange={(event) =>
-                setBackground(event.target.value === "" ? undefined : Number(event.target.value))
-              }
-            >
-              <option value="">—</option>
-              {IRC_COLORS.map((color, index) => (
-                <option key={index} value={index} style={{ backgroundColor: color }}>
-                  {index.toString().padStart(2, "0")}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            type="button"
-            title="Apply selected colours"
-            aria-label="Apply selected colours"
-            className="input-color-apply"
-            style={{ color: IRC_COLORS[foreground], backgroundColor: background === undefined ? undefined : IRC_COLORS[background] }}
-            onClick={() => applyControl(colorControl(foreground, background), IRC_FORMAT.reset)}
-          >
-            A
-          </button>
-          <button type="button" title="Reset formatting" aria-label="Reset formatting" onClick={() => applyControl(IRC_FORMAT.reset, "")}>
-            Reset
-          </button>
-        </div>
-      )}
-      <input
-        ref={inputRef}
-        value={value}
-        placeholder="Type a message or /command…"
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={onKeyDown}
-        autoFocus
-      />
+              Apply colours
+            </button>
+            <button type="button" title="Clear all formatting from this point" onClick={() => applyControl(IRC_FORMAT.reset, "")}>
+              Reset
+            </button>
+          </>
+        )}
+      </div>
+      <div className="composer-input-row">
+        <input
+          ref={inputRef}
+          value={value}
+          placeholder="Type a message or /command…"
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={onKeyDown}
+          autoFocus
+        />
+      </div>
     </div>
   );
 }

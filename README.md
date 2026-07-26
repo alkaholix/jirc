@@ -27,7 +27,8 @@ Linux) and speaking both **standard IRC** (RFC 1459/2812 + IRCv3) and
   Linux/BSD Secret Service is unavailable
 - **Chat UI** — collapsible **server tree** *or* **switchbar** (tabs) layout,
   nick list with prefix sorting/colours, full mIRC colour/format rendering,
-  an optional bold/italic/underline/foreground/background input toolbar,
+  a polished toolbar above the message box for emoji plus clearly labelled
+  bold/italic/underline/text/background colour controls,
   clickable URLs, per-buffer logging, desktop notifications & highlight words
 - **Detachable windows** — pop any status, channel, query, or `@window` out into its own
   OS window and dock it back with one click (beyond mIRC's in-app MDI)
@@ -38,7 +39,8 @@ Linux) and speaking both **standard IRC** (RFC 1459/2812 + IRCv3) and
 - **Ignore list**, CTCP auto-replies (VERSION/PING/TIME/FINGER/USERINFO/SOURCE/CLIENTINFO), emoji shortcodes
 - **Behaviour settings** — rejoin on kick, rejoin after reconnect, skip MOTD,
   data-folder selection, DCC address/ports/passive mode, DCC Server, ping?/pong!
-  display, raw **trace**, themes (dark/light/system), chat font, three timestamp
+  display, raw **trace**, themes (dark/light/system), a cross-platform
+  installed-font picker, three timestamp
   modes, custom emoji/CSS, and configurable flood protection
 - **DCC** — chat, send/get, resume, passive/reverse transfers, retry/timeout/progress
   UI, sandboxed fileserver, and direct mIRC-compatible DCC Server clients/listener

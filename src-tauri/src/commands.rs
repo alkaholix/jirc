@@ -12,6 +12,51 @@ pub fn core_version() -> String {
     format!("jIRC core {}", env!("CARGO_PKG_VERSION"))
 }
 
+/// Lists installed font families through fontdb's native Windows, macOS, Linux,
+/// and BSD system-font discovery.
+#[tauri::command]
+pub async fn system_fonts() -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut database = fontdb::Database::new();
+        database.load_system_fonts();
+        let families: Vec<String> = database
+            .faces()
+            .flat_map(|face| face.families.iter().map(|(name, _)| name.clone()))
+            .collect();
+        normalize_font_families(families)
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+fn normalize_font_families(mut families: Vec<String>) -> Vec<String> {
+    families.sort_by(|left, right| {
+        left.to_lowercase()
+            .cmp(&right.to_lowercase())
+            .then_with(|| left.cmp(right))
+    });
+    families.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    families
+}
+
+#[cfg(test)]
+mod font_tests {
+    use super::normalize_font_families;
+
+    #[test]
+    fn font_families_are_sorted_and_deduplicated_case_insensitively() {
+        assert_eq!(
+            normalize_font_families(vec![
+                "Verdana".into(),
+                "arial".into(),
+                "Arial".into(),
+                "Consolas".into(),
+            ]),
+            vec!["Arial", "Consolas", "Verdana"]
+        );
+    }
+}
+
 /// The bundled help/scripting guide, embedded at build time.
 const HELP_HTML: &str = include_str!("../../public/help.html");
 
