@@ -66,6 +66,7 @@
   <a href="#people">People &amp; away</a>
   <a href="#channels">Channels</a>
   <a href="#customise">Customising</a>
+  <a href="#settings">Settings overview</a>
   <a href="#css">Custom CSS cheat sheet</a>
   <a href="#security">Security &amp; data</a>
   <h2>Scripting — basics</h2>
@@ -83,6 +84,7 @@
   <a href="#events">Events (on …)</a>
   <a href="#groups">Script groups</a>
   <a href="#popups">Popup menus</a>
+  <a href="#custom-windows">Custom @windows</a>
   <a href="#dialogs">Dialogs</a>
   <a href="#timers">Timers</a>
   <h2>Reference</h2>
@@ -92,33 +94,41 @@
   <a href="#files">Files</a>
   <a href="#hash">Hash tables</a>
   <a href="#sockets">Sockets</a>
+  <a href="#webviews">Script WebViews</a>
+  <a href="#dccserver">DCC Server</a>
   <h2>Notes</h2>
   <a href="#safety">Safety (text stays text)</a>
-  <a href="#limits">What's not supported</a>
+  <a href="#limits">Compatibility limits</a>
   <h2>About</h2>
   <a href="#thanks">Thanks &amp; credits</a>
 </nav>
 
 <main>
 <h1>jIRC — Help &amp; Guide
-  <span class="sub">Using the client, and the full mIRC-style scripting reference</span>
+  <span class="sub">Using the client, with a practical reference for its mIRC-style scripting</span>
 </h1>
 
 <p>jIRC is a modern, cross-platform IRC client that speaks standard IRC (RFC
 1459/2812 + IRCv3) and <strong>IRCX</strong>, with a built-in mIRC-style scripting
 engine. The first part of this guide covers <strong>using the app</strong>; the
-second part is the complete <a href="#intro">scripting reference</a>.</p>
+second part is a practical <a href="#intro">scripting reference</a> for the
+features jIRC implements today.</p>
 
 <h2 id="connect">Connecting to a server</h2>
 <ul>
   <li>Click <strong>+</strong> (or "Connect") to open the connect dialog. Enter the
     server host and port, tick <strong>TLS</strong> for a secure connection, set your
     nick (and an alternative used if it's taken), and any channels to auto-join.</li>
+  <li>The advanced connection fields support server passwords, NickServ,
+    SOCKS5 proxies, PEM client certificates, SASL
+    <strong>PLAIN / EXTERNAL / SCRAM-SHA-256 / OAUTHBEARER</strong>, and IRCX
+    <strong>NTLM / ANON</strong> authentication.</li>
   <li>Saved servers appear in a dropdown — pick one and connect, or delete it.</li>
   <li>You can connect to <strong>several servers at once</strong>; each gets its own
     console and windows, and auto-reconnects if dropped.</li>
-  <li>Passwords (server / NickServ) are stored in your <strong>OS keyring</strong>,
-    not in plain text.</li>
+  <li>Passwords and OAuth tokens normally use your <strong>OS keyring</strong>.
+    If Linux/BSD has no Secret Service provider, the connect dialog clearly
+    offers the less-secure profile-file fallback.</li>
 </ul>
 
 <h2 id="interface">The interface</h2>
@@ -129,6 +139,11 @@ second part is the complete <a href="#intro">scripting reference</a>.</p>
     chats (queries) open as their own windows.</li>
   <li>The <strong>nick list</strong> (right side of a channel) shows members with their
     rank prefixes; the <strong>topic bar</strong> shows/edits the topic.</li>
+  <li>Use a window's pop-out control to move a status, channel, query, or custom
+    <code>@window</code> into its own resizable OS window. Dock it to return it
+    to the main application.</li>
+  <li>The Scripts editor can also be popped out into a separate resizable window,
+    so it can stay beside the chat client while you work.</li>
   <li>Buttons top-left: <code>⟨⟩</code> scripts, <code>⚙</code> settings, <code>+</code> add a connection.</li>
 </ul>
 
@@ -146,6 +161,7 @@ are commands. Common ones:</p>
   <tr><td><code>/list</code> · <code>/listx</code></td><td>browse the channel list (IRCX <code>/listx</code>)</td></tr>
   <tr><td><code>/away [msg]</code></td><td>set / clear away (or use the Away button)</td></tr>
   <tr><td><code>/ignore nick</code> · <code>/unignore</code></td><td>hide / unhide someone</td></tr>
+  <tr><td><code>/dcc chat nick</code> · <code>/dcc send nick file</code></td><td>start DCC chat / send a file</td></tr>
   <tr><td><code>/raw line</code></td><td>send a raw IRC line</td></tr>
 </table>
 <p>Anything jIRC doesn't recognise is passed to your scripts (an alias) and then to
@@ -196,10 +212,25 @@ highlighted with a count; Enter / Shift+Enter jump to the next / previous; Esc c
     cheat sheet) to restyle <em>anything</em> — colours, fonts, spacing, hide elements —
     applied live. There's a Reset button if you go too far.</li>
   <li><strong>Custom dialogs &amp; popups</strong> let scripts build their own UI — see the scripting section.</li>
+  <li><strong>Chat font:</strong> enter a font-family name and optional pixel size
+    in Settings → Appearance.</li>
   <li><strong>Timestamps:</strong> Settings → Appearance offers inline
       <code>timestamp nickname message</code>, a centered timestamp divider
       when the minute changes, or timestamps off.</li>
 </ul>
+
+<h2 id="settings">Settings overview</h2>
+<table>
+  <tr><th>Page</th><th>What you can configure</th></tr>
+  <tr><td><strong>Appearance</strong></td><td>Dark/light/system theme, tree or switchbar layout, nick colour, chat font and size, quit message, timestamp mode, join/part visibility, custom emoji, and live custom CSS.</td></tr>
+  <tr><td><strong>Alerts</strong></td><td>Desktop mention/private-message notifications, highlight words, watched nicks, and nick/hostmask ignores.</td></tr>
+  <tr><td><strong>Behaviour</strong></td><td>Rejoin and window-retention behaviour, away changes, data-folder location, DCC IP/port/passive settings, and DCC Server services.</td></tr>
+  <tr><td><strong>Users</strong></td><td>Persistent mSL user/access levels plus automatic op, voice, and protection lists.</td></tr>
+  <tr><td><strong>Server</strong></td><td>MOTD, ping/pong and raw tracing visibility, plus outbound flood protection.</td></tr>
+</table>
+<p>The data folder can be redirected, or made portable by placing
+<code>portable.txt</code> beside the executable. A custom location takes effect
+after restart and does not move existing files automatically.</p>
 
 <h2 id="css">Custom CSS cheat sheet</h2>
 <p>The whole app is drawn with CSS, so you can restyle <em>anything</em> from
@@ -261,7 +292,8 @@ part for fine control. Made a mess? Hit <strong>Reset</strong> in the settings p
     credential-free <strong>ANON</strong> packages. Choose
     <em>None / script-managed</em> for network-specific GateKeeper scripts.</li>
   <li>Passwords live in the <strong>OS keyring</strong> (Windows Credential Manager / macOS
-    Keychain / Linux Secret Service), never in plain files.</li>
+    Keychain / Linux Secret Service). On Linux/BSD without Secret Service, jIRC warns
+    before allowing a profile-file fallback.</li>
   <li>Server profiles: <code>profiles.json</code>; scripts: <code>scripts/*.mrc</code>;
     chat logs: <code>logs/&lt;network&gt;/&lt;buffer&gt;.log</code> — all under the app config/data dir.</li>
 </ul>
@@ -273,7 +305,7 @@ part for fine control. Made a mess? Hit <strong>Reset</strong> in the settings p
 timers, PCRE2 regex, sandboxed file I/O, TCP/UDP sockets, playback queues, and DCC.</p>
 <div class="note warn">
 This is a <strong>subset</strong> of mIRC — not 100% compatible. See
-<a href="#limits">What's not supported</a> for the boundaries.
+<a href="#limits">Compatibility limits</a> for the boundaries.
 </div>
 
 <h2 id="intro">Introduction</h2>
@@ -289,6 +321,10 @@ from another.</p>
   <li>The editor highlights mSL commands, identifiers, variables, strings, numbers,
       channels, and comments. Choose VS Code Dark+, VS Code Light+, Monokai, or
       Solarized Dark from the editor toolbar; the choice is remembered.</li>
+  <li>Unmatched braces, parentheses, brackets, strings, and block comments are
+      marked as diagnostics while you type. Press <strong>Ctrl/Cmd+S</strong> to save.</li>
+  <li>Click <strong>Pop out</strong> to move the editor into its own resizable OS
+      window. Unsaved drafts are retained while switching files or windows.</li>
   <li>On disk they're under the app config folder:
     <ul>
       <li><strong>Windows:</strong> <code>%APPDATA%\jIRC\scripts\</code></li>
@@ -481,6 +517,10 @@ matches exactly one word. So <code>on *:TEXT:!weather &amp;:#:</code> triggers o
   <tr><td><code>PARSELINE</code></td><td>a raw incoming/outgoing line is intercepted before protocol handling</td><td><code>$parseline $parsetype $parseutf $parseem</code></td></tr>
   <tr><td><code>SOCKOPEN SOCKREAD SOCKWRITE SOCKLISTEN SOCKCLOSE UDPREAD</code></td><td>a script socket changes state or has I/O ready</td><td><code>$sockname $sockerr $sockbr $1-</code></td></tr>
   <tr><td><code>CHAT FILESENT FILERCVD GETFAIL SENDFAIL</code></td><td>DCC chat or file-transfer activity</td><td><code>$nick $filename $dccid $1-</code></td></tr>
+  <tr><td><code>DCCSERVER</code></td><td>a direct DCC Server request arrives, before it is accepted</td><td><code>$nick $address $filename $dccport</code>; <code>/halt</code> rejects it</td></tr>
+  <tr><td><code>DIALOG</code></td><td>a custom dialog initializes, changes, is clicked, scrolled, or closes</td><td><code>$dname $devent $did</code></td></tr>
+  <tr><td><code>WEBVIEW</code></td><td>a managed script browser opens, navigates, returns cookies, closes, or errors</td><td><code>$1-</code> event data</td></tr>
+  <tr><td><code>SCROLL DROP MOUSE SCLICK DCLICK UCLICK RCLICK LEAVE LBCLICK</code></td><td>a custom <code>@window</code> is scrolled, receives a drop, mouse action, or listbox click</td><td><code>$mouse</code>, event parameters</td></tr>
 </table>
 
 <h3>Examples</h3>
@@ -534,8 +574,10 @@ name matches (wildcards allowed). In the handler, <code>$signal</code> is the na
 
 <h3>More commands</h3>
 <ul>
-  <li><code>/alias &lt;name&gt; &lt;commands&gt;</code> defines a single-line alias at runtime;
-      <code>/alias &lt;name&gt;</code> with no commands removes it.</li>
+  <li><code>/alias [-l] [file.mrc] &lt;name&gt; [commands]</code> defines a
+      single-line alias at runtime; no commands removes it. <code>-l</code>
+      makes it local, an optional filename stores it in that script, and the
+      alias name may be written with or without its leading slash.</li>
   <li><code>/anick</code>, <code>/mnick</code>, <code>/fullname</code> set your alternate nick,
       main nick and full name (read back as <code>$anick</code>/<code>$mnick</code>/<code>$fullname</code>).</li>
   <li><code>/autojoin -n|-s|-dN</code> — use in <code>on CONNECT</code> to join now, skip, or
@@ -808,7 +850,8 @@ are intentionally not exposed.</p>
   <tr><td><code>/play [switches] [target] file [delay]</code></td><td>Queue file lines as messages, notices, commands, or alias calls; inspect with <code>$play</code>/<code>$pnick</code>.</td></tr>
   <tr><td><code>/sockopen /socklisten /sockudp /sockwrite /sockread /sockclose</code></td><td>TCP, UDP, direct TLS and STARTTLS sockets (see Sockets).</td></tr>
   <tr><td><code>/parseline [switches] line</code></td><td>Replace or queue a byte-preserving incoming/outgoing protocol line from <code>on PARSELINE</code>.</td></tr>
-  <tr><td><code>/dcc chat|send|get|close|retry</code></td><td>DCC chat and file transfer, including resume and passive/reverse negotiation.</td></tr>
+  <tr><td><code>/dcc chat|send|get|fserve|close|retry</code></td><td>DCC chat, files, passive/reverse negotiation, resume, and direct <code>IP[:port]</code> DCC Server clients.</td></tr>
+  <tr><td><code>/dccserver [+scf] on [port]</code> · <code>/dccserver off</code></td><td>Start or stop direct DCC Server services (Send, Chat, Fileserver).</td></tr>
   <tr><td><code>/fserve nick maxgets homedir [welcome]</code></td><td>Offer a sandboxed DCC file server rooted under <code>scriptdata</code>.</td></tr>
   <tr><td><code>/dialog /did</code></td><td>Open/manage a custom dialog (see Dialogs).</td></tr>
   <tr><td><code>/nickicon nick icon</code></td><td>Badge a nick in the nick list (emoji or image URL).</td></tr>
@@ -819,15 +862,15 @@ are intentionally not exposed.</p>
   <tr><td><code>/goto label</code></td><td>Jump to a <code>:label</code> (see Control flow).</td></tr>
   <tr><td><code>/halt</code></td><td>Stop the script (in <code>on INPUT</code>, suppresses the line).</td></tr>
   <tr><td><code>/enable /disable /groups</code></td><td>Turn script groups on/off (wildcards); list them (see Script groups).</td></tr>
-  <tr><td><code>/alias &lt;name&gt; [cmds]</code></td><td>Define — or, with no commands, remove — a single-line alias at runtime.</td></tr>
+  <tr><td><code>/alias [-l] [file.mrc] &lt;name&gt; [cmds]</code></td><td>Define or remove a runtime alias; supports local aliases, a destination script, and names with an optional leading slash.</td></tr>
   <tr><td><code>/signal &lt;name&gt; [params]</code></td><td>Fire matching <code>on SIGNAL</code> handlers (<code>$signal</code>, <code>$1-</code>).</td></tr>
   <tr><td><code>/anick /mnick /fullname</code></td><td>Set your alternate nick, main nick, full name.</td></tr>
   <tr><td><code>/autojoin -n|-s|-dN</code></td><td>In <code>on CONNECT</code>: join now / skip / delay the autojoin.</td></tr>
   <tr><td><code>/reload</code> · <code>/unsetall</code></td><td>Recompile all scripts · clear all variables.</td></tr>
   <tr><td><code>/scon N cmd</code> · <code>/scid cid cmd</code></td><td>Run a command on another connection — by index / by <code>$cid</code> — in that connection's context.</td></tr>
 </table>
-<div class="note">Unrecognized <em>client-side</em> commands (window/display/sound, e.g.
-<code>/clear</code>, <code>/beep</code>, <code>/run</code>) are quietly ignored
+<div class="note">Unrecognized <em>client-side</em> commands (unsupported display/sound/launch
+commands such as <code>/beep</code>, <code>/splay</code>, or <code>/run</code>) are quietly ignored
 so dropped-in scripts don't error. Anything else that isn't a built-in or one of your
 aliases is sent to the server as a raw IRC command — so real IRC commands like
 <code>/whois</code> or <code>/list</code> work, but a typo like <code>/joimn</code> still
@@ -1180,7 +1223,7 @@ just says "<code>hi there | quit hacked!</code>" and nothing bad happens.</p>
 <p>The upshot: you don't need mIRC's <code>$safe</code>/<code>$unsafe</code>
 work-arounds in jIRC — text from other people, or from files, stays text.</p>
 
-<h2 id="limits">What's not supported</h2>
+<h2 id="limits">Compatibility limits</h2>
 
 <h3>Intentionally left out (by design)</h3>
 <div class="note bad">
@@ -1197,7 +1240,7 @@ native code.</p>
 
 <h3>Now supported</h3>
 <div class="note">
-Landed since early builds — these <strong>do</strong> work now: custom
+Landed since early builds — these <strong>do</strong> work now: detachable custom
 <code>@windows</code>, binary variables
 (<code>&amp;binvar</code>/<code>$bvar</code>/<code>/bset</code>), <code>$regsubex</code>,
 crypto (<code>$md5</code>/<code>$sha1</code>/<code>$hmac</code>), <code>$input</code>,
@@ -1205,23 +1248,24 @@ crypto (<code>$md5</code>/<code>$sha1</code>/<code>$hmac</code>), <code>$input</
 <code>.property</code> suffixes (<code>$sock(x).status</code>, <code>$hget(t,N).item</code>),
 IRCX owner/host keys, <strong>user access lists</strong>
 (<code>/auser</code>/<code>$ulevel</code> + level-gated events like <code>on 10:TEXT</code>),
-<strong>dynamic variables</strong> (<code>%v. [ $+ [ $nick ] ]</code>), and window /
+<strong>dynamic variables</strong> (<code>%v. [ $+ [ $nick ] ]</code>), full
+cross-platform custom dialogs, and window /
 notify / lifecycle events (<code>on OPEN</code>/<code>CLOSE</code>/<code>NOTIFY</code>/<code>START</code>/<code>EXIT</code>).
 Also supported: DCC chat/send/get/resume/passive transfers and DCC Server,
 <code>/play</code>,
 PARSELINE, UDP/STARTTLS script sockets, IRCv3 account tags/batches/labeled
 responses/chat history negotiation, and SASL
 EXTERNAL/SCRAM-SHA-256/OAUTHBEARER.
-Some aren't in the reference tables above yet.
 </div>
 
 <h3>Not yet (may come later)</h3>
 <div class="note warn">
 Planned or possible future work — scripts using these won't work today:
 <ul style="margin:.5rem 0 0">
-  <li>Richer script panel controls beyond the current safe text and button controls.</li>
-  <li>A few <strong>property suffixes</strong> such as <code>$chan(#).topic</code> — most
-    now work, just not every one.</li>
+  <li>Richer docked script-panel controls beyond the current safe text and button controls.</li>
+  <li>A few uncommon <strong>property suffixes</strong>; the commonly used
+    channel, nick, query, socket, hash, dialog, file, timer, play, and window
+    properties are implemented.</li>
   <li>A long tail of rarely-used cross-platform identifiers and commands.</li>
 </ul>
 </div>

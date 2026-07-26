@@ -12,6 +12,16 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 📚 26.7.69 — Help guide refresh
+
+- Audited the complete built-in guide against the current client and scripting
+  engine.
+- Documented detached chat/script windows, editor themes and diagnostics,
+  settings pages, current authentication, newer script events, DCC Server, and
+  the complete runtime `/alias` syntax.
+- Removed outdated claims about `/clear`, dialog support, identifier properties,
+  and unconditional keyring availability.
+
 ## 🔐 26.7.68 — Broader IRCv3 and IRCX authentication
 
 - Added TLS-only **SASL OAUTHBEARER** authentication. Access tokens use the
