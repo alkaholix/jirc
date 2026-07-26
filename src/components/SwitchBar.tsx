@@ -60,13 +60,13 @@ export function SwitchBar({
   onOpenSettings,
   onOpenScripts,
   onOpenAutoJoin,
-  onOpenHelp,
+  onOpenAbout,
 }: {
   onAddServer: () => void;
   onOpenSettings: () => void;
   onOpenScripts: () => void;
   onOpenAutoJoin: () => void;
-  onOpenHelp: () => void;
+  onOpenAbout: () => void;
 }) {
   const buffers = useStore((s) => s.buffers);
   const order = useStore((s) => s.order);
@@ -75,7 +75,7 @@ export function SwitchBar({
   return (
     <div className="switchbar">
       <div className="switchbar-actions">
-        <button className="icon-btn" onClick={onOpenHelp} title="Help">
+        <button className="icon-btn" onClick={onOpenAbout} title="About jIRC">
           ?
         </button>
         <button className="icon-btn" onClick={onOpenScripts} title="Scripts">

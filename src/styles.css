@@ -1100,6 +1100,31 @@ img.nick-icon {
 .chooser-modal {
   text-align: center;
 }
+.about-modal {
+  max-width: 430px;
+  text-align: center;
+}
+.about-mark {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 12px;
+  border-radius: 18px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: linear-gradient(145deg, var(--accent), #315c9e);
+  font-size: 1.25rem;
+  font-weight: 800;
+  letter-spacing: -.04em;
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.about-version {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.about-modal .modal-actions {
+  justify-content: center;
+}
 .chooser-lead {
   color: var(--muted);
   margin: 0 0 1.2rem;

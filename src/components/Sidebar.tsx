@@ -88,13 +88,13 @@ export function Sidebar({
   onOpenSettings,
   onOpenScripts,
   onOpenAutoJoin,
-  onOpenHelp,
+  onOpenAbout,
 }: {
   onAddServer: () => void;
   onOpenSettings: () => void;
   onOpenScripts: () => void;
   onOpenAutoJoin: () => void;
-  onOpenHelp: () => void;
+  onOpenAbout: () => void;
 }) {
   const servers = useStore((s) => s.servers);
   const buffers = useStore((s) => s.buffers);
@@ -114,7 +114,7 @@ export function Sidebar({
       <div className="sidebar-header">
         <span>jIRC</span>
         <div className="header-actions">
-          <button className="icon-btn" onClick={onOpenHelp} title="Help">
+          <button className="icon-btn" onClick={onOpenAbout} title="About jIRC">
             ?
           </button>
           <button className="icon-btn" onClick={onOpenScripts} title="Scripts">

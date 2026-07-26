@@ -12,6 +12,7 @@ import { NickList } from "./components/NickList";
 import { InputBar } from "./components/InputBar";
 import { ConnectDialog } from "./components/ConnectDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
+import { AboutDialog } from "./components/AboutDialog";
 import { ChannelListDialog } from "./components/ChannelListDialog";
 import { AutoJoinDialog } from "./components/AutoJoinDialog";
 import { TransfersPanel } from "./components/TransfersPanel";
@@ -106,6 +107,7 @@ function MainApp() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [chooserOpen, setChooserOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [scriptOpen, setScriptOpen] = useState(false);
   const [autoJoinOpen, setAutoJoinOpen] = useState(false);
   const [detachedKey] = useState(() => thisWindowBufferKey());
@@ -417,7 +419,7 @@ function MainApp() {
     onOpenSettings: () => setSettingsOpen(true),
     onOpenScripts: () => setScriptOpen(true),
     onOpenAutoJoin: () => setAutoJoinOpen(true),
-    onOpenHelp: () => api.openHelp().catch(() => {}),
+    onOpenAbout: () => setAboutOpen(true),
   };
 
   return (
@@ -511,6 +513,7 @@ function MainApp() {
       )}
       {dialogOpen && <ConnectDialog onClose={() => setDialogOpen(false)} onConnect={onConnect} />}
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+      {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
       {scriptOpen && <ScriptEditorDialog onClose={() => setScriptOpen(false)} />}
       {autoJoinOpen && <AutoJoinDialog onClose={() => setAutoJoinOpen(false)} />}
       <ChannelListDialog />
