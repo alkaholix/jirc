@@ -12,6 +12,11 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🧪 26.7.76 — Updater test release
+
+- Test release for verifying the complete signed in-app update path from
+  version 26.7.75.
+
 ## 🔄 26.7.75 — Signed application updates
 
 - Added a cross-platform signed updater under Settings → Behaviour, including
