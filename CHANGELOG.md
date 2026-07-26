@@ -12,6 +12,14 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## ▶️ 26.7.84 — Perform commands on connect
+
+- Saved server profiles now include an ordered, multi-line Perform command list.
+- Commands run through the normal mSL command and alias engine after
+  `on CONNECT` and before automatic channel joins, with identifiers such as
+  `$me` available.
+- Existing profiles remain compatible and default to an empty Perform list.
+
 ## ✍️ 26.7.83 — Message spell checking
 
 - Added platform-native spell checking to the message box, including the normal

@@ -540,6 +540,7 @@ mod tests {
             ntlm_user: None,
             ntlm_password: None,
             autojoin: vec![],
+            perform: vec![],
         }
     }
 

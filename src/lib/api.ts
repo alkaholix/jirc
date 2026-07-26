@@ -36,6 +36,7 @@ export interface ServerProfile {
   ntlmUser?: string;
   ntlmPassword?: string;
   autojoin: string[];
+  perform?: string[];
 }
 
 export interface DataLocation {

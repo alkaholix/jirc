@@ -109,6 +109,9 @@ pub struct ServerProfile {
     /// Channels to join automatically after registration.
     #[serde(default)]
     pub autojoin: Vec<String>,
+    /// Client/script commands run in order after registration and `on CONNECT`.
+    #[serde(default)]
+    pub perform: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -170,6 +173,7 @@ mod tests {
         assert_eq!(profile.sasl_mechanism, SaslMechanism::Plain);
         assert!(profile.tls_client_cert_path.is_none());
         assert!(profile.tls_client_key_path.is_none());
+        assert!(profile.perform.is_empty());
     }
 
     #[test]

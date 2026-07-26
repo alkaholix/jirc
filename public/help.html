@@ -204,6 +204,15 @@ click <strong>Install</strong> to download the update, verify its signature,
 install it, and restart jIRC. The first updater-enabled release must be
 installed manually; releases after that can use the in-app updater.</p>
 
+<h2 id="perform">Perform commands on connect</h2>
+<p>Each saved server profile can run an ordered list of commands after
+registration. Open the connection dialog, select a saved server, and enter one
+command per line under <strong>Perform commands after connecting</strong>.
+A leading <code>/</code> is optional. Commands use the normal mSL command and
+alias engine, so identifiers such as <code>$me</code> work. The list runs after
+<code>on CONNECT</code> scripts and before the profile's automatic channel
+joins. Blank lines are ignored.</p>
+
 <h2 id="find">Find in buffer</h2>
 <p>Press <strong>Ctrl/Cmd+F</strong> to search the current window. Matches are
 highlighted with a count; Enter / Shift+Enter jump to the next / previous; Esc closes.</p>

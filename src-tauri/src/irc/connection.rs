@@ -83,6 +83,8 @@ pub struct Effects {
     /// The connection task performs the JOINs, honoring `/autojoin` (`-s` skip,
     /// `-dN` delay) — so a script can control them from within `on CONNECT`.
     pub autojoin: Vec<String>,
+    /// Profile commands to run after `on CONNECT` and before automatic joins.
+    pub perform: Vec<String>,
     /// Parsed CTCP DCC negotiation, consumed by the stateful DCC manager in the
     /// async loop while keeping `process_message` itself pure and testable.
     pub dcc_message: Option<(String, crate::irc::dcc::DccMessage)>,
@@ -444,6 +446,19 @@ async fn handle_incoming_line<W: AsyncWrite + Unpin>(
             true
         }
     });
+    if !effects.perform.is_empty() {
+        if let Some(engine) = app.try_state::<crate::script::ScriptEngine>() {
+            let snapshot = state.snapshot();
+            let run_ctx = crate::script::RunCtx {
+                my_nick: &state.nick,
+                network: &profile.name,
+                server: &profile.host,
+                data_dir: crate::script::script_data_dir(app),
+                state: std::sync::Arc::new(snapshot),
+            };
+            script_actions.extend(run_perform_commands(&engine, &run_ctx, &effects.perform));
+        }
+    }
 
     for out in effects.outgoing {
         write_parsed_line(
@@ -489,19 +504,10 @@ async fn handle_incoming_line<W: AsyncWrite + Unpin>(
                 }
             });
         } else {
-            for channel in effects.autojoin {
-                write_parsed_line(
-                    w,
-                    app,
-                    server_id,
-                    profile,
-                    state,
-                    format!("JOIN {channel}").as_bytes(),
-                    true,
-                    true,
-                    true,
-                )
-                .await;
+            if let Some(manager) = app.try_state::<crate::irc::ConnectionManager>() {
+                for channel in effects.autojoin {
+                    let _ = manager.send(server_id, format!("JOIN {channel}"));
+                }
             }
         }
     }
@@ -998,6 +1004,17 @@ fn run_scripts(
             .extend(crate::script::drive_event_halt_raw(&engine, &ctx, ev, raw_context.as_ref()).0);
     }
     (actions, suppressed)
+}
+
+fn run_perform_commands(
+    engine: &crate::script::ScriptEngine,
+    ctx: &crate::script::RunCtx<'_>,
+    commands: &[String],
+) -> Vec<crate::script::eval::Action> {
+    commands
+        .iter()
+        .flat_map(|command| engine.run_command(ctx, "", command, &[]))
+        .collect()
 }
 
 /// Splits a raw IRC line into its command/numeric and parameters. An optional
@@ -1917,6 +1934,7 @@ fn handle_numeric(ctx: &mut Context, fx: &mut Effects, resp: Response, args: &[S
             // Defer the autojoin until after `on CONNECT` runs, so a script can
             // skip/delay it with `/autojoin`. The connection task does the JOINs.
             fx.autojoin = ctx.profile.autojoin.clone();
+            fx.perform = ctx.profile.perform.clone();
         }
         Response::RPL_SASLSUCCESS => {
             fx.outgoing.extend(auth::on_sasl_result(ctx.auth, true));
@@ -2447,7 +2465,42 @@ mod tests {
             ntlm_user: None,
             ntlm_password: None,
             autojoin: vec![],
+            perform: vec![],
         }
+    }
+
+    #[test]
+    fn perform_commands_run_in_order_with_connection_context() {
+        let engine = crate::script::ScriptEngine::new();
+        let state = SessionState {
+            nick: "me".into(),
+            ..Default::default()
+        };
+        let data_dir = std::env::temp_dir().join("jirc-perform-test");
+        let ctx = crate::script::RunCtx {
+            my_nick: "me",
+            network: "TestNet",
+            server: "irc.example.test",
+            data_dir,
+            state: std::sync::Arc::new(state.snapshot()),
+        };
+        let actions = run_perform_commands(
+            &engine,
+            &ctx,
+            &[
+                "mode $me +i".into(),
+                "msg NickServ network=$network".into(),
+            ],
+        );
+        assert_eq!(
+            actions,
+            vec![
+                crate::script::eval::Action::Send("MODE me +i".into()),
+                crate::script::eval::Action::Send(
+                    "PRIVMSG NickServ :network=TestNet".into()
+                ),
+            ]
+        );
     }
 
     fn run_line(
@@ -3572,6 +3625,7 @@ mod tests {
     fn welcome_triggers_autojoin() {
         let mut p = profile();
         p.autojoin = vec!["#jirc".into()];
+        p.perform = vec!["mode $me +i".into(), "msg NickServ STATUS".into()];
         let mut s = SessionState::default();
         let mut accum = HashMap::new();
         let mut whois = HashMap::new();
@@ -3592,6 +3646,10 @@ mod tests {
         // The autojoin is deferred to the connection task (after `on CONNECT`),
         // so it's reported via `fx.autojoin`, not sent inline.
         assert_eq!(fx.autojoin, vec!["#jirc".to_string()]);
+        assert_eq!(
+            fx.perform,
+            vec!["mode $me +i".to_string(), "msg NickServ STATUS".to_string()]
+        );
         assert!(!fx.outgoing.iter().any(|l| l.starts_with("JOIN")));
         assert_eq!(s.nick, "me");
     }

@@ -220,6 +220,7 @@ function MainApp() {
           ircx: false,
           autoReconnect: scriptServerAutoReconnect(o.host),
           autojoin: [],
+          perform: [],
         };
         ensureServer(serverId, o.host);
         if (reuseSource) {

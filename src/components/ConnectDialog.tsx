@@ -10,6 +10,12 @@ interface Props {
 
 const DEFAULT_CHANNELS = "%#jIRC";
 
+export const parsePerformCommands = (value: string) =>
+  value
+    .split(/\r?\n/)
+    .map((command) => command.trim())
+    .filter(Boolean);
+
 const BLANK: ServerProfile = {
   name: "",
   host: "irc.irc7.com",
@@ -20,12 +26,14 @@ const BLANK: ServerProfile = {
   tls: false,
   autoReconnect: true,
   autojoin: [],
+  perform: [],
 };
 
 export function ConnectDialog({ onClose, onConnect }: Props) {
   const [saved, setSaved] = useState<ServerProfile[]>([]);
   const [form, setForm] = useState<ServerProfile>({ ...BLANK });
   const [channels, setChannels] = useState(DEFAULT_CHANNELS);
+  const [perform, setPerform] = useState("");
   const [selected, setSelected] = useState("");
 
   useEffect(() => {
@@ -35,6 +43,7 @@ export function ConnectDialog({ onClose, onConnect }: Props) {
   const load = (p: ServerProfile) => {
     setForm({ ...p });
     setChannels(p.autojoin.join(", "));
+    setPerform((p.perform ?? []).join("\n"));
   };
 
   const onSelectSaved = (name: string) => {
@@ -50,6 +59,7 @@ export function ConnectDialog({ onClose, onConnect }: Props) {
       .split(",")
       .map((c) => c.trim())
       .filter(Boolean),
+    perform: parsePerformCommands(perform),
   });
 
   const save = async () => {
@@ -77,6 +87,7 @@ export function ConnectDialog({ onClose, onConnect }: Props) {
     setSelected("");
     setForm({ ...BLANK });
     setChannels(DEFAULT_CHANNELS);
+    setPerform("");
   };
 
   const connect = async () => {
@@ -160,6 +171,19 @@ export function ConnectDialog({ onClose, onConnect }: Props) {
               onChange={(e) => setChannels(e.target.value)}
               placeholder="#chan1, #chan2"
             />
+          </label>
+          <label>
+            Perform commands after connecting
+            <textarea
+              value={perform}
+              onChange={(event) => setPerform(event.target.value)}
+              spellCheck={false}
+              placeholder={"/mode $me +i\n/msg NickServ STATUS"}
+            />
+            <span className="field-help">
+              One command per line. Commands run in order after on CONNECT and
+              before automatic channel joins; a leading slash is optional.
+            </span>
           </label>
 
           <div className="field-label">Authentication (optional)</div>
