@@ -12,6 +12,15 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 📝 26.7.70 — README refresh
+
+- Brought the public project overview up to date with current IRCv3, IRCX,
+  authentication, DCC, detachable-window, settings, and scripting support.
+- Corrected outdated claims about window layout, keyring fallback, application
+  data, the help guide's scope, and runtime `/alias` syntax.
+- Expanded the scripting summary to cover the editor, picture windows,
+  dialogs, managed WebViews, panels, sockets, and DCC Server.
+
 ## 📚 26.7.69 — Help guide refresh
 
 - Audited the complete built-in guide against the current client and scripting
