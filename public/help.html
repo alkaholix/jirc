@@ -968,6 +968,10 @@ goes to the server.</div>
   <tr><td><code>$server</code></td><td>server host</td></tr>
   <tr><td><code>$notify</code> · <code>$notify(0)</code> · <code>$notify(N/nick)</code></td><td>notify-list enabled state, count, Nth nick, or nick position; properties: <code>.ison</code>, <code>.addr</code></td></tr>
   <tr><td><code>$time</code> · <code>$date</code> · <code>$ctime</code></td><td>current time / date / unix seconds</td></tr>
+  <tr><td><code>$timestamp</code> · <code>$logstamp</code></td><td>the current local time in jIRC's timestamp form; <code>$timestampfmt</code> and <code>$logstampfmt</code> return the corresponding mSL format string</td></tr>
+  <tr><td><code>$ticks</code> · <code>$ticksqpc</code></td><td>process-relative millisecond counter · high-resolution counter</td></tr>
+  <tr><td><code>$uptime(mirc|server,N)</code></td><td>jIRC or current-server uptime; <code>N=1</code> duration, <code>N=2</code> without seconds, <code>N=3</code> seconds, otherwise milliseconds. <code>system</code> returns <code>$null</code> because no reliable portable boot clock is available.</td></tr>
+  <tr><td><code>$online</code> · <code>$onlineserver</code> · <code>$onlinetotal</code></td><td>seconds connected to the current server</td></tr>
   <tr><td><code>$true</code> · <code>$false</code> · <code>$null</code></td><td>constants</td></tr>
 </table>
 <h3>Channels &amp; members (state-aware)</h3>

@@ -12,6 +12,16 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## ⏱️ 26.7.90 — mSL time and runtime identifiers
+
+- Added `$timestamp`, `$timestampfmt`, `$logstamp`, and `$logstampfmt` using
+  jIRC's current local-time display format.
+- Added `$uptime(mirc|server,N)` with milliseconds, duration, compact duration,
+  and seconds return modes. `$uptime(system)` returns `$null` because a reliable
+  cross-platform system boot clock is not available through the current runtime.
+- Added `$onlineserver`, `$onlinetotal`, and high-resolution `$ticksqpc`
+  compatibility.
+
 ## 📐 26.7.89 — mSL geometry identifiers
 
 - Added `$intersect()` for line, ray, and segment intersection coordinates.

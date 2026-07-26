@@ -996,6 +996,27 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         // $ticks -> milliseconds since this process started (deltas are what
         // scripts use; the absolute base differs from mIRC's OS-boot base).
         "ticks" => ticks().to_string(),
+        "timestamp" | "logstamp" => chrono::Local::now().format("[%H:%M]").to_string(),
+        "timestampfmt" | "logstampfmt" => "[HH:nn]".to_string(),
+        "uptime" => {
+            let item = a(0).to_ascii_lowercase();
+            let milliseconds = match item.as_str() {
+                "mirc" => Some(ticks()),
+                "server" if rt.state.connect_time != 0 => {
+                    Some(now_secs().saturating_sub(rt.state.connect_time) * 1000)
+                }
+                // A portable system-boot clock is not available in std. Returning
+                // $null is safer than reporting the jIRC process as OS uptime.
+                "system" => None,
+                _ => None,
+            };
+            milliseconds.map_or_else(String::new, |milliseconds| match a(1).as_str() {
+                "1" => format_duration((milliseconds / 1000) as i64),
+                "2" => format_duration_without_seconds(milliseconds / 1000),
+                "3" => (milliseconds / 1000).to_string(),
+                _ => milliseconds.to_string(),
+            })
+        }
         "time" => chrono::Local::now().format("%H:%M:%S").to_string(),
         "date" => chrono::Local::now().format("%d/%m/%Y").to_string(),
         "fulldate" => chrono::Local::now()
@@ -1591,7 +1612,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "away" => bool_str(rt.state.away),
         "awaymsg" => rt.state.away_msg.clone(),
         // $online — seconds connected so far; $awaytime — unix time you went away.
-        "online" => {
+        "online" | "onlineserver" | "onlinetotal" => {
             let c = rt.state.connect_time;
             if c == 0 {
                 String::new()
@@ -3794,6 +3815,14 @@ fn format_duration(mut s: i64) -> String {
     out
 }
 
+fn format_duration_without_seconds(seconds: u64) -> String {
+    if seconds < 60 {
+        "0mins".to_string()
+    } else {
+        format_duration((seconds - seconds % 60) as i64)
+    }
+}
+
 /// `$base(N, frombase, tobase, [zeropad])` — integer base conversion, 2..=36.
 /// The fractional part (if any) is dropped; output digits A–Z are uppercase.
 fn base_convert(n: &str, inb: u32, outb: u32, zeropad: usize) -> String {
@@ -5785,6 +5814,8 @@ mod tests {
         assert_eq!(format_duration(1), "1sec");
         assert_eq!(format_duration(90), "1min30secs");
         assert_eq!(format_duration(90061), "1day1hr1min1sec");
+        assert_eq!(format_duration_without_seconds(30), "0mins");
+        assert_eq!(format_duration_without_seconds(3691), "1hr1min");
     }
 
     #[test]
@@ -5833,6 +5864,12 @@ mod tests {
         assert_eq!(e("round", &["3.14159", "2"]), "3.14");
         assert_eq!(e("round", &["3.6", "0"]), "4");
         assert_eq!(e("duration", &["3661"]), "1hr1min1sec");
+        assert_eq!(e("timestampfmt", &[]), "[HH:nn]");
+        assert_eq!(e("logstampfmt", &[]), "[HH:nn]");
+        assert!(e("timestamp", &[]).starts_with('['));
+        assert!(e("ticksqpc", &[]).parse::<u64>().is_ok());
+        assert!(e("uptime", &["mirc", "3"]).parse::<u64>().is_ok());
+        assert_eq!(e("uptime", &["system"]), "");
         assert_eq!(e("gettok", &["a.b.c.d", "2-3", "46"]), "b.c");
         // $r letter range stays within bounds
         let r = e("r", &["a", "a"]);
