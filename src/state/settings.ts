@@ -27,6 +27,8 @@ export interface Settings {
   /** Chat font family (empty = theme default) and size in px (0 = default). */
   chatFont: string;
   chatFontSize: number;
+  /** Show mIRC bold/italic/underline/colour controls beside the message input. */
+  showInputToolbar: boolean;
   /** Default /quit message when none is given. */
   quitMessage: string;
 
@@ -71,6 +73,7 @@ const DEFAULTS: Settings = {
   customCss: "",
   chatFont: "",
   chatFontSize: 0,
+  showInputToolbar: true,
   quitMessage: "",
 
   rejoinOnKick: false,

@@ -12,6 +12,15 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🎨 26.7.71 — Input formatting toolbar
+
+- Added optional message-input controls for mIRC bold, italic, underline,
+  foreground/background colour, and formatting reset codes.
+- Formatting wraps selected text or inserts at the caret, preserving focus and
+  selection for continued typing.
+- Added a Settings → Appearance toggle and responsive compact behavior for
+  narrow windows.
+
 ## 📝 26.7.70 — README refresh
 
 - Brought the public project overview up to date with current IRCv3, IRCX,

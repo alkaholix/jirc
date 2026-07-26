@@ -27,6 +27,7 @@ Linux) and speaking both **standard IRC** (RFC 1459/2812 + IRCv3) and
   Linux/BSD Secret Service is unavailable
 - **Chat UI** — collapsible **server tree** *or* **switchbar** (tabs) layout,
   nick list with prefix sorting/colours, full mIRC colour/format rendering,
+  an optional bold/italic/underline/foreground/background input toolbar,
   clickable URLs, per-buffer logging, desktop notifications & highlight words
 - **Detachable windows** — pop any status, channel, query, or `@window` out into its own
   OS window and dock it back with one click (beyond mIRC's in-app MDI)

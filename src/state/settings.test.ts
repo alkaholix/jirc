@@ -7,4 +7,9 @@ describe("timestamp settings migration", () => {
     expect(normalizeSavedSettings({ showTimestamps: true }).timestampMode).toBe("inline");
     expect(normalizeSavedSettings({ timestampMode: "divider" }).timestampMode).toBe("divider");
   });
+
+  it("enables the formatting toolbar for existing saved settings", () => {
+    expect(normalizeSavedSettings({}).showInputToolbar).toBe(true);
+    expect(normalizeSavedSettings({ showInputToolbar: false }).showInputToolbar).toBe(false);
+  });
 });

@@ -204,6 +204,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   placeholder="default"
                 />
               </label>
+              {toggle("showInputToolbar", "Show colour and formatting input toolbar")}
               <label className="inline">
                 Default quit message
                 <input
