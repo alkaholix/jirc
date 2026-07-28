@@ -254,6 +254,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               {toggle("showInputToolbar", "Show colour and formatting input toolbar")}
               <div className="row">
                 {toggle("spellCheck", "Check spelling while typing messages")}
+                {toggle("autoCorrect", "Auto-correct common typing mistakes")}
                 <label className="grow">
                   Spelling language
                   <select

@@ -683,6 +683,19 @@ select {
   justify-content: center;
   gap: 0.35rem;
 }
+.context-menu .spelling-suggestion {
+  color: var(--accent);
+  font-weight: 600;
+}
+.context-menu .menu-note {
+  padding: 0.2rem 0.5rem 0.3rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+.context-menu .colour-choices {
+  margin-top: 0.2rem;
+}
 .input-menu-palette {
   padding: 0.25rem 0.5rem;
   color: var(--muted);

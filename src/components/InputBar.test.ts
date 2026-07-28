@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { replaceInputSelection, spellCheckAttributes } from "./InputBar";
+import {
+  autoCorrectCompletedWord,
+  correctionAt,
+  replaceInputSelection,
+  spellCheckAttributes,
+} from "./InputBar";
 
 describe("message input spell checking", () => {
   it("follows the enabled setting and omits a language for the system default", () => {
@@ -22,6 +27,27 @@ describe("message input context-menu editing", () => {
     });
     expect(replaceInputSelection("hello ", 6, 6, "😀")).toEqual({
       value: "hello 😀",
+      caret: 8,
+    });
+  });
+
+  it("offers a correction for the word under the caret", () => {
+    expect(correctionAt("say hellp please", 8)).toEqual({
+      start: 4,
+      end: 9,
+      original: "hellp",
+      replacement: "hello",
+    });
+    expect(correctionAt("Helo", 2)?.replacement).toBe("Hello");
+  });
+
+  it("auto-corrects a word after its delimiter is typed", () => {
+    expect(autoCorrectCompletedWord("teh ", 4)).toEqual({
+      value: "the ",
+      caret: 4,
+    });
+    expect(autoCorrectCompletedWord("unknown ", 8)).toEqual({
+      value: "unknown ",
       caret: 8,
     });
   });

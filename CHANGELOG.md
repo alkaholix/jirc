@@ -12,6 +12,15 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## ✍️ 26.7.92 — Cleaner message spelling menu
+
+- Reordered and condensed the message-box menu, keeping colour palettes hidden
+  until Text colour or Background is selected.
+- Added one-click suggestions for common misspellings, including corrections
+  such as `helo` and `hellp` to `hello`.
+- Added optional automatic correction of conservative common typing mistakes.
+  Shift+right-click opens the platform WebView's full spelling menu.
+
 ## 🌐 26.7.91 — mSL runtime and network state
 
 - Added `$portfree(port[,ip])` with IPv4 and IPv6 interface support.

@@ -15,6 +15,7 @@ describe("timestamp settings migration", () => {
 
   it("enables native spell checking for existing settings and preserves language choices", () => {
     expect(normalizeSavedSettings({}).spellCheck).toBe(true);
+    expect(normalizeSavedSettings({}).autoCorrect).toBe(false);
     expect(normalizeSavedSettings({}).spellCheckLanguage).toBe("");
     expect(
       normalizeSavedSettings({

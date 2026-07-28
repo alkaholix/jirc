@@ -1,4 +1,4 @@
-import { KeyboardEvent, MouseEvent, useEffect, useRef, useState } from "react";
+import { ChangeEvent, KeyboardEvent, MouseEvent, useEffect, useRef, useState } from "react";
 import { Buffer } from "../state/store";
 import { handleInput } from "../lib/slash";
 import { emojiPicker } from "../lib/emoji";
@@ -28,6 +28,66 @@ const IRC_COLOR_NAMES = [
 ];
 const DEFAULT_FOREGROUND = 1;
 
+const COMMON_CORRECTIONS: Record<string, string> = {
+  adn: "and",
+  becuase: "because",
+  definately: "definitely",
+  dont: "don't",
+  helo: "hello",
+  heloo: "hello",
+  helllo: "hello",
+  hellp: "hello",
+  hllo: "hello",
+  hlelo: "hello",
+  recieve: "receive",
+  teh: "the",
+  thier: "their",
+  wierd: "weird",
+  wont: "won't",
+  wouldnt: "wouldn't",
+};
+
+export interface WordCorrection {
+  start: number;
+  end: number;
+  original: string;
+  replacement: string;
+}
+
+function matchCase(original: string, replacement: string): string {
+  if (original === original.toUpperCase()) return replacement.toUpperCase();
+  if (original[0] === original[0]?.toUpperCase()) {
+    return replacement[0]?.toUpperCase() + replacement.slice(1);
+  }
+  return replacement;
+}
+
+export function correctionAt(value: string, caret: number): WordCorrection | null {
+  const safeCaret = Math.max(0, Math.min(caret, value.length));
+  let start = safeCaret;
+  let end = safeCaret;
+  while (start > 0 && /[A-Za-z']/.test(value[start - 1])) start -= 1;
+  while (end < value.length && /[A-Za-z']/.test(value[end])) end += 1;
+  const original = value.slice(start, end);
+  const replacement = COMMON_CORRECTIONS[original.toLowerCase()];
+  if (!original || !replacement) return null;
+  return { start, end, original, replacement: matchCase(original, replacement) };
+}
+
+export function autoCorrectCompletedWord(value: string, caret: number) {
+  const completedAt = Math.max(0, Math.min(caret - 1, value.length));
+  const correction = correctionAt(value, completedAt);
+  if (!correction || correction.end !== completedAt) return { value, caret };
+  const next =
+    value.slice(0, correction.start) +
+    correction.replacement +
+    value.slice(correction.end);
+  return {
+    value: next,
+    caret: caret + correction.replacement.length - correction.original.length,
+  };
+}
+
 export function spellCheckAttributes(enabled: boolean, language: string) {
   return {
     spellCheck: enabled,
@@ -56,9 +116,15 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
     foreground: number;
     background?: number;
   } | null>(null);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    correction: WordCorrection | null;
+  } | null>(null);
+  const [colourMenu, setColourMenu] = useState<"foreground" | "background" | null>(null);
   const showInputToolbar = useSettings((state) => state.showInputToolbar);
   const spellCheck = useSettings((state) => state.spellCheck);
+  const autoCorrect = useSettings((state) => state.autoCorrect);
   const spellCheckLanguage = useSettings((state) => state.spellCheckLanguage);
   const inputRef = useRef<HTMLInputElement>(null);
   const history = useRef<string[]>([]);
@@ -107,9 +173,50 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
   };
 
   const openContextMenu = (event: MouseEvent<HTMLInputElement>) => {
+    // Shift+right-click leaves the native WebView menu available for full
+    // operating-system dictionary suggestions.
+    if (event.shiftKey && spellCheck) return;
     event.preventDefault();
     setPicker(false);
-    setContextMenu({ x: event.clientX, y: event.clientY });
+    setColourMenu(null);
+    const caret = event.currentTarget.selectionStart ?? value.length;
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      correction: correctionAt(value, caret),
+    });
+  };
+
+  const replaceCorrection = (correction: WordCorrection) => {
+    const edit = replaceInputSelection(
+      value,
+      correction.start,
+      correction.end,
+      correction.replacement
+    );
+    setValue(edit.value);
+    setContextMenu(null);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(edit.caret, edit.caret);
+    });
+  };
+
+  const onInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const next = event.target.value;
+    const caret = event.target.selectionStart ?? next.length;
+    const typed = next[caret - 1] ?? "";
+    if (autoCorrect && /[\s.,!?;:]/.test(typed)) {
+      const corrected = autoCorrectCompletedWord(next, caret);
+      setValue(corrected.value);
+      if (corrected.value !== next) {
+        requestAnimationFrame(() =>
+          inputRef.current?.setSelectionRange(corrected.caret, corrected.caret)
+        );
+      }
+      return;
+    }
+    setValue(next);
   };
 
   const runEditCommand = (command: "undo" | "cut" | "copy" | "selectAll") => {
@@ -150,7 +257,16 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
   };
 
   const submit = async () => {
-    const text = value;
+    const finalCorrection = correctionAt(value, value.length);
+    const text =
+      autoCorrect && finalCorrection?.end === value.length
+        ? replaceInputSelection(
+            value,
+            finalCorrection.start,
+            finalCorrection.end,
+            finalCorrection.replacement
+          ).value
+        : value;
     if (!text.trim()) return;
     history.current.push(text);
     histIdx.current = history.current.length;
@@ -306,7 +422,7 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
           ref={inputRef}
           value={value}
           placeholder="Type a message or /command…"
-          onChange={(e) => setValue(e.target.value)}
+          onChange={onInputChange}
           onKeyDown={onKeyDown}
           onContextMenu={openContextMenu}
           {...spellCheckAttributes(spellCheck, spellCheckLanguage)}
@@ -319,7 +435,24 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
           y={contextMenu.y}
           onClose={() => setContextMenu(null)}
         >
-          <div className="menu-title">Message tools</div>
+          {contextMenu.correction && (
+            <>
+              <button
+                className="spelling-suggestion"
+                onClick={() => replaceCorrection(contextMenu.correction!)}
+              >
+                <span className="pmenu-check">✓</span>
+                {contextMenu.correction.replacement}
+              </button>
+              <div className="menu-sep" />
+            </>
+          )}
+          <button onClick={() => runEditCommand("undo")}>Undo</button>
+          <button onClick={() => runEditCommand("cut")}>Cut</button>
+          <button onClick={() => runEditCommand("copy")}>Copy</button>
+          <button onClick={paste}>Paste</button>
+          <button onClick={() => runEditCommand("selectAll")}>Select all</button>
+          <div className="menu-sep" />
           <button
             onClick={() => {
               setContextMenu(null);
@@ -339,76 +472,87 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
               <u>U</u> Underline
             </button>
           </div>
-          <div className="menu-sep" />
-          <div className="input-menu-palette">
-            <span>Text colour</span>
-            <div>
-              {IRC_COLORS.map((color, index) => (
-                <button
-                  key={`fg-${index}`}
-                  className={foreground === index ? "selected" : ""}
-                  style={{ backgroundColor: color }}
-                  title={IRC_COLOR_NAMES[index]}
-                  aria-label={`${IRC_COLOR_NAMES[index]} text`}
-                  onClick={() => setForeground(index)}
-                />
-              ))}
-            </div>
-          </div>
-          <div className="input-menu-palette">
-            <span>Background</span>
-            <div>
-              <button
-                className={`no-colour${background === undefined ? " selected" : ""}`}
-                title="No background"
-                aria-label="No background"
-                onClick={() => setBackground(undefined)}
-              />
-              {IRC_COLORS.map((color, index) => (
-                <button
-                  key={`bg-${index}`}
-                  className={background === index ? "selected" : ""}
-                  style={{ backgroundColor: color }}
-                  title={IRC_COLOR_NAMES[index]}
-                  aria-label={`${IRC_COLOR_NAMES[index]} background`}
-                  onClick={() => setBackground(index)}
-                />
-              ))}
-            </div>
-          </div>
-          <div className="input-menu-actions">
+          <div className="input-menu-actions colour-choices">
             <button
-              onClick={() => {
-                setActiveColours({ foreground, background });
-                setContextMenu(null);
-                inputRef.current?.focus();
-              }}
+              onClick={() => setColourMenu((open) => open === "foreground" ? null : "foreground")}
             >
-              Apply colours
+              Text colour…
             </button>
             <button
-              onClick={() => {
-                setForeground(DEFAULT_FOREGROUND);
-                setBackground(undefined);
-                setActiveColours(null);
-                setContextMenu(null);
-                inputRef.current?.focus();
-              }}
+              onClick={() => setColourMenu((open) => open === "background" ? null : "background")}
             >
-              Reset colours
+              Background…
             </button>
           </div>
+          {colourMenu && (
+            <>
+              <div className="input-menu-palette compact">
+                <span>{colourMenu === "foreground" ? "Text colour" : "Background"}</span>
+                <div>
+                  {colourMenu === "background" && (
+                    <button
+                      className={`no-colour${background === undefined ? " selected" : ""}`}
+                      title="No background"
+                      aria-label="No background"
+                      onClick={() => setBackground(undefined)}
+                    />
+                  )}
+                  {IRC_COLORS.map((color, index) => (
+                    <button
+                      key={`${colourMenu}-${index}`}
+                      className={
+                        (colourMenu === "foreground" ? foreground === index : background === index)
+                          ? "selected"
+                          : ""
+                      }
+                      style={{ backgroundColor: color }}
+                      title={IRC_COLOR_NAMES[index]}
+                      aria-label={`${IRC_COLOR_NAMES[index]} ${colourMenu === "foreground" ? "text" : "background"}`}
+                      onClick={() =>
+                        colourMenu === "foreground"
+                          ? setForeground(index)
+                          : setBackground(index)
+                      }
+                    />
+                  ))}
+                </div>
+              </div>
+              <div className="input-menu-actions">
+                <button
+                  onClick={() => {
+                    setActiveColours({ foreground, background });
+                    setContextMenu(null);
+                    inputRef.current?.focus();
+                  }}
+                >
+                  Apply
+                </button>
+                <button
+                  onClick={() => {
+                    setForeground(DEFAULT_FOREGROUND);
+                    setBackground(undefined);
+                    setActiveColours(null);
+                    setContextMenu(null);
+                    inputRef.current?.focus();
+                  }}
+                >
+                  Reset
+                </button>
+              </div>
+            </>
+          )}
           <div className="menu-sep" />
           <button onClick={() => useSettings.getState().set("spellCheck", !spellCheck)}>
             <span className="pmenu-check">{spellCheck ? "✓" : ""}</span>
             Check spelling
           </button>
-          <div className="menu-sep" />
-          <button onClick={() => runEditCommand("undo")}>Undo</button>
-          <button onClick={() => runEditCommand("cut")}>Cut</button>
-          <button onClick={() => runEditCommand("copy")}>Copy</button>
-          <button onClick={paste}>Paste</button>
-          <button onClick={() => runEditCommand("selectAll")}>Select all</button>
+          <button onClick={() => useSettings.getState().set("autoCorrect", !autoCorrect)}>
+            <span className="pmenu-check">{autoCorrect ? "✓" : ""}</span>
+            Auto-correct common typos
+          </button>
+          {spellCheck && (
+            <div className="menu-note">Shift+right-click for system suggestions</div>
+          )}
         </ContextMenu>
       )}
     </div>
