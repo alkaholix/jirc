@@ -12,6 +12,13 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🔤 26.7.94 — Application-wide fonts
+
+- Applied the selected font throughout jIRC, including server lists, chat,
+  nicklists, dialogs, message controls, and detached windows.
+- Enforced an 8-pixel minimum custom font size in Settings, `/font`, and
+  previously saved settings. Reset still restores the theme default.
+
 ## 🪟 26.7.93 — Custom-window echo routing
 
 - Fixed `/echo @window text` and switched forms such as

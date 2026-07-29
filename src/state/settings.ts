@@ -33,7 +33,7 @@ export interface Settings {
   notifyList: string[];
   /** User CSS injected into the app to restyle anything. */
   customCss: string;
-  /** Chat font family (empty = theme default) and size in px (0 = default). */
+  /** Application font family (empty = theme default) and size in px (0 = default). */
   chatFont: string;
   chatFontSize: number;
   /** Show mIRC bold/italic/underline/colour controls beside the message input. */
@@ -126,18 +126,26 @@ const DEFAULTS: Settings = {
 };
 
 const STORAGE_KEY = "jirc.settings";
+export const MIN_APP_FONT_SIZE = 8;
+
+export function normalizeAppFontSize(size: number): number {
+  if (!Number.isFinite(size) || size === 0) return 0;
+  return Math.max(MIN_APP_FONT_SIZE, Math.abs(size));
+}
 
 export function normalizeSavedSettings(
   value: Record<string, unknown>
 ): Settings {
   const { showTimestamps, ...saved } = value;
-  return {
+  const settings = {
     ...DEFAULTS,
     ...saved,
     timestampMode:
       (saved.timestampMode as TimestampMode | undefined) ??
       (showTimestamps === false ? "off" : "inline"),
   } as Settings;
+  settings.chatFontSize = normalizeAppFontSize(settings.chatFontSize);
+  return settings;
 }
 
 function load(): Settings {
@@ -188,13 +196,14 @@ export function applyTheme(theme: Theme) {
   document.documentElement.dataset.theme = resolved;
 }
 
-/** Applies the chat font family + size as CSS variables (used by .line). */
+/** Applies the chosen font family and size throughout the application. */
 export function applyChatFont(family: string, size: number) {
   const root = document.documentElement.style;
-  if (family.trim()) root.setProperty("--chat-font", family);
-  else root.removeProperty("--chat-font");
-  if (size > 0) root.setProperty("--chat-size", `${size}px`);
-  else root.removeProperty("--chat-size");
+  if (family.trim()) root.setProperty("--app-font", family);
+  else root.removeProperty("--app-font");
+  const normalizedSize = normalizeAppFontSize(size);
+  if (normalizedSize > 0) root.setProperty("--app-font-size", `${normalizedSize}px`);
+  else root.removeProperty("--app-font-size");
 }
 
 /** Injects the user's custom CSS into the document (live, persisted). */

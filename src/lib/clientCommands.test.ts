@@ -58,6 +58,16 @@ describe("script client commands", () => {
     expect(useSettings.getState().layout).toBe("tree");
   });
 
+  it("applies the application font with an 8px minimum", () => {
+    const base = { type: "clientCommand" as const, serverId: "s1", currentTarget: "#chat" };
+    routeClientCommand({ ...base, command: "font", args: "5 Arial" }, vi.fn());
+    expect(useSettings.getState().chatFontSize).toBe(8);
+    expect(useSettings.getState().chatFont).toBe("Arial");
+    routeClientCommand({ ...base, command: "font", args: "-z" }, vi.fn());
+    expect(useSettings.getState().chatFontSize).toBe(0);
+    expect(useSettings.getState().chatFont).toBe("");
+  });
+
   it("clears only the requested buffer types", () => {
     const channel = bufferKey("s1", "#chat");
     const query = bufferKey("s1", "nick");

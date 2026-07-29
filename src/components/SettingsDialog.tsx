@@ -220,7 +220,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 </span>
               </label>
               <label>
-                Chat font
+                Application font
                 <select
                   value={settings.chatFont}
                   onChange={(e) => settings.set("chatFont", e.target.value)}
@@ -242,12 +242,17 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 </select>
               </label>
               <label className="inline">
-                Chat font size (px)
+                Application font size (px)
                 <input
                   type="number"
-                  min={0}
+                  min={8}
                   value={settings.chatFontSize || ""}
-                  onChange={(e) => settings.set("chatFontSize", Number(e.target.value) || 0)}
+                  onChange={(e) =>
+                    settings.set(
+                      "chatFontSize",
+                      e.target.value === "" ? 0 : Math.max(8, Number(e.target.value) || 8)
+                    )
+                  }
                   placeholder="default"
                 />
               </label>

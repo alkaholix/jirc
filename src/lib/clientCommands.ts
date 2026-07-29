@@ -1,5 +1,5 @@
 import { IrcEvent } from "./api";
-import { useSettings } from "../state/settings";
+import { normalizeAppFontSize, useSettings } from "../state/settings";
 import { STATUS, useStore } from "../state/store";
 
 export interface EditboxCommand {
@@ -118,7 +118,10 @@ function routeFont(args: string, openSettings: () => void) {
   }
   const sizeIndex = parts.findIndex((part) => /^-?\d+$/.test(part));
   if (sizeIndex >= 0) {
-    useSettings.getState().set("chatFontSize", Math.abs(Number(parts[sizeIndex])));
+    useSettings.getState().set(
+      "chatFontSize",
+      normalizeAppFontSize(Number(parts[sizeIndex]))
+    );
     const family = parts.slice(sizeIndex + 1).join(" ");
     if (family) useSettings.getState().set("chatFont", family);
   }

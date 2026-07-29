@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeSavedSettings } from "./settings";
+import { normalizeAppFontSize, normalizeSavedSettings } from "./settings";
 
 describe("timestamp settings migration", () => {
   it("maps the legacy timestamp toggle and preserves an explicit new mode", () => {
@@ -26,5 +26,13 @@ describe("timestamp settings migration", () => {
       spellCheck: false,
       spellCheckLanguage: "en-NZ",
     });
+  });
+
+  it("enforces an 8px minimum for custom application font sizes", () => {
+    expect(normalizeAppFontSize(7)).toBe(8);
+    expect(normalizeAppFontSize(-6)).toBe(8);
+    expect(normalizeAppFontSize(12)).toBe(12);
+    expect(normalizeAppFontSize(0)).toBe(0);
+    expect(normalizeSavedSettings({ chatFontSize: 5 }).chatFontSize).toBe(8);
   });
 });
