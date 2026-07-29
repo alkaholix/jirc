@@ -12,6 +12,14 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🪟 26.7.93 — Custom-window echo routing
+
+- Fixed `/echo @window text` and switched forms such as
+  `/echo -t @window text` so output appears in the intended custom window.
+- Kept echoed lines in the authoritative window buffer so `$line()` and
+  `$window().lines` immediately reflect what is displayed.
+- Added regression coverage based on the `@i7` and `@i7bot` debug-window usage.
+
 ## ✍️ 26.7.92 — Cleaner message spelling menu
 
 - Reordered and condensed the message-box menu, keeping colour palettes hidden

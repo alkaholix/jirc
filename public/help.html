@@ -689,6 +689,7 @@ Line and selection positions are one-based, matching mIRC.</p>
   <tr><td><code>/window -c @name</code></td><td>close the custom window</td></tr>
   <tr><td><code>/titlebar @name text</code></td><td>change the window's displayed title without changing its script name</td></tr>
   <tr><td><code>/aline</code> · <code>/iline</code> · <code>/rline</code> · <code>/dline</code> · <code>/clear</code></td><td>append, insert, replace, delete, or clear lines</td></tr>
+  <tr><td><code>/echo [-switches] @name text</code></td><td>write output directly to a custom window; the line is also available through <code>$line()</code></td></tr>
   <tr><td><code>/loadbuf [lines] [-r] @name file</code></td><td>append UTF-8 lines from <code>jIRC/scriptdata</code>; <code>-r</code> clears the window first, a number selects the last N lines, and <code>N-M</code> selects an inclusive range</td></tr>
   <tr><td><code>/savebuf [-a] [lines] @name file</code></td><td>save UTF-8 window lines under <code>jIRC/scriptdata</code>; <code>-a</code> appends and the optional line selection follows the same rules</td></tr>
   <tr><td><code>/sline [-a|-r] @name N</code></td><td>select, add, or remove a listbox row</td></tr>

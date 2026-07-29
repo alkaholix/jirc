@@ -2219,9 +2219,9 @@ impl<'a> Runtime<'a> {
             }
             target = STATUS.to_string();
         }
-        // An explicit channel/nick target.
+        // An explicit channel or custom-window target.
         if let Some((maybe_target, after)) = rest.split_once(char::is_whitespace) {
-            if maybe_target.starts_with('#') {
+            if maybe_target.starts_with('#') || maybe_target.starts_with('@') {
                 target = maybe_target.to_string();
                 rest = after.trim();
             }
@@ -2230,7 +2230,19 @@ impl<'a> Runtime<'a> {
             target = STATUS.to_string();
         }
         let text = self.expand(rest);
-        self.actions.push(Action::Echo { target, text });
+        if target.starts_with('@') {
+            if self.windows.exists(&target) {
+                self.windows.aline(&target, &text);
+                self.actions.push(Action::WindowLine {
+                    name: target,
+                    op: "add".to_string(),
+                    n: 0,
+                    text,
+                });
+            }
+        } else {
+            self.actions.push(Action::Echo { target, text });
+        }
     }
 
     /// `/enable <#group ...>` / `/disable <#group ...>` — toggle one or more

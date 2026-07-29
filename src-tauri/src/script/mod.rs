@@ -5495,6 +5495,25 @@ mod tests {
             .collect();
         assert_eq!(sends, vec!["PRIVMSG #c :2/ONE/two/1/two/2"]);
 
+        let echo = engine.run_command(&ctx(), "#c", "/echo -t @list debug output", &[]);
+        assert_eq!(
+            echo,
+            vec![Action::WindowLine {
+                name: "@list".into(),
+                op: "add".into(),
+                n: 0,
+                text: "debug output".into(),
+            }]
+        );
+        let inspect = engine.run_command(&ctx(), "#c", "/echo -a $line(@list,3)", &[]);
+        assert_eq!(
+            inspect,
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "debug output".into(),
+            }]
+        );
+
         let edit = engine.run_command(&ctx(), "#c", "/window -e @input", &[]);
         assert!(edit.iter().any(|action| matches!(
             action,
