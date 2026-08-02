@@ -1,0 +1,7 @@
+; Real scripts commonly gate commands on live membership/prefix state.
+alias compat_state {
+  if ($me isop $chan) && ($1 ison $chan) {
+    mode $chan +v $1
+    msg $chan voiced $1 from $address($1,5)
+  }
+}

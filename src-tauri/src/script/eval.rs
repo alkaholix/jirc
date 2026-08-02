@@ -107,12 +107,22 @@ pub enum Action {
     Audio {
         operation: String,
         path: String,
+        end_event: String,
     },
     /// Apply a client/UI command in the WebView (`/editbox`, `/timestamp`, etc.).
     ClientCommand {
         command: String,
         args: String,
         current_target: String,
+    },
+    /// Enable or disable a script file without deleting it.
+    ScriptLoad {
+        name: String,
+        load: bool,
+        suppress_event: bool,
+    },
+    DnsLookup {
+        host: String,
     },
     /// Open a TCP socket (`/sockopen`); `tls` for `-e` (encrypted).
     SockOpen {
@@ -339,6 +349,7 @@ pub const LTIMER_KEY: &str = "\u{0}ltimer";
 /// Number of lines selected by the most recent `/filter` command.
 pub const FILTERED_KEY: &str = "\u{0}filtered";
 pub const CLIENT_APP_ACTIVE_KEY: &str = "\u{0}client-app-active";
+pub const REMOTE_FLAGS_KEY: &str = "\u{0}remote-flags";
 pub const CLIENT_APP_STATE_KEY: &str = "\u{0}client-app-state";
 pub const CLIENT_DARK_MODE_KEY: &str = "\u{0}client-dark-mode";
 pub const CLIENT_NOTIFY_LIST_KEY: &str = "\u{0}client-notify-list";
@@ -460,6 +471,10 @@ pub struct EventVars {
     pub peer_address: String,
     /// Transfer/session id for DCC event-local identifiers.
     pub dcc_id: String,
+    pub dns_query: String,
+    pub dns_ips: Vec<String>,
+    /// Restricts lifecycle dispatch to one loaded source file.
+    pub event_source_filter: String,
 }
 
 const STEP_LIMIT: u32 = 100_000;
@@ -739,6 +754,14 @@ pub struct DccInfo {
 pub trait ScriptDcc: Send + Sync {
     fn snapshot(&self, server_id: &str) -> Vec<DccInfo>;
     fn server_port(&self) -> Option<u16>;
+    /// Local address used by DCC listeners. Empty means all interfaces.
+    fn bind_ip(&self) -> String {
+        String::new()
+    }
+    /// Whether outgoing offers use mIRC's passive/reverse DCC handshake.
+    fn passive(&self) -> bool {
+        false
+    }
 }
 
 pub struct NoDcc;
@@ -1468,6 +1491,14 @@ impl<'a> Runtime<'a> {
                 let args = self.expand(raw_args);
                 self.actions.push(Action::Dcc { args });
             }
+            // mIRC's /pdcc toggle maps directly to jIRC's existing
+            // `/dcc passive on|off` implementation.
+            "pdcc" => {
+                let args = self.expand(raw_args);
+                self.actions.push(Action::Dcc {
+                    args: format!("passive {}", args.trim()),
+                });
+            }
             "dccserver" => {
                 let args = self.expand(raw_args);
                 self.actions.push(Action::DccServer { args });
@@ -1829,6 +1860,44 @@ impl<'a> Runtime<'a> {
             "ialclear" => self.cmd_ialclear(raw_args),
             "ialfill" => self.cmd_ialfill(raw_args),
             "ialmark" => self.cmd_ialmark(raw_args),
+            "remote" => match self.expand(raw_args).trim().to_ascii_lowercase().as_str() {
+                "on" => {
+                    self.vars.insert(REMOTE_FLAGS_KEY.into(), "7".into());
+                }
+                "off" => {
+                    self.vars.insert(REMOTE_FLAGS_KEY.into(), "0".into());
+                }
+                _ => {}
+            },
+            "load" | "unload" => {
+                let expanded = self.expand(raw_args);
+                let parts = expanded.split_whitespace().collect::<Vec<_>>();
+                let name = parts
+                    .iter()
+                    .rev()
+                    .find(|part| !part.starts_with('-'))
+                    .copied()
+                    .unwrap_or("");
+                if !name.is_empty() {
+                    self.actions.push(Action::ScriptLoad {
+                        name: name.to_string(),
+                        load: lname == "load",
+                        suppress_event: lname == "unload"
+                            && parts
+                                .iter()
+                                .any(|part| part.starts_with('-') && part.contains('n')),
+                    });
+                }
+            }
+            "dns" => {
+                let expanded = self.expand(raw_args);
+                let host = expanded.split_whitespace().next().unwrap_or("");
+                if !host.is_empty() {
+                    self.actions.push(Action::DnsLookup {
+                        host: host.to_string(),
+                    });
+                }
+            }
             "updatenl" => self.cmd_updatenl(),
             "splay" => {
                 let args = self.expand(raw_args);
@@ -1863,6 +1932,7 @@ impl<'a> Runtime<'a> {
                 self.actions.push(Action::Audio {
                     operation: operation.into(),
                     path,
+                    end_event: "WAVEEND".into(),
                 });
             }
             "sound" => {
@@ -1890,12 +1960,13 @@ impl<'a> Runtime<'a> {
                             path: sandbox_path(&self.data_dir, &file)
                                 .to_string_lossy()
                                 .into_owned(),
+                            end_event: "WAVEEND".into(),
                         });
                     }
                 }
             }
-            "clearall" | "close" | "editbox" | "font" | "timestamp" | "switchbar"
-            | "treebar" => {
+            "clearall" | "close" | "editbox" | "font" | "timestamp" | "switchbar" | "treebar" | "linesep"
+            | "help" | "log" | "logview" | "queryrn" => {
                 let args = self.expand(raw_args);
                 let current_target = self.reply_target();
                 self.actions.push(Action::ClientCommand {
@@ -1906,11 +1977,10 @@ impl<'a> Runtime<'a> {
             }
             // We evaluate any parameters (for identifier side effects) and stop.
             // `/run` is deliberately a no-op — jIRC never launches programs.
-            "cline" | "fline" | "renwin" | "linesep"
-            | "background" | "color" | "flash" | "beep" | "ebeeps" | "speak" | "run"
-            | "url" | "dns" | "debug" | "log" | "logview" | "donotdisturb"
-            | "menubar" | "mdi" | "save" | "showmirc" | "maximize"
-            | "minimize" | "creq" | "sreq" | "clipboard" | "resetidle" => {
+            "cline" | "fline" | "renwin" | "background" | "color" | "flash"
+            | "beep" | "ebeeps" | "speak" | "run" | "url" | "debug" | "donotdisturb"
+            | "menubar" | "mdi" | "save" | "showmirc" | "maximize" | "minimize" | "creq"
+            | "sreq" | "clipboard" | "resetidle" => {
                 let _ = self.expand(raw_args);
             }
             _ => {
@@ -4069,6 +4139,20 @@ impl<'a> Runtime<'a> {
             ("icon", take_file_arg(tail).map(|v| v.0))
         } else if flags.contains('l') {
             ("command", take_file_arg(tail).map(|v| v.0))
+        } else if flags.contains('e') {
+            ("enabled", Some("1".into()))
+        } else if flags.contains('n') {
+            ("enabled", Some("0".into()))
+        } else if flags.contains('v') {
+            ("visible", Some("1".into()))
+        } else if flags.contains('h') {
+            ("visible", Some("0".into()))
+        } else if flags.contains('k') {
+            ("checked", Some("1".into()))
+        } else if flags.contains('u') {
+            ("checked", Some("0".into()))
+        } else if flags.contains('s') {
+            ("separator", Some(String::new()))
         } else {
             return;
         };
@@ -4080,7 +4164,11 @@ impl<'a> Runtime<'a> {
                     .then_some(value.clone())
                     .unwrap_or_default(),
                 icon: (op == "icon").then_some(value.clone()).unwrap_or_default(),
-                command: (op == "command").then_some(value).unwrap_or_default(),
+                command: if matches!(op, "command" | "enabled" | "visible" | "checked") {
+                    value
+                } else {
+                    String::new()
+                },
                 source: self.event.script_source.clone(),
             });
         }
@@ -4148,7 +4236,13 @@ impl<'a> Runtime<'a> {
         let Some((id, tail)) = take_file_arg(tail) else {
             return;
         };
-        if flags.contains('t') {
+        if flags.contains('s') {
+            self.actions.push(Action::Panel {
+                op: "separator".into(), panel, id,
+                label: String::new(), value: String::new(), command: String::new(),
+                source: self.event.script_source.clone(),
+            });
+        } else if flags.contains('t') {
             let Some((text, _)) = take_file_arg(tail) else {
                 return;
             };
@@ -4176,6 +4270,22 @@ impl<'a> Runtime<'a> {
                 value: String::new(),
                 command,
                 source: self.event.script_source.clone(),
+            });
+        } else if flags.contains('i') || flags.contains('k') {
+            let Some((label, tail)) = take_file_arg(tail) else { return };
+            let Some((value, tail)) = take_file_arg(tail) else { return };
+            let Some((command, _)) = take_file_arg(tail) else { return };
+            self.actions.push(Action::Panel {
+                op: if flags.contains('i') { "input".into() } else { "checkbox".into() },
+                panel, id, label, value, command,
+                source: self.event.script_source.clone(),
+            });
+        } else if flags.contains('p') {
+            let Some((value, tail)) = take_file_arg(tail) else { return };
+            let label = take_file_arg(tail).map(|item| item.0).unwrap_or_default();
+            self.actions.push(Action::Panel {
+                op: "progress".into(), panel, id, label, value,
+                command: String::new(), source: self.event.script_source.clone(),
             });
         }
     }

@@ -150,6 +150,71 @@ export function ConnectDialog({ onClose, onConnect }: Props) {
               />
             </label>
           </div>
+          <div className="field-label">Network routing (optional)</div>
+          <label>
+            Local address
+            <input
+              value={form.localAddress ?? ""}
+              onChange={(e) => set("localAddress", e.target.value)}
+              placeholder="IP to bind locally (blank = automatic)"
+            />
+          </label>
+          <div className="row">
+            <label className="grow">
+              Proxy type
+              <select
+                value={form.proxy?.kind ?? ""}
+                onChange={(e) => {
+                  const kind = e.target.value as "" | "socks4" | "socks5";
+                  set("proxy", kind ? { ...(form.proxy ?? { host: "", port: 1080 }), kind } : null);
+                }}
+              >
+                <option value="">Direct connection</option>
+                <option value="socks5">SOCKS5</option>
+                <option value="socks4">SOCKS4 / SOCKS4a</option>
+              </select>
+            </label>
+            {form.proxy && (
+              <>
+                <label className="grow">
+                  Proxy host
+                  <input
+                    value={form.proxy.host}
+                    onChange={(e) => set("proxy", { ...form.proxy!, host: e.target.value })}
+                  />
+                </label>
+                <label className="port">
+                  Port
+                  <input
+                    type="number"
+                    value={form.proxy.port}
+                    onChange={(e) => set("proxy", { ...form.proxy!, port: Number(e.target.value) })}
+                  />
+                </label>
+              </>
+            )}
+          </div>
+          {form.proxy && (
+            <div className="row">
+              <label className="grow">
+                Proxy username / SOCKS4 user ID
+                <input
+                  value={form.proxy.username ?? ""}
+                  onChange={(e) => set("proxy", { ...form.proxy!, username: e.target.value })}
+                />
+              </label>
+              {form.proxy.kind !== "socks4" && (
+                <label className="grow">
+                  Proxy password
+                  <input
+                    type="password"
+                    value={form.proxy.password ?? ""}
+                    onChange={(e) => set("proxy", { ...form.proxy!, password: e.target.value })}
+                  />
+                </label>
+              )}
+            </div>
+          )}
           <div className="row">
             <label className="grow">
               Nick

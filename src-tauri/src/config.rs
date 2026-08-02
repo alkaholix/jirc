@@ -39,6 +39,9 @@ pub struct ServerProfile {
     pub name: String,
     pub host: String,
     pub port: u16,
+    /// Optional local IP address used for the outbound IRC/proxy socket.
+    #[serde(default)]
+    pub local_address: Option<String>,
     /// Connect over TLS.
     #[serde(default)]
     pub tls: bool,
@@ -75,7 +78,7 @@ pub struct ServerProfile {
     /// Automatically reconnect on unexpected disconnects (default true).
     #[serde(default = "default_true")]
     pub auto_reconnect: bool,
-    /// Optional SOCKS5 proxy.
+    /// Optional SOCKS4/SOCKS5 proxy.
     #[serde(default)]
     pub proxy: Option<Proxy>,
     pub nick: String,
@@ -118,10 +121,20 @@ fn default_true() -> bool {
     true
 }
 
-/// A SOCKS5 proxy configuration.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProxyKind {
+    Socks4,
+    #[default]
+    Socks5,
+}
+
+/// A SOCKS proxy configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Proxy {
+    #[serde(default)]
+    pub kind: ProxyKind,
     pub host: String,
     pub port: u16,
     #[serde(default)]
@@ -159,7 +172,7 @@ impl ServerProfile {
 
 #[cfg(test)]
 mod tests {
-    use super::{SaslMechanism, ServerProfile};
+    use super::{ProxyKind, SaslMechanism, ServerProfile};
 
     #[test]
     fn profiles_without_a_sasl_mechanism_default_to_plain() {
@@ -194,5 +207,15 @@ mod tests {
             serde_json::to_string(&mechanism).unwrap(),
             r#""OAUTHBEARER""#
         );
+    }
+
+    #[test]
+    fn legacy_proxy_defaults_to_socks5() {
+        let profile: ServerProfile = serde_json::from_str(
+            r#"{"name":"test","host":"localhost","port":6667,"nick":"nick","autojoin":[],"proxy":{"host":"localhost","port":1080}}"#,
+        )
+        .unwrap();
+        assert_eq!(profile.proxy.unwrap().kind, ProxyKind::Socks5);
+        assert!(profile.local_address.is_none());
     }
 }

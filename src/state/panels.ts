@@ -3,7 +3,7 @@ import type { IrcEvent } from "../lib/api";
 
 export interface ScriptPanelItem {
   id: string;
-  kind: "text" | "button";
+  kind: "text" | "button" | "input" | "checkbox" | "progress" | "separator";
   label: string;
   value: string;
   command: string;
@@ -61,10 +61,10 @@ export function routePanelEvent(event: IrcEvent): void {
       };
       return { panels };
     }
-    if (event.op !== "text" && event.op !== "button") return state;
+    if (!["text", "button", "input", "checkbox", "progress", "separator"].includes(event.op)) return state;
     const item: ScriptPanelItem = {
       id: event.id,
-      kind: event.op,
+      kind: event.op as ScriptPanelItem["kind"],
       label: event.label,
       value: event.value,
       command: event.command,

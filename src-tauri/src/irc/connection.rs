@@ -549,6 +549,7 @@ async fn run_once(
             return Outcome::Dropped;
         }
     };
+    let connection_info = stream.connection_info();
 
     emit(
         app,
@@ -570,6 +571,11 @@ async fn run_once(
         server_id: server_id.to_string(),
         server_port: profile.port,
         tls: profile.tls,
+        server_ip: connection_info.peer_ip,
+        tls_version: connection_info.tls_version,
+        tls_peer_certificate: connection_info.tls_peer_certificate,
+        server_target: profile.host.clone(),
+        tls_cert_valid: connection_info.tls_cert_valid && !profile.tls_insecure,
         alt_nick: profile.alt_nick.clone().unwrap_or_default(),
         main_nick: profile.nick.clone(),
         realname: profile.realname.clone().unwrap_or_default(),
@@ -2438,6 +2444,7 @@ mod tests {
 
     fn profile() -> ServerProfile {
         ServerProfile {
+            local_address: None,
             id: Some("s1".into()),
             name: "test".into(),
             host: "localhost".into(),

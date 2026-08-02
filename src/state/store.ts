@@ -17,7 +17,8 @@ export type LineKind =
   | "whisper"
   | "event"
   | "error"
-  | "system";
+  | "system"
+  | "separator";
 
 export interface Line {
   id: number;
@@ -40,6 +41,8 @@ export interface Buffer {
   topic?: string;
   unread: number;
   mention: boolean;
+  /** Whether new chat lines are appended to this buffer's disk log. */
+  logging?: boolean;
   /** For a custom `@window` (kind "window"): its display kind (listbox/text/…). */
   windowKind?: string;
   /** Script-controlled display title; the stable buffer name remains unchanged. */
@@ -292,7 +295,7 @@ export const useStore = create<State>((set, get) => {
     }
 
     // Persist to the on-disk log (best effort).
-    if (srv && line.kind !== "system") {
+    if (srv && line.kind !== "system" && get().buffers[key]?.logging !== false) {
       const ts = new Date(full.ts).toISOString().slice(11, 19);
       const prefix = line.from ? `<${line.from}> ` : "";
       api.logAppend(srv.name, name, `[${ts}] ${prefix}${line.text}`).catch(() => {});

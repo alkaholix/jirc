@@ -30,6 +30,10 @@ describe("script toolbar state", () => {
         command: "/echo moo",
         source: "tools.mrc",
         serverId: "s1",
+        enabled: true,
+        visible: true,
+        checked: false,
+        separator: false,
       },
     ]);
     routeToolbarEvent(event("delete", { name: "COW" }));
@@ -40,5 +44,15 @@ describe("script toolbar state", () => {
     routeToolbarEvent(event("upsert", { command: "/echo moo" }));
     routeToolbarEvent(event("clear"));
     expect(useToolbar.getState().buttons).toEqual([]);
+  });
+
+  it("updates enabled, visible, checked, and separator state", () => {
+    routeToolbarEvent(event("upsert", { command: "/echo moo" }));
+    routeToolbarEvent(event("enabled", { command: "0" }));
+    routeToolbarEvent(event("visible", { command: "0" }));
+    routeToolbarEvent(event("checked", { command: "1" }));
+    routeToolbarEvent(event("separator", { name: "sep" }));
+    expect(useToolbar.getState().buttons[0]).toMatchObject({ enabled: false, visible: false, checked: true });
+    expect(useToolbar.getState().buttons[1]).toMatchObject({ separator: true });
   });
 });

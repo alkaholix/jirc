@@ -12,6 +12,54 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🧩 26.8.2 — Portable mSL compatibility follow-up
+
+- Added live `$bindip` and `$passivedcc` identifiers backed by the active DCC
+  listener configuration.
+- Added `/pdcc on|off` compatibility as an alias of jIRC's existing passive-DCC
+  control.
+- Refreshed the implementation audit, roadmap and granular parity checklist
+  through the networking and script-UI releases.
+
+## 🧰 26.7.97 — Richer script UI integration
+
+- Expanded `/panel` with inputs, checkboxes, progress rows and separators in
+  addition to safe text and command buttons.
+- Added enabled, visible and checked toolbar-button properties, toolbar
+  separators, and script-controlled treebar width and left/right placement.
+- Implemented styled `/linesep` markers in status, channel, query and custom
+  windows.
+- Added `on KEYDOWN` and `on KEYUP` with key/modifier/input parameters while
+  retaining haltable `on TABCOMP` before normal nickname completion.
+- Added `on WAVEEND` for `/splay` and `/sound` media completion and `on PLAYEND`
+  when a `/play` queue item finishes.
+
+## 🌐 26.7.96 — Networking compatibility
+
+- Added SOCKS4/SOCKS4a alongside SOCKS5, including SOCKS4 user IDs, saved proxy
+  selection, and per-server local-address binding.
+- Separated DCC's advertised address from its local listener bind address,
+  normalized reversed port ranges, and retained standard plus passive/reverse
+  CHAT, SEND, RESUME, and DCC Server controls.
+- Added real socket-level SOCKS4a, local-bind, DCC range/interface regression
+  coverage and an external mIRC/other-client interoperability checklist.
+- Fixed auto-protect sending a redundant re-op when a batched MODE line had
+  already restored the protected user's operator status.
+- Deferred identd until a supported older network demonstrates a real need for
+  the additional inbound service and firewall/privacy surface.
+
+## 🧩 26.7.95 — mSL compatibility and lifecycle
+
+- Added persistent `/load` and `/unload` script lifecycle controls, scoped
+  `on LOAD`/`on UNLOAD` events, `/remote on|off`, and completed the local IAL
+  control commands.
+- Added `/help`, `/log`, `/logview`, and `/queryrn`, plus `$parms`, live server
+  address, negotiated TLS version, certificate validity, and certificate hash
+  identifiers.
+- Added `on ACTIVE`, `on DNS`, and `on TABCOMP`; scripts can halt tab completion,
+  and DNS events expose `$raddress` and `$dns()` results.
+- Added regression coverage and refreshed the in-app help and mIRC parity audit.
+
 ## 🔤 26.7.94 — Application-wide fonts
 
 - Applied the selected font throughout jIRC, including server lists, chat,

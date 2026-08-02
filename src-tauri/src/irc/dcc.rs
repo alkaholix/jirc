@@ -387,6 +387,8 @@ struct DccChat {
 pub struct DccConfig {
     /// IP advertised in offers; empty = auto-detect the local IPv4.
     pub ip: String,
+    /// Local IP to bind listeners to; empty binds all interfaces.
+    pub bind_ip: String,
     /// Listen-port range. `port_from == 0` means use an ephemeral port.
     pub port_from: u16,
     pub port_to: u16,
@@ -581,9 +583,15 @@ impl DccManager {
     }
 
     /// Updates the advertised IP and listen-port range used for new offers.
-    pub fn configure(&self, ip: String, port_from: u16, port_to: u16, passive: bool) {
+    pub fn configure(&self, ip: String, bind_ip: String, port_from: u16, port_to: u16, passive: bool) {
+        let (port_from, port_to) = if port_from != 0 && port_to != 0 && port_from > port_to {
+            (port_to, port_from)
+        } else {
+            (port_from, port_to)
+        };
         *self.config.lock().unwrap() = DccConfig {
             ip,
+            bind_ip,
             port_from,
             port_to,
             passive,
@@ -810,8 +818,9 @@ impl DccManager {
             });
             (task, start_tx)
         } else {
-            let (listener, port) =
-                bind_in_range(ip, cfg.port_from, cfg.port_to).ok_or("no free DCC port in range")?;
+            let bind_ip = resolve_dcc_bind_ip(&cfg.bind_ip, ip)?;
+            let (listener, port) = bind_in_range(bind_ip, cfg.port_from, cfg.port_to)
+                .ok_or("no free DCC port in range")?;
             send_ctcp(&app, &server_id, &nick, &format_chat_offer(ip, port))?;
             let app2 = app.clone();
             let sid = server_id.clone();
@@ -968,7 +977,8 @@ impl DccManager {
         let (task, start) = if port == 0 {
             let token = token.ok_or("passive DCC CHAT is missing its token")?;
             let advertised = resolve_dcc_ip(&cfg.ip)?;
-            let (listener, reply_port) = bind_in_range(advertised, cfg.port_from, cfg.port_to)
+            let bind_ip = resolve_dcc_bind_ip(&cfg.bind_ip, advertised)?;
+            let (listener, reply_port) = bind_in_range(bind_ip, cfg.port_from, cfg.port_to)
                 .ok_or("no free DCC port in range")?;
             send_ctcp(
                 &app,
@@ -1105,8 +1115,9 @@ impl DccManager {
         }
         let cfg = self.config.lock().unwrap().clone();
         let ip = resolve_dcc_ip(&cfg.ip)?;
-        let (listener, port) =
-            bind_in_range(ip, cfg.port_from, cfg.port_to).ok_or("no free DCC port in range")?;
+        let bind_ip = resolve_dcc_bind_ip(&cfg.bind_ip, ip)?;
+        let (listener, port) = bind_in_range(bind_ip, cfg.port_from, cfg.port_to)
+            .ok_or("no free DCC port in range")?;
         send_ctcp(&app, &server_id, &nick, &format_chat_offer(ip, port))?;
         let app2 = app.clone();
         let sid = server_id.clone();
@@ -1376,7 +1387,11 @@ impl DccManager {
                 Ok(ip) => ip,
                 Err(e) => return fail_transfer(&app, &xid, &e),
             };
-            let Some((listener, port)) = bind_in_range(advertised, cfg.port_from, cfg.port_to)
+            let bind_ip = match resolve_dcc_bind_ip(&cfg.bind_ip, advertised) {
+                Ok(ip) => ip,
+                Err(error) => return fail_transfer(&app, &xid, &error),
+            };
+            let Some((listener, port)) = bind_in_range(bind_ip, cfg.port_from, cfg.port_to)
             else {
                 return fail_transfer(&app, &xid, "no free DCC port in range");
             };
@@ -1491,8 +1506,9 @@ impl DccManager {
             });
             (0, Some(token), task, start_tx)
         } else {
-            let (listener, port) =
-                bind_in_range(ip, cfg.port_from, cfg.port_to).ok_or("no free DCC port in range")?;
+            let bind_ip = resolve_dcc_bind_ip(&cfg.bind_ip, ip)?;
+            let (listener, port) = bind_in_range(bind_ip, cfg.port_from, cfg.port_to)
+                .ok_or("no free DCC port in range")?;
             send_ctcp(
                 &app,
                 &server_id,
@@ -2026,6 +2042,19 @@ impl crate::script::eval::ScriptDcc for EngineDcc {
         self.app
             .try_state::<DccManager>()
             .and_then(|manager| manager.server_snapshot().map(|snapshot| snapshot.1))
+    }
+
+    fn bind_ip(&self) -> String {
+        self.app
+            .try_state::<DccManager>()
+            .map(|manager| manager.config.lock().unwrap().bind_ip.clone())
+            .unwrap_or_default()
+    }
+
+    fn passive(&self) -> bool {
+        self.app
+            .try_state::<DccManager>()
+            .is_some_and(|manager| manager.passive())
     }
 }
 
@@ -3195,22 +3224,35 @@ pub fn detect_local_ip() -> String {
     local_ipv6().map(|v6| v6.to_string()).unwrap_or_default()
 }
 
-/// Binds a listener (on the advertised IP's family) in the configured port range,
+fn resolve_dcc_bind_ip(value: &str, advertised: IpAddr) -> Result<IpAddr, String> {
+    if value.trim().is_empty() {
+        return Ok(if advertised.is_ipv6() {
+            Ipv6Addr::UNSPECIFIED.into()
+        } else {
+            Ipv4Addr::UNSPECIFIED.into()
+        });
+    }
+    let bind_ip = value
+        .trim()
+        .parse::<IpAddr>()
+        .map_err(|_| format!("invalid DCC bind address '{}'", value.trim()))?;
+    if bind_ip.is_ipv4() != advertised.is_ipv4() {
+        return Err("DCC bind and advertised addresses use different IP families".into());
+    }
+    Ok(bind_ip)
+}
+
+/// Binds a listener on the selected local address in the configured port range,
 /// or an ephemeral port when `from == 0`. Returns the listener and chosen port.
 fn bind_in_range(ip: IpAddr, from: u16, to: u16) -> Option<(std::net::TcpListener, u16)> {
-    let any: IpAddr = if ip.is_ipv6() {
-        Ipv6Addr::UNSPECIFIED.into()
-    } else {
-        Ipv4Addr::UNSPECIFIED.into()
-    };
     if from == 0 {
-        let l = std::net::TcpListener::bind((any, 0)).ok()?;
+        let l = std::net::TcpListener::bind((ip, 0)).ok()?;
         l.set_nonblocking(true).ok()?;
         let p = l.local_addr().ok()?.port();
         return Some((l, p));
     }
     (from..=to.max(from)).find_map(|p| {
-        let listener = std::net::TcpListener::bind((any, p)).ok()?;
+        let listener = std::net::TcpListener::bind((ip, p)).ok()?;
         listener.set_nonblocking(true).ok()?;
         Some((listener, p))
     })
@@ -3413,6 +3455,26 @@ mod tests {
             listener.accept().unwrap_err().kind(),
             std::io::ErrorKind::WouldBlock
         );
+    }
+
+    #[test]
+    fn dcc_configuration_normalizes_ranges_and_honours_bind_address() {
+        let manager = DccManager::new();
+        manager.configure(
+            "198.51.100.8".into(),
+            "127.0.0.1".into(),
+            5009,
+            5000,
+            true,
+        );
+        let config = manager.config.lock().unwrap().clone();
+        assert_eq!((config.port_from, config.port_to), (5000, 5009));
+        assert!(config.passive);
+        assert_eq!(
+            resolve_dcc_bind_ip(&config.bind_ip, "198.51.100.8".parse().unwrap()).unwrap(),
+            IpAddr::V4(Ipv4Addr::LOCALHOST)
+        );
+        assert!(resolve_dcc_bind_ip("::1", "198.51.100.8".parse().unwrap()).is_err());
     }
 
     #[test]

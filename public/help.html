@@ -120,7 +120,7 @@ features jIRC implements today.</p>
     server host and port, tick <strong>TLS</strong> for a secure connection, set your
     nick (and an alternative used if it's taken), and any channels to auto-join.</li>
   <li>The advanced connection fields support server passwords, NickServ,
-    SOCKS5 proxies, PEM client certificates, SASL
+    SOCKS4/SOCKS5 proxies, local-address binding, PEM client certificates, SASL
     <strong>PLAIN / EXTERNAL / SCRAM-SHA-256 / OAUTHBEARER</strong>, and IRCX
     <strong>NTLM / ANON</strong> authentication.</li>
   <li>Saved servers appear in a dropdown — pick one and connect, or delete it.</li>
@@ -341,7 +341,7 @@ part for fine control. Made a mess? Hit <strong>Reset</strong> in the settings p
   <li><strong>TLS</strong> (rustls, including PEM client certificates), SASL
     <strong>PLAIN / EXTERNAL / SCRAM-SHA-256 / OAUTHBEARER</strong>, NickServ
     identify, and a
-    <strong>SOCKS5 proxy</strong> are all supported.</li>
+    <strong>SOCKS4/SOCKS5 proxy</strong> and an optional local bind address are all supported.</li>
   <li><strong>OAUTHBEARER</strong> requires TLS. Enter the access token in the
     token field; it is stored in the OS keyring like an account password.</li>
   <li>IRCX profiles support pre-registration <strong>NTLM</strong> and
@@ -389,6 +389,9 @@ from another.</p>
     </ul>
   </li>
   <li>Saving in the Scripts dialog recompiles everything immediately — no restart needed.</li>
+  <li><code>/unload -rs name.mrc</code> disables a script without deleting it;
+      <code>/load -rs name.mrc</code> enables it again. Disabled state persists.
+      <code>/remote on|off</code> enables or suppresses all script events.</li>
 </ul>
 
 <h2 id="quickstart">Quick start</h2>
@@ -545,6 +548,11 @@ matches exactly one word. So <code>on *:TEXT:!weather &amp;:#:</code> triggers o
   <tr><td><code>ACTION</code></td><td>someone sends a <code>/me</code> action</td><td><code>$nick $chan $1-</code></td></tr>
   <tr><td><code>NOTICE</code></td><td>someone sends a notice</td><td><code>$nick $chan $1-</code></td></tr>
   <tr><td><code>INPUT</code></td><td><strong>you</strong> type a line</td><td><code>$chan $target $1-</code></td></tr>
+  <tr><td><code>ACTIVE</code></td><td>the active buffer changes</td><td><code>$active $lactive $target</code></td></tr>
+  <tr><td><code>TABCOMP</code></td><td>Tab is pressed before nickname completion; <code>/halt</code> suppresses the default</td><td><code>$target $1-</code></td></tr>
+  <tr><td><code>KEYDOWN</code> / <code>KEYUP</code></td><td>a key is pressed or released in the message input</td><td><code>$1</code> key, <code>$2</code> modifiers, <code>$3-</code> input text</td></tr>
+  <tr><td><code>WAVEEND</code> / <code>PLAYEND</code></td><td>script audio or a play queue item finishes</td><td><code>$filename</code></td></tr>
+  <tr><td><code>DNS</code></td><td>a typed or scripted <code>/dns</code> lookup completes</td><td><code>$raddress $dns(0) $dns(N).ip</code></td></tr>
   <tr><td><code>JOIN</code></td><td>someone joins</td><td><code>$nick $chan</code></td></tr>
   <tr><td><code>PART</code></td><td>someone leaves</td><td><code>$nick $chan $1-</code> (part msg)</td></tr>
   <tr><td><code>QUIT</code></td><td>someone quits</td><td><code>$nick $1-</code> (quit msg)</td></tr>
@@ -914,16 +922,17 @@ are intentionally not exposed.</p>
   <tr><td><code>/splay file</code> · <code>/splay -p|-r|-s</code></td><td>Play a sandboxed audio file, or pause, resume, and stop the current scripted playback.</td></tr>
   <tr><td><code>/sockopen /socklisten /sockudp /sockwrite /sockread /sockclose</code></td><td>TCP, UDP, direct TLS and STARTTLS sockets (see Sockets).</td></tr>
   <tr><td><code>/parseline [switches] line</code></td><td>Replace or queue a byte-preserving incoming/outgoing protocol line from <code>on PARSELINE</code>.</td></tr>
-  <tr><td><code>/dcc chat|send|get|fserve|close|retry</code></td><td>DCC chat, files, passive/reverse negotiation, resume, and direct <code>IP[:port]</code> DCC Server clients.</td></tr>
+  <tr><td><code>/dcc chat|send|get|fserve|close|retry</code></td><td>DCC chat, files, passive/reverse negotiation, resume, and direct <code>IP[:port]</code> DCC Server clients. <code>/pdcc on|off</code> toggles passive DCC.</td></tr>
   <tr><td><code>/dccserver [+scf] on [port]</code> · <code>/dccserver off</code></td><td>Start or stop direct DCC Server services (Send, Chat, Fileserver).</td></tr>
   <tr><td><code>/fserve nick maxgets homedir [welcome]</code></td><td>Offer a sandboxed DCC file server rooted under <code>scriptdata</code>.</td></tr>
   <tr><td><code>/dialog /did</code></td><td>Open/manage a custom dialog (see Dialogs).</td></tr>
   <tr><td><code>/nickicon nick icon</code></td><td>Badge a nick in the nick list (emoji or image URL).</td></tr>
-  <tr><td><code>/toolbar -a name "tip" icon "/command $!1"</code></td><td>Add or replace a script toolbar button. Also supports <code>-d</code> delete, <code>-c</code> clear, and <code>-t</code>/<code>-p</code>/<code>-l</code> updates. Icons may be text/emoji or an image URL; clicking supplies the button name as <code>$1</code> (use delayed <code>$!1</code> when defining it).</td></tr>
-  <tr><td><code>/panel -a name "title"</code></td><td>Create a safe docked script panel. Add text with <code>-t name id "text"</code>, buttons with <code>-b name id "label" "/command $!1"</code>, delete an item/panel with <code>-d</code>, or clear all panels with <code>-c</code>.</td></tr>
+  <tr><td><code>/toolbar -a name "tip" icon "/command $!1"</code></td><td>Add or replace a script toolbar button. Supports enabled <code>-e/-n</code>, visible <code>-v/-h</code>, checked <code>-k/-u</code>, separator <code>-s</code>, delete <code>-d</code> and clear <code>-c</code>.</td></tr>
+  <tr><td><code>/panel -a name "title"</code></td><td>Create a docked panel with text <code>-t</code>, button <code>-b</code>, input <code>-i</code>, checkbox <code>-k</code>, progress <code>-p</code> or separator <code>-s</code>. Interactive commands receive id/value as <code>$1</code>/<code>$2</code>.</td></tr>
+  <tr><td><code>/linesep [target] [label]</code></td><td>Add a styled line marker to a buffer.</td></tr>
   <tr><td><code>/editbox [switches] [window] text</code></td><td>Fill the current, active (<code>-a</code>), or status (<code>-s</code>) message box. <code>-f</code> focuses, <code>-p</code> appends a space, <code>-n</code> submits, and <code>-bN</code>/<code>-eN</code> select a range.</td></tr>
   <tr><td><code>/timestamp on|divider|off</code></td><td>Select inline timestamps, minute dividers, or no timestamps. <code>default</code> restores inline mode.</td></tr>
-  <tr><td><code>/switchbar on|off</code> · <code>/treebar on|off</code></td><td>Switch between jIRC's tab and tree navigation layouts.</td></tr>
+  <tr><td><code>/switchbar on|off</code> · <code>/treebar on|off [-w width] [-l|-r]</code></td><td>Switch navigation layout and control treebar width/side.</td></tr>
   <tr><td><code>/font [switches] [size font]</code></td><td>Open font settings with no arguments, apply the cross-platform application font and size (minimum 8 pixels), or reset with <code>-z</code>.</td></tr>
   <tr><td><code>/clearall [-snqmtgua]</code></td><td>Clear status, channel, query, DCC chat, or custom-window buffers; <code>-a</code> includes all connections.</td></tr>
   <tr><td><code>/close [switches] [name…]</code></td><td>Close matching queries (<code>-m</code>), DCC chats (<code>-c</code>), status windows (<code>-t</code>), or custom windows (<code>-@</code>); names accept wildcards and <code>-a</code> includes all connections.</td></tr>
@@ -962,7 +971,7 @@ goes to the server.</div>
   <tr><td><code>$scon(0)</code> · <code>$scon(N)</code></td><td>number of connections · the Nth connection's <code>$cid</code></td></tr>
   <tr><td><code>$wid</code> · <code>$activewid</code></td><td>this window's id · the focused window's id</td></tr>
   <tr><td><code>$lactive</code> · <code>$lactivewid</code> · <code>$lactivecid</code></td><td>the previously focused window's name, window id, and connection id</td></tr>
-  <tr><td><code>$query(N/nick)</code></td><td>open query count/name; properties: <code>.wid</code>, <code>.cid</code>, <code>.addr</code>, <code>.idle</code></td></tr>
+  <tr><td><code>$query(N/nick)</code></td><td>open query count/name; properties: <code>.wid</code>, <code>.cid</code>, <code>.addr</code>, <code>.idle</code>, <code>.logfile</code>, <code>.stamp</code></td></tr>
   <tr><td><code>$portable</code></td><td><code>$true</code> when <code>portable.txt</code> sits beside the jIRC executable</td></tr>
   <tr><td><code>$cmdline</code></td><td>arguments passed when jIRC was launched</td></tr>
   <tr><td><code>$network</code></td><td>network name</td></tr>
@@ -1252,7 +1261,9 @@ DCC</strong>, or from a script:</p>
 <p>The <code>s</code>, <code>c</code>, and <code>f</code> switches control incoming
 Send, Chat, and Fileserver services. Port 59 is the mIRC default; on systems that
 reserve low ports, select a higher forwarded port. <code>$dccport</code> returns
-the active listener port, or <code>$null</code> while it is off.</p>
+the active listener port, or <code>$null</code> while it is off.
+<code>$bindip</code> returns the configured DCC listener address and
+<code>$passivedcc</code> returns its live passive-transfer setting.</p>
 <p>Connect directly to another compatible server by using an IP address instead
 of a nickname. An explicit port can be appended when it is not 59:</p>
 <pre><code><span class="k">/dcc</span> chat 192.0.2.10:50059
@@ -1340,7 +1351,6 @@ EXTERNAL/SCRAM-SHA-256/OAUTHBEARER.
 <div class="note warn">
 Planned or possible future work — scripts using these won't work today:
 <ul style="margin:.5rem 0 0">
-  <li>Richer docked script-panel controls beyond the current safe text and button controls.</li>
   <li>A few uncommon <strong>property suffixes</strong>; the commonly used
     channel, nick, query, socket, hash, dialog, file, timer, play, and window
     properties are implemented.</li>

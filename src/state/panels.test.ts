@@ -45,4 +45,15 @@ describe("script panel state", () => {
     routePanelEvent(event("clear"));
     expect(usePanels.getState().panels).toEqual([]);
   });
+
+  it("stores richer controls and separators", () => {
+    routePanelEvent(event("upsert", { label: "Stats" }));
+    routePanelEvent(event("input", { id: "query", label: "Search", value: "hello" }));
+    routePanelEvent(event("checkbox", { id: "enabled", value: "1" }));
+    routePanelEvent(event("progress", { id: "load", value: "75" }));
+    routePanelEvent(event("separator", { id: "sep" }));
+    expect(usePanels.getState().panels[0].items.map((item) => item.kind)).toEqual([
+      "input", "checkbox", "progress", "separator",
+    ]);
+  });
 });

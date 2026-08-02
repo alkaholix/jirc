@@ -513,6 +513,7 @@ mod tests {
 
     fn profile(sasl: bool, pw: Option<&str>, mechanism: SaslMechanism) -> ServerProfile {
         ServerProfile {
+            local_address: None,
             id: None,
             name: "n".into(),
             host: "h".into(),

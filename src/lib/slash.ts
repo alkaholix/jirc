@@ -366,12 +366,13 @@ export async function handleInput(input: string, buffer: Buffer): Promise<void> 
       store.appendLine(serverId, name, kind, { kind: "system", text: `Resolving ${host}…` });
       api
         .dnsLookup(host)
-        .then((ips) =>
+        .then((ips) => {
+          api.scriptDispatchDns(serverId, host, ips).catch(() => {});
           store.appendLine(serverId, name, kind, {
             kind: "system",
             text: ips.length ? `${host} resolves to ${ips.join(", ")}` : `${host}: no addresses found`,
-          })
-        )
+          });
+        })
         .catch((e) => store.appendLine(serverId, name, kind, { kind: "error", text: `DNS lookup failed: ${e}` }));
       break;
     }

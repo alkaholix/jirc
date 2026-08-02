@@ -1,5 +1,5 @@
 //! Network transport: a unified stream over plain TCP or TLS, optionally via a
-//! SOCKS5 proxy.
+//! SOCKS4/SOCKS5 proxy and optional local-address binding.
 
 use std::fs::File;
 use std::io::{self, BufReader};
@@ -9,13 +9,13 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::net::TcpStream;
+use tokio::net::{lookup_host, TcpSocket, TcpStream};
 use tokio::time::{timeout, Duration};
 use tokio_rustls::client::TlsStream;
 use tokio_rustls::TlsConnector;
-use tokio_socks::tcp::Socks5Stream;
+use tokio_socks::tcp::{Socks4Stream, Socks5Stream};
 
-use crate::config::{SaslMechanism, ServerProfile};
+use crate::config::{ProxyKind, SaslMechanism, ServerProfile};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -24,6 +24,49 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 pub enum NetStream {
     Plain(TcpStream),
     Tls(Box<TlsStream<TcpStream>>),
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ConnectionInfo {
+    pub peer_ip: String,
+    pub tls_version: String,
+    pub tls_peer_certificate: Vec<u8>,
+    pub tls_cert_valid: bool,
+}
+
+impl NetStream {
+    pub fn connection_info(&self) -> ConnectionInfo {
+        match self {
+            Self::Plain(stream) => ConnectionInfo {
+                peer_ip: stream
+                    .peer_addr()
+                    .map(|addr| addr.ip().to_string())
+                    .unwrap_or_default(),
+                ..Default::default()
+            },
+            Self::Tls(stream) => {
+                let (tcp, session) = stream.get_ref();
+                let tls_version = session
+                    .protocol_version()
+                    .map(|version| format!("{version:?}").replace("TLSv1_", "TLSv1."))
+                    .unwrap_or_default();
+                let tls_peer_certificate = session
+                    .peer_certificates()
+                    .and_then(|certificates| certificates.first())
+                    .map(|certificate| certificate.as_ref().to_vec())
+                    .unwrap_or_default();
+                ConnectionInfo {
+                    peer_ip: tcp
+                        .peer_addr()
+                        .map(|addr| addr.ip().to_string())
+                        .unwrap_or_default(),
+                    tls_version,
+                    tls_peer_certificate,
+                    tls_cert_valid: !session.is_handshaking(),
+                }
+            }
+        }
+    }
 }
 
 impl AsyncRead for NetStream {
@@ -66,22 +109,53 @@ impl AsyncWrite for NetStream {
     }
 }
 
-/// Establishes a TCP connection (directly or through a SOCKS5 proxy).
+async fn connect_socket(host: &str, port: u16, local_address: Option<&str>) -> io::Result<TcpStream> {
+    let Some(local) = local_address.map(str::trim).filter(|value| !value.is_empty()) else {
+        return TcpStream::connect((host, port)).await;
+    };
+    let local_ip = local.parse::<std::net::IpAddr>().map_err(|_| {
+        invalid_input(format!("invalid local address '{local}'"))
+    })?;
+    let remote = lookup_host((host, port))
+        .await?
+        .find(|address| address.is_ipv4() == local_ip.is_ipv4())
+        .ok_or_else(|| invalid_input("local address family does not match the remote host"))?;
+    let socket = if local_ip.is_ipv4() { TcpSocket::new_v4()? } else { TcpSocket::new_v6()? };
+    socket.bind(std::net::SocketAddr::new(local_ip, 0))?;
+    socket.connect(remote).await
+}
+
+/// Establishes a TCP connection directly or through a SOCKS4/SOCKS5 proxy.
 async fn connect_tcp(profile: &ServerProfile) -> io::Result<TcpStream> {
     let target = (profile.host.as_str(), profile.port);
     match &profile.proxy {
         Some(proxy) => {
-            let proxy_addr = (proxy.host.as_str(), proxy.port);
-            let stream = match (&proxy.username, &proxy.password) {
-                (Some(u), Some(p)) => {
-                    Socks5Stream::connect_with_password(proxy_addr, target, u, p).await
+            let bound = connect_socket(
+                proxy.host.as_str(),
+                proxy.port,
+                profile.local_address.as_deref(),
+            )
+            .await?;
+            match proxy.kind {
+                ProxyKind::Socks4 => {
+                    let stream = match proxy.username.as_deref().filter(|value| !value.is_empty()) {
+                        Some(user) => Socks4Stream::connect_with_userid_and_socket(bound, target, user).await,
+                        None => Socks4Stream::connect_with_socket(bound, target).await,
+                    }
+                    .map_err(|e| io::Error::other(format!("SOCKS4 proxy error: {e}")))?;
+                    Ok(stream.into_inner())
                 }
-                _ => Socks5Stream::connect(proxy_addr, target).await,
+                ProxyKind::Socks5 => {
+                    let stream = match (&proxy.username, &proxy.password) {
+                        (Some(u), Some(p)) => Socks5Stream::connect_with_password_and_socket(bound, target, u, p).await,
+                        _ => Socks5Stream::connect_with_socket(bound, target).await,
+                    }
+                    .map_err(|e| io::Error::other(format!("SOCKS5 proxy error: {e}")))?;
+                    Ok(stream.into_inner())
+                }
             }
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("proxy error: {e}")))?;
-            Ok(stream.into_inner())
         }
-        None => TcpStream::connect(target).await,
+        None => connect_socket(&profile.host, profile.port, profile.local_address.as_deref()).await,
     }
 }
 
@@ -353,5 +427,53 @@ mod tests {
         assert!(error
             .to_string()
             .contains("could not open TLS client certificate"));
+    }
+
+    #[tokio::test]
+    async fn direct_connection_binds_the_selected_local_address() {
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let accept = tokio::spawn(async move { listener.accept().await.unwrap().1 });
+        let stream = connect_socket("127.0.0.1", port, Some("127.0.0.1"))
+            .await
+            .unwrap();
+        assert_eq!(stream.local_addr().unwrap().ip(), std::net::Ipv4Addr::LOCALHOST);
+        assert_eq!(accept.await.unwrap().ip(), std::net::Ipv4Addr::LOCALHOST);
+    }
+
+    #[tokio::test]
+    async fn socks4a_connect_uses_the_configured_proxy_and_user_id() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let proxy_port = listener.local_addr().unwrap().port();
+        let proxy = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = vec![0u8; 256];
+            let length = socket.read(&mut request).await.unwrap();
+            request.truncate(length);
+            assert_eq!(&request[..2], &[4, 1]);
+            assert!(request.windows(5).any(|value| value == b"jirc\0"));
+            assert!(request.windows(13).any(|value| value == b"example.test\0"));
+            socket.write_all(&[0, 0x5a, 0, 0, 0, 0, 0, 0]).await.unwrap();
+        });
+        let mut profile = profile();
+        profile.host = "example.test".into();
+        profile.port = 6667;
+        profile.tls = false;
+        profile.local_address = Some("127.0.0.1".into());
+        profile.proxy = Some(crate::config::Proxy {
+            kind: ProxyKind::Socks4,
+            host: "127.0.0.1".into(),
+            port: proxy_port,
+            username: Some("jirc".into()),
+            password: None,
+        });
+        connect_tcp(&profile).await.unwrap();
+        proxy.await.unwrap();
     }
 }

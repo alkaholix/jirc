@@ -8,6 +8,10 @@ export interface ScriptToolbarButton {
   command: string;
   source: string;
   serverId: string;
+  enabled: boolean;
+  visible: boolean;
+  checked: boolean;
+  separator: boolean;
 }
 
 interface ToolbarState {
@@ -36,8 +40,12 @@ export function routeToolbarEvent(event: IrcEvent): void {
       command: event.op === "command" ? event.command : existing?.command ?? event.command,
       source: event.source || existing?.source || "",
       serverId: event.serverId || existing?.serverId || "",
+      enabled: event.op === "enabled" ? event.command !== "0" : existing?.enabled ?? true,
+      visible: event.op === "visible" ? event.command !== "0" : existing?.visible ?? true,
+      checked: event.op === "checked" ? event.command !== "0" : existing?.checked ?? false,
+      separator: event.op === "separator" || existing?.separator || false,
     };
-    if (index < 0) return event.op === "upsert" ? { buttons: [...state.buttons, button] } : state;
+    if (index < 0) return ["upsert", "separator"].includes(event.op) ? { buttons: [...state.buttons, button] } : state;
     const buttons = [...state.buttons];
     buttons[index] = button;
     return { buttons };

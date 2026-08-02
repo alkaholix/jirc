@@ -7,6 +7,7 @@ vi.mock("./api", () => ({
   api: {
     scriptWindowClose: vi.fn(() => Promise.resolve()),
     disconnect: vi.fn(() => Promise.resolve()),
+    openHelp: vi.fn(() => Promise.resolve()),
   },
 }));
 
@@ -94,5 +95,23 @@ describe("script client commands", () => {
     }, vi.fn());
     expect(useStore.getState().buffers[channel].lines).toEqual([]);
     expect(useStore.getState().buffers[query].lines).toHaveLength(1);
+  });
+
+  it("routes query rename and per-buffer logging", () => {
+    const query = bufferKey("s1", "oldnick");
+    useStore.setState({
+      buffers: {
+        [query]: {
+          key: query, serverId: "s1", name: "oldnick", kind: "query",
+          lines: [], members: [], unread: 0, mention: false,
+        },
+      },
+      order: [query],
+    });
+    const base = { type: "clientCommand" as const, serverId: "s1", currentTarget: "oldnick" };
+    routeClientCommand({ ...base, command: "log", args: "off oldnick" }, vi.fn());
+    expect(useStore.getState().buffers[query].logging).toBe(false);
+    routeClientCommand({ ...base, command: "queryrn", args: "oldnick newnick" }, vi.fn());
+    expect(Object.values(useStore.getState().buffers).some((buffer) => buffer.name === "newnick")).toBe(true);
   });
 });

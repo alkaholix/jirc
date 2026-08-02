@@ -22,7 +22,7 @@ Linux) and speaking both **standard IRC** (RFC 1459/2812 + IRCv3) and
   chat-history negotiation, away/account/chghost notifications, multi-prefix,
   extended-join, userhost-in-names, and echo-message
 - **Security & auth** — TLS (rustls), SASL PLAIN/EXTERNAL/SCRAM-SHA-256/OAUTHBEARER,
-  IRCX NTLM/ANON, NickServ, SOCKS5 proxy; passwords and tokens
+  IRCX NTLM/ANON, NickServ, SOCKS4/SOCKS5 proxy and local-address binding; passwords and tokens
   normally stored in the OS keyring, with an explicit warned fallback when a
   Linux/BSD Secret Service is unavailable
 - **Chat UI** — collapsible **server tree** *or* **switchbar** (tabs) layout,
@@ -114,6 +114,11 @@ npm run tauri:build  # produce a release build + installers
 npm test             # frontend tests (vitest)
 cargo test --manifest-path src-tauri/Cargo.toml -- --skip live   # backend tests
 ```
+
+Rust and Tauri artifacts are always written to
+`src-tauri/target-<version>/` (for example,
+`src-tauri/target-26.7.97/release/jirc.exe`). This keeps each update isolated
+and makes the current executable location predictable.
 
 ## Where your data lives
 

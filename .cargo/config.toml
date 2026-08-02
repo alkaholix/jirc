@@ -1,3 +1,8 @@
+[build]
+# Keep every release's Rust/Tauri artifacts isolated and discoverable. Update
+# this alongside the five application version files.
+target-dir = "src-tauri/target-26.8.2"
+
 [target.'cfg(windows)']
 # tauri-plugin-dialog links TaskDialogIndirect from Common Controls v6. Tauri
 # embeds this dependency in the packaged app, but Rust test executables also

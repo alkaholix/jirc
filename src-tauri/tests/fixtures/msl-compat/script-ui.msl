@@ -1,0 +1,8 @@
+; Portable script-defined UI and a popup-style value-returning local alias.
+dialog compatbox {
+  title "Compatibility check"
+  text info "Ready"
+  button close "Close" :cancel
+}
+
+alias compat_ui { dialog -m compatbox compatbox }

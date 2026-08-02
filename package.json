@@ -1,6 +1,6 @@
 {
   "name": "jirc",
-  "version": "26.7.94",
+  "version": "26.8.2",
   "description": "jIRC — a modern, open-source mIRC-style IRC client (standard IRC + IRCX)",
   "license": "MIT",
   "type": "module",
@@ -9,9 +9,9 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri": "node scripts/tauri-versioned.mjs",
+    "tauri:dev": "node scripts/tauri-versioned.mjs dev",
+    "tauri:build": "node scripts/tauri-versioned.mjs build"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.4",

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { api, IrcEvent, ServerProfile } from "./lib/api";
@@ -125,9 +125,12 @@ function MainApp() {
   );
   const customCss = useSettings((s) => s.customCss);
   const layout = useSettings((s) => s.layout);
+  const treebarWidth = useSettings((s) => s.treebarWidth);
+  const treebarPosition = useSettings((s) => s.treebarPosition);
   const chatFont = useSettings((s) => s.chatFont);
   const chatFontSize = useSettings((s) => s.chatFontSize);
   const dccIp = useSettings((s) => s.dccIp);
+  const dccBindIp = useSettings((s) => s.dccBindIp);
   const dccPortFrom = useSettings((s) => s.dccPortFrom);
   const dccPortTo = useSettings((s) => s.dccPortTo);
   const dccPassive = useSettings((s) => s.dccPassive);
@@ -176,7 +179,10 @@ function MainApp() {
       routeUrlEvent(e.payload);
       routeModeEvent(e.payload);
       if (e.payload.type === "audio") {
-        controlAudio(e.payload.operation, e.payload.path);
+        const audio = e.payload;
+        controlAudio(audio.operation, audio.path, () => {
+          api.scriptDispatchAudioEnd(audio.serverId, audio.endEvent, audio.path).catch(() => {});
+        });
       }
       if (e.payload.type === "clientCommand") {
         routeClientCommand(e.payload, () => setSettingsOpen(true));
@@ -353,8 +359,8 @@ function MainApp() {
 
   // Keep the backend DCC config (advertised IP + listen-port range) in sync.
   useEffect(() => {
-    api.dccConfigure(dccIp, dccPortFrom, dccPortTo, dccPassive).catch(() => {});
-  }, [dccIp, dccPortFrom, dccPortTo, dccPassive]);
+    api.dccConfigure(dccIp, dccBindIp, dccPortFrom, dccPortTo, dccPassive).catch(() => {});
+  }, [dccIp, dccBindIp, dccPortFrom, dccPortTo, dccPassive]);
 
   useEffect(() => {
     if (detachedKey !== null) return;
@@ -447,7 +453,10 @@ function MainApp() {
   };
 
   return (
-    <div className={`app layout-${layout}`}>
+    <div
+      className={`app layout-${layout} treebar-${treebarPosition}`}
+      style={{ "--treebar-width": `${treebarWidth}px` } as CSSProperties}
+    >
       {layout === "tree" ? <Sidebar {...actions} /> : <SwitchBar {...actions} />}
       <main className="main">
         <ScriptToolbar />

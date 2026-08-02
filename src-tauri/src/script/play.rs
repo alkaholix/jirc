@@ -100,6 +100,7 @@ struct PlayRun {
     mode: PlayMode,
     echo: bool,
     offline: bool,
+    filename: String,
 }
 
 struct PlayEntry {
@@ -182,6 +183,7 @@ impl PlayManager {
         let all_lines: Vec<String> = text.lines().map(str::to_string).collect();
         let lines = select_lines(&all_lines, &spec, None)?;
 
+        let resolved_filename = path.to_string_lossy().into_owned();
         let entry = PlayEntry {
             id: NEXT_PLAY_ID.fetch_add(1, Ordering::Relaxed),
             run: PlayRun {
@@ -194,8 +196,9 @@ impl PlayManager {
                 mode: spec.mode,
                 echo: spec.echo,
                 offline: spec.offline,
+                filename: resolved_filename.clone(),
             },
-            filename: path.to_string_lossy().into_owned(),
+            filename: resolved_filename,
             topic: spec.topic,
             lines,
             pos: 0,
@@ -290,7 +293,7 @@ enum QueueStep {
         id: u64,
         deadline: Instant,
     },
-    Continue,
+    Finished(PlayRun),
 }
 
 async fn run_queue(app: AppHandle, wake: Arc<tokio::sync::Notify>) {
@@ -313,8 +316,9 @@ async fn run_queue(app: AppHandle, wake: Arc<tokio::sync::Notify>) {
                     deadline,
                 }
             } else if current.finish_after_delay || current.pos >= current.lines.len() {
+                let run = current.run.clone();
                 state.queue.pop_front();
-                QueueStep::Continue
+                QueueStep::Finished(run)
             } else {
                 let line = current.lines[current.pos].clone();
                 current.pos += 1;
@@ -328,7 +332,15 @@ async fn run_queue(app: AppHandle, wake: Arc<tokio::sync::Notify>) {
         };
 
         match step {
-            QueueStep::Continue => continue,
+            QueueStep::Finished(run) => {
+                super::script_dispatch_audio_end(
+                    app.clone(),
+                    run.server_id,
+                    "PLAYEND".into(),
+                    run.filename,
+                );
+                continue;
+            }
             QueueStep::Wait { id, deadline } => {
                 tokio::select! {
                     _ = tokio::time::sleep_until(deadline) => {
@@ -338,7 +350,12 @@ async fn run_queue(app: AppHandle, wake: Arc<tokio::sync::Notify>) {
                                 let finished = state.queue[index].finish_after_delay;
                                 state.queue[index].waiting_until = None;
                                 if finished {
+                                    let run = state.queue[index].run.clone();
                                     state.queue.remove(index);
+                                    drop(state);
+                                    super::script_dispatch_audio_end(
+                                        app.clone(), run.server_id, "PLAYEND".into(), run.filename,
+                                    );
                                 }
                             }
                         }
@@ -361,7 +378,12 @@ async fn run_queue(app: AppHandle, wake: Arc<tokio::sync::Notify>) {
                     continue;
                 };
                 if !keep || (final_line && !line.is_empty()) {
+                    let run = state.queue[index].run.clone();
                     state.queue.remove(index);
+                    drop(state);
+                    super::script_dispatch_audio_end(
+                        app.clone(), run.server_id, "PLAYEND".into(), run.filename,
+                    );
                     continue;
                 }
                 let item = &mut state.queue[index];
@@ -747,6 +769,7 @@ mod tests {
             mode: PlayMode::Message,
             echo: false,
             offline: false,
+            filename: "file.txt".into(),
         };
         let make = |id, target: &str| PlayEntry {
             id,

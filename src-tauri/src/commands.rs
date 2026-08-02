@@ -62,12 +62,21 @@ const HELP_HTML: &str = include_str!("../../public/help.html");
 
 /// Writes the help guide to disk and opens it in the user's default browser.
 #[tauri::command]
-pub fn open_help(app: AppHandle) -> Result<(), String> {
+pub fn open_help(app: AppHandle, keyword: Option<String>) -> Result<(), String> {
     let dir = crate::storage::config_dir(&app)?;
     let path = dir.join("help.html");
     std::fs::write(&path, HELP_HTML).map_err(|e| e.to_string())?;
+    let mut url = tauri::Url::from_file_path(&path).map_err(|_| "invalid help path".to_string())?;
+    if let Some(keyword) = keyword.filter(|value| !value.trim().is_empty()) {
+        let anchor = keyword
+            .trim()
+            .trim_start_matches(['/', '$'])
+            .to_ascii_lowercase()
+            .replace(' ', "-");
+        url.set_fragment(Some(&anchor));
+    }
     app.opener()
-        .open_path(path.to_string_lossy().to_string(), None::<&str>)
+        .open_url(url.to_string(), None::<&str>)
         .map_err(|e| e.to_string())
 }
 
@@ -179,8 +188,12 @@ pub fn exit_app(app: AppHandle) {
 /// IP passed in resolves to itself). Used by the `/dns` command.
 #[tauri::command]
 pub async fn dns_lookup(host: String) -> Result<Vec<String>, String> {
+    resolve_host(&host).await
+}
+
+pub(crate) async fn resolve_host(host: &str) -> Result<Vec<String>, String> {
     let target = if host.contains(':') {
-        host
+        host.to_string()
     } else {
         format!("{host}:0")
     };
@@ -505,11 +518,12 @@ pub fn dcc_send_file(
 pub fn dcc_configure(
     dcc: State<'_, crate::irc::dcc::DccManager>,
     ip: String,
+    bind_ip: String,
     port_from: u16,
     port_to: u16,
     passive: bool,
 ) {
-    dcc.configure(ip, port_from, port_to, passive);
+    dcc.configure(ip, bind_ip, port_from, port_to, passive);
 }
 
 /// Starts/stops the direct DCC Server protocol listener.

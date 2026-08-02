@@ -58,6 +58,9 @@ function LineRow({
 }) {
   const dividerClass =
     timestampMode === "divider" && showDivider ? " timestamp-divider-mode" : "";
+  if (line.kind === "separator") {
+    return <div className="line script-line-separator"><span>{line.text}</span></div>;
+  }
   if (line.kind === "event" || line.kind === "system" || line.kind === "error") {
     return (
       <div className={`line line-${line.kind}${dividerClass}`}>

@@ -294,6 +294,7 @@ pub enum UiEvent {
         server_id: String,
         operation: String,
         path: String,
+        end_event: String,
     },
     /// A script command that mutates client UI rather than IRC state.
     ClientCommand {

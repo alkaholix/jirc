@@ -15,12 +15,16 @@ export function ScriptToolbar() {
   return (
     <div className="script-toolbar" role="toolbar" aria-label="Script toolbar">
       {buttons.map((button) => {
+        if (!button.visible) return null;
+        if (button.separator) return <span className="script-toolbar-separator" key={button.name.toLowerCase()} />;
         const serverId = active?.serverId ?? button.serverId;
         const server = servers[serverId];
         return (
           <button
             key={button.name.toLowerCase()}
             className="script-toolbar-button"
+            disabled={!button.enabled}
+            aria-pressed={button.checked}
             title={button.tooltip || button.name}
             onClick={() =>
               api

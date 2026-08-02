@@ -537,6 +537,14 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   placeholder="e.g. your public IP, for transfers over the internet"
                 />
               </label>
+              <label>
+                Local bind address (blank = all interfaces)
+                <input
+                  value={settings.dccBindIp}
+                  onChange={(e) => settings.set("dccBindIp", e.target.value)}
+                  placeholder="e.g. 192.168.1.20"
+                />
+              </label>
               <div className="row">
                 <button className="ghost" onClick={detectDccIp}>
                   Detect from server
@@ -548,6 +556,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   Port from
                   <input
                     type="number"
+                    min={0}
+                    max={65535}
                     value={settings.dccPortFrom || ""}
                     onChange={(e) => settings.set("dccPortFrom", Number(e.target.value) || 0)}
                     placeholder="auto"
@@ -557,6 +567,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   to
                   <input
                     type="number"
+                    min={0}
+                    max={65535}
                     value={settings.dccPortTo || ""}
                     onChange={(e) => settings.set("dccPortTo", Number(e.target.value) || 0)}
                     placeholder="auto"

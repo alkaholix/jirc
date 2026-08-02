@@ -14,11 +14,29 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         // Full local path in on FILESENT/FILERCVD/GETFAIL/SENDFAIL.
         "filename" => rt.event.filename.clone(),
         "dccid" => rt.event.dcc_id.clone(),
+        "raddress" => rt.event.dns_query.clone(),
+        "dns" => {
+            let n = a(0).parse::<usize>().unwrap_or(0);
+            if n == 0 {
+                rt.event.dns_ips.len().to_string()
+            } else if n <= rt.event.dns_ips.len() {
+                match prop.to_ascii_lowercase().as_str() {
+                    "ip" => rt.event.dns_ips[n - 1].clone(),
+                    "addr" | "" => rt.event.dns_query.clone(),
+                    "nick" => String::new(),
+                    _ => String::new(),
+                }
+            } else {
+                String::new()
+            }
+        }
         "dccport" => rt
             .dcc
             .server_port()
             .map(|port| port.to_string())
             .unwrap_or_default(),
+        "bindip" => rt.dcc.bind_ip(),
+        "passivedcc" => if rt.dcc.passive() { "on" } else { "off" }.to_string(),
         "me" => rt.my_nick.to_string(),
         "pnick" => rt.event.pnick.clone(),
         "mnick" => rt.state.main_nick.clone(),
@@ -279,6 +297,32 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                             .max()
                             .map(|activity| now_secs().saturating_sub(activity).to_string())
                             .unwrap_or_default(),
+                        "logfile" => {
+                            let clean = |value: &str| {
+                                value
+                                    .chars()
+                                    .map(|ch| {
+                                        if ch.is_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                                            ch
+                                        } else {
+                                            '_'
+                                        }
+                                    })
+                                    .collect::<String>()
+                            };
+                            rt.data_dir
+                                .parent()
+                                .unwrap_or(&rt.data_dir)
+                                .join("logs")
+                                .join(clean(rt.network))
+                                .join(format!("{}.log", clean(window)))
+                                .to_string_lossy()
+                                .into_owned()
+                        }
+                        "stamp" => "$true".to_string(),
+                        // Native HWNDs are intentionally unavailable on a
+                        // cross-platform WebView client.
+                        "hwnd" => String::new(),
                         _ => String::new(),
                     }
                 })
@@ -985,9 +1029,12 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "true" => "$true".to_string(),
         "false" => "$false".to_string(),
         "null" => String::new(),
-        // jIRC loads remote scripts as one engine and currently keeps CTCP,
-        // event, and raw handlers enabled (mIRC bit flags 1 | 2 | 4).
-        "remote" => "7".to_string(),
+        "remote" => rt
+            .vars
+            .get(super::eval::REMOTE_FLAGS_KEY)
+            .cloned()
+            .unwrap_or_else(|| "7".into()),
+        "parms" => rt.event.text.clone(),
         // These are steady-state process flags. Startup scripts run after the
         // engine has loaded, and scripts cannot execute during process teardown.
         "starting" | "exiting" => "0".to_string(),
@@ -1622,6 +1669,34 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             }
         }
         "ssl" => bool_str(rt.state.tls),
+        "serverip" => rt.state.server_ip.clone(),
+        "servertarget" => rt.state.server_target.clone(),
+        "sslversion" => rt.state.tls_version.clone(),
+        "sslhash" => {
+            let certificate = &rt.state.tls_peer_certificate;
+            if certificate.is_empty() || (!a(1).is_empty() && !a(1).eq_ignore_ascii_case("s")) {
+                String::new()
+            } else {
+                let digest = match a(0).to_ascii_lowercase().as_str() {
+                    "md5" => format!("{:x}", md5::Md5::digest(certificate)),
+                    "sha1" => format!("{:x}", sha1::Sha1::digest(certificate)),
+                    "sha512" => format!("{:x}", sha2::Sha512::digest(certificate)),
+                    "sha256" | "" => format!("{:x}", sha2::Sha256::digest(certificate)),
+                    _ => return String::new(),
+                };
+                if prop.eq_ignore_ascii_case("colons") {
+                    digest
+                        .as_bytes()
+                        .chunks(2)
+                        .map(|pair| std::str::from_utf8(pair).unwrap_or(""))
+                        .collect::<Vec<_>>()
+                        .join(":")
+                } else {
+                    digest
+                }
+            }
+        }
+        "sslcertvalid" => bool_str(rt.state.tls && rt.state.tls_cert_valid),
         "anick" => rt.state.alt_nick.clone(),
         "fullname" => rt.state.realname.clone(),
         "usermode" => rt.state.user_mode.clone(),

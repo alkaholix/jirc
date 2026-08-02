@@ -2,6 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export interface Proxy {
+  kind?: "socks4" | "socks5";
   host: string;
   port: number;
   username?: string;
@@ -13,6 +14,7 @@ export interface ServerProfile {
   name: string;
   host: string;
   port: number;
+  localAddress?: string;
   tls?: boolean;
   tlsInsecure?: boolean;
   tlsClientCertPath?: string;
@@ -135,8 +137,8 @@ export const api = {
   ) => invoke("dcc_recv", { serverId, nick, filename, ip, port, size, token, resume }),
   dccSendFile: (serverId: string, nick: string, path: string) =>
     invoke("dcc_send_file", { serverId, nick, path }),
-  dccConfigure: (ip: string, portFrom: number, portTo: number, passive: boolean) =>
-    invoke("dcc_configure", { ip, portFrom, portTo, passive }),
+  dccConfigure: (ip: string, bindIp: string, portFrom: number, portTo: number, passive: boolean) =>
+    invoke("dcc_configure", { ip, bindIp, portFrom, portTo, passive }),
   dccServerConfigure: (
     serverId: string,
     enabled: boolean,
@@ -256,6 +258,12 @@ export const api = {
   /** Tell the engine which window/connection is focused ($active/$activecid). */
   scriptSetActive: (name: string, serverId: string) =>
     invoke("script_set_active", { name, serverId }),
+  scriptRunTabcomp: (serverId: string, target: string, text: string) =>
+    invoke<boolean>("script_run_tabcomp", { serverId, target, text }),
+  scriptRunKey: (serverId: string, target: string, kind: "KEYDOWN" | "KEYUP", key: string, modifiers: string, text: string) =>
+    invoke<boolean>("script_run_key", { serverId, target, kind, key, modifiers, text }),
+  scriptDispatchAudioEnd: (serverId: string, kind: string, path: string) =>
+    invoke<void>("script_dispatch_audio_end", { serverId, kind, path }),
   scriptSetClientWindowState: (label: string, focused: boolean, appState: string) =>
     invoke("script_set_client_window_state", { label, focused, appState }),
   scriptSetClientPreferences: (
@@ -268,10 +276,12 @@ export const api = {
     invoke("script_window_open", { serverId, name }),
   scriptWindowClose: (serverId: string, name: string) =>
     invoke("script_window_close", { serverId, name }),
-  openHelp: () => invoke<void>("open_help"),
+  openHelp: (keyword?: string) => invoke<void>("open_help", { keyword }),
   openUrl: (url: string) => invoke<void>("open_url", { url }),
   exitApp: () => invoke<void>("exit_app"),
   dnsLookup: (host: string) => invoke<string[]>("dns_lookup", { host }),
+  scriptDispatchDns: (serverId: string, host: string, ips: string[]) =>
+    invoke<void>("script_dispatch_dns", { serverId, host, ips }),
   scriptRunCommand: (
     serverId: string,
     target: string,
@@ -394,6 +404,7 @@ export type IrcEvent =
       serverId: string;
       operation: "play" | "pause" | "resume" | "stop";
       path: string;
+      endEvent: string;
     }
   | {
       type: "clientCommand";

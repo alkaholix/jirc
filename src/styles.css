@@ -93,8 +93,11 @@ input:focus {
 }
 .app.layout-tree {
   display: grid;
-  grid-template-columns: 220px 1fr;
+  grid-template-columns: var(--treebar-width, 220px) 1fr;
 }
+.app.layout-tree.treebar-right { grid-template-columns: 1fr var(--treebar-width, 220px); }
+.app.layout-tree.treebar-right .sidebar { grid-column: 2; grid-row: 1; border-right: 0; border-left: 1px solid var(--border); }
+.app.layout-tree.treebar-right .main { grid-column: 1; grid-row: 1; }
 .app.layout-switchbar {
   display: flex;
   flex-direction: column;
@@ -237,6 +240,8 @@ input:focus {
   height: 20px;
   object-fit: contain;
 }
+.script-toolbar-button[aria-pressed="true"] { border-color: var(--accent); background: var(--panel2); }
+.script-toolbar-separator { height: 24px; border-left: 1px solid var(--border); margin: 0 0.2rem; }
 
 .script-panels {
   width: 240px;
@@ -260,6 +265,11 @@ input:focus {
   gap: 0.4rem;
   padding: 0 0.65rem 0.65rem;
 }
+.script-panel-control { display: grid; gap: 0.2rem; font-size: 0.78rem; }
+.script-panel-control progress { width: 100%; }
+.script-panel-separator { width: 100%; border: 0; border-top: 1px solid var(--border); }
+.script-line-separator { display: flex; align-items: center; gap: 0.5rem; color: var(--muted); }
+.script-line-separator::before, .script-line-separator::after { content: ""; flex: 1; border-top: 1px solid var(--border); }
 .script-panel-text {
   color: var(--fg);
   font-size: 0.82rem;

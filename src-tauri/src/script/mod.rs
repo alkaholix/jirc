@@ -292,8 +292,13 @@ impl ScriptEngine {
     }
 
     /// Records the frontend's currently-focused window/buffer name (for `$active`).
-    pub fn set_active(&self, name: &str) {
-        self.inner.lock().unwrap().active = name.to_string();
+    pub fn set_active(&self, name: &str) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.active.eq_ignore_ascii_case(name) {
+            return false;
+        }
+        inner.active = name.to_string();
+        true
     }
 
     /// Assigns (idempotently) the numeric `$cid` for a connection; returns it.
@@ -929,6 +934,21 @@ impl ScriptEngine {
             event.msg_stamp = raw.msg_stamp.clone();
         }
         let mut g = self.inner.lock().unwrap();
+        let remote_flags = g
+            .vars
+            .get(eval::REMOTE_FLAGS_KEY)
+            .and_then(|value| value.parse::<u8>().ok())
+            .unwrap_or(7);
+        let required_flag = if kind.eq_ignore_ascii_case("RAW") {
+            4
+        } else if kind.eq_ignore_ascii_case("CTCP") || kind.eq_ignore_ascii_case("CTCPREPLY") {
+            1
+        } else {
+            2
+        };
+        if remote_flags & required_flag == 0 {
+            return (Vec::new(), false, false);
+        }
         let script = g.script.clone();
         let g = &mut *g;
         let vars = &mut g.vars;
@@ -944,6 +964,11 @@ impl ScriptEngine {
         let mut default_halted = false;
         let mut event_sources = Vec::new();
         for ev in script.events_of(kind) {
+            if !event.event_source_filter.is_empty()
+                && !ev.source.eq_ignore_ascii_case(&event.event_source_filter)
+            {
+                continue;
+            }
             if !event_sources
                 .iter()
                 .any(|source: &String| source.eq_ignore_ascii_case(&ev.source))
@@ -1208,7 +1233,23 @@ impl ScriptEngine {
                 })
                 .map(|(_, p)| p.contains('@') || p.contains('&') || p.contains('~'))
                 .unwrap_or(false);
+            // MODE batches can remove and restore +o in the same server line.
+            // The DEOP event still fires, but no repair is needed when the
+            // protected nick is already op in the final channel snapshot.
+            let protected_is_op = ctx
+                .state
+                .channels
+                .iter()
+                .find(|channel| ctx.state.isupport.names_equal(&channel.name, &event.chan))
+                .and_then(|channel| {
+                    channel.members.iter().find(|(nick, _)| {
+                        ctx.state.isupport.names_equal(nick, &event.knick)
+                    })
+                })
+                .map(|(_, prefixes)| prefixes.contains('@') || prefixes.contains('&') || prefixes.contains('~'))
+                .unwrap_or(false);
             if am_op
+                && !protected_is_op
                 && users.auto_should_apply(
                     users::AutoKind::Protect,
                     addr,
@@ -1907,6 +1948,25 @@ pub fn fire_lifecycle(app: &AppHandle, engine: &ScriptEngine, kind: &str) {
     apply_actions(app, "", "", "", "", actions);
 }
 
+fn fire_lifecycle_source(app: &AppHandle, engine: &ScriptEngine, kind: &str, source: &str) {
+    let ctx = RunCtx {
+        my_nick: "",
+        network: "",
+        server: "",
+        data_dir: script_data_dir(app),
+        state: std::sync::Arc::new(Default::default()),
+    };
+    let actions = engine.dispatch_event(
+        &ctx,
+        kind,
+        EventVars {
+            event_source_filter: source.to_string(),
+            ..Default::default()
+        },
+    );
+    apply_actions(app, "", "", "", "", actions);
+}
+
 /// Reads and compiles every `.mrc` file into the engine.
 fn recompile(app: &AppHandle, engine: &ScriptEngine) {
     use std::sync::atomic::Ordering;
@@ -1917,12 +1977,21 @@ fn recompile(app: &AppHandle, engine: &ScriptEngine) {
         FIRING_UNLOAD.store(false, Ordering::SeqCst);
     }
     let Ok(dir) = scripts_dir(app) else { return };
+    let disabled_path = dir.join("_disabled.json");
+    let disabled: Vec<String> = std::fs::read_to_string(&disabled_path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
     let mut sources = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&dir) {
         let mut files: Vec<_> = entries
             .flatten()
             .map(|e| e.path())
             .filter(|p| p.extension().is_some_and(|x| x == "mrc"))
+            .filter(|p| {
+                let name = p.file_name().and_then(|name| name.to_str()).unwrap_or("");
+                !disabled.iter().any(|item| item.eq_ignore_ascii_case(name))
+            })
             .collect();
         files.sort();
         for path in files {
@@ -1938,6 +2007,74 @@ fn recompile(app: &AppHandle, engine: &ScriptEngine) {
     }
     engine.load_sources(&sources);
     engine.load_users(&script_data_dir(app));
+}
+
+fn set_script_loaded(
+    app: &AppHandle,
+    engine: &ScriptEngine,
+    name: &str,
+    load: bool,
+    suppress_event: bool,
+) {
+    let Ok(dir) = scripts_dir(app) else { return };
+    let filename = format!("{}.mrc", script_stem(name.trim_end_matches(".mrc")));
+    if load && !dir.join(&filename).exists() {
+        return;
+    }
+    let disabled_path = dir.join("_disabled.json");
+    let mut disabled: Vec<String> = std::fs::read_to_string(&disabled_path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    disabled.retain(|item| !item.eq_ignore_ascii_case(&filename));
+    if !load {
+        if !suppress_event {
+            use std::sync::atomic::Ordering;
+            if !FIRING_UNLOAD.swap(true, Ordering::SeqCst) {
+                fire_lifecycle_source(app, engine, "UNLOAD", &filename);
+                FIRING_UNLOAD.store(false, Ordering::SeqCst);
+            }
+        }
+        disabled.push(filename.clone());
+    }
+    let _ = std::fs::write(
+        &disabled_path,
+        serde_json::to_string_pretty(&disabled).unwrap_or_else(|_| "[]".into()),
+    );
+    // Avoid the global UNLOAD performed by recompile: the selected file's
+    // lifecycle event was handled above and /load must not unload existing files.
+    let Ok(dir) = scripts_dir(app) else { return };
+    let mut sources = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        let mut files: Vec<_> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "mrc"))
+            .filter(|path| {
+                let file = path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("");
+                !disabled.iter().any(|item| item.eq_ignore_ascii_case(file))
+            })
+            .collect();
+        files.sort();
+        for path in files {
+            if let Ok(source) = std::fs::read_to_string(&path) {
+                sources.push((
+                    path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                    source,
+                ));
+            }
+        }
+    }
+    engine.load_sources(&sources);
+    if load {
+        fire_lifecycle_source(app, engine, "LOAD", &filename);
+    }
 }
 
 /// Whether a script line defines an alias named `name` (case-insensitive).
@@ -2480,13 +2617,14 @@ fn apply_actions_depth(
                     },
                 );
             }
-            Action::Audio { operation, path } => {
+            Action::Audio { operation, path, end_event } => {
                 let _ = app.emit(
                     IRC_EVENT,
                     UiEvent::Audio {
                         server_id: server_id.to_string(),
                         operation,
                         path,
+                        end_event,
                     },
                 );
             }
@@ -2504,6 +2642,50 @@ fn apply_actions_depth(
                         current_target,
                     },
                 );
+            }
+            Action::ScriptLoad {
+                name,
+                load,
+                suppress_event,
+            } => {
+                if let Some(engine) = app.try_state::<ScriptEngine>() {
+                    set_script_loaded(app, &engine, &name, load, suppress_event);
+                }
+            }
+            Action::DnsLookup { host } => {
+                let app = app.clone();
+                let server_id = server_id.to_string();
+                tauri::async_runtime::spawn(async move {
+                    let ips = crate::commands::resolve_host(&host)
+                        .await
+                        .unwrap_or_default();
+                    let Some(engine) = app.try_state::<ScriptEngine>() else {
+                        return;
+                    };
+                    let state = app
+                        .try_state::<crate::irc::state::StateStore>()
+                        .map(|store| store.get(&server_id))
+                        .unwrap_or_default();
+                    let my_nick = state.nick.clone();
+                    let (network, server) =
+                        engine.connection_context(&server_id).unwrap_or_default();
+                    let ctx = RunCtx {
+                        my_nick: &my_nick,
+                        network: &network,
+                        server: &server,
+                        data_dir: script_data_dir(&app),
+                        state,
+                    };
+                    let vars = EventVars {
+                        dns_query: host.clone(),
+                        dns_ips: ips,
+                        text: host.clone(),
+                        params: vec![host],
+                        ..Default::default()
+                    };
+                    let actions = engine.dispatch_event(&ctx, "DNS", vars);
+                    apply_actions(&app, &server_id, &my_nick, &network, &server, actions);
+                });
             }
             Action::WindowClose { name } => {
                 let _ = app.emit(
@@ -3219,10 +3401,175 @@ pub fn script_sockets(socks: State<'_, socket::SocketManager>) -> Vec<String> {
 /// Records the currently-focused window (`$active`) and its connection
 /// (`$activecid`). The frontend calls this whenever the active buffer changes.
 #[tauri::command]
-pub fn script_set_active(engine: State<'_, ScriptEngine>, name: String, server_id: String) {
-    engine.set_active(&name);
+pub fn script_set_active(
+    app: AppHandle,
+    engine: State<'_, ScriptEngine>,
+    name: String,
+    server_id: String,
+) {
+    let changed = engine.set_active(&name);
     engine.set_active_conn(&server_id);
     engine.set_active_win(&server_id, &name);
+    if changed {
+        let state = app
+            .try_state::<crate::irc::state::StateStore>()
+            .map(|store| store.get(&server_id))
+            .unwrap_or_default();
+        let my_nick = state.nick.clone();
+        let (network, server) = engine.connection_context(&server_id).unwrap_or_default();
+        let ctx = RunCtx {
+            my_nick: &my_nick,
+            network: &network,
+            server: &server,
+            data_dir: script_data_dir(&app),
+            state,
+        };
+        let vars = EventVars {
+            target: name.clone(),
+            chan: is_channel(&name).then_some(name).unwrap_or_default(),
+            ..Default::default()
+        };
+        let actions = engine.dispatch_event(&ctx, "ACTIVE", vars);
+        apply_actions(&app, &server_id, &my_nick, &network, &server, actions);
+    }
+}
+
+/// Fires `on TABCOMP` before the frontend performs its normal nickname
+/// completion. A halted handler suppresses that default completion.
+#[tauri::command]
+pub async fn script_run_tabcomp(
+    app: AppHandle,
+    server_id: String,
+    target: String,
+    text: String,
+) -> bool {
+    tauri::async_runtime::spawn_blocking(move || {
+        let engine = app.state::<ScriptEngine>();
+        let state = app
+            .try_state::<crate::irc::state::StateStore>()
+            .map(|store| store.get(&server_id))
+            .unwrap_or_default();
+        let my_nick = state.nick.clone();
+        let (network, server) = engine.connection_context(&server_id).unwrap_or_default();
+        let ctx = RunCtx {
+            my_nick: &my_nick,
+            network: &network,
+            server: &server,
+            data_dir: script_data_dir(&app),
+            state,
+        };
+        let vars = EventVars {
+            chan: is_channel(&target)
+                .then_some(target.clone())
+                .unwrap_or_default(),
+            target: target.clone(),
+            text: text.clone(),
+            params: text.split_whitespace().map(String::from).collect(),
+            ..Default::default()
+        };
+        let (actions, halted) = engine.dispatch_event_halt(&ctx, "TABCOMP", vars);
+        apply_actions(&app, &server_id, &my_nick, &network, &server, actions);
+        halted
+    })
+    .await
+    .unwrap_or(false)
+}
+
+#[tauri::command]
+pub async fn script_run_key(
+    app: AppHandle,
+    server_id: String,
+    target: String,
+    kind: String,
+    key: String,
+    modifiers: String,
+    text: String,
+) -> bool {
+    tauri::async_runtime::spawn_blocking(move || {
+        if !matches!(kind.to_ascii_uppercase().as_str(), "KEYDOWN" | "KEYUP") {
+            return false;
+        }
+        let engine = app.state::<ScriptEngine>();
+        let state = app.try_state::<crate::irc::state::StateStore>()
+            .map(|store| store.get(&server_id)).unwrap_or_default();
+        let my_nick = state.nick.clone();
+        let (network, server) = engine.connection_context(&server_id).unwrap_or_default();
+        let ctx = RunCtx { my_nick: &my_nick, network: &network, server: &server, data_dir: script_data_dir(&app), state };
+        let vars = EventVars {
+            target: target.clone(),
+            chan: is_channel(&target).then_some(target).unwrap_or_default(),
+            text: text.clone(),
+            params: vec![key, modifiers, text],
+            ..Default::default()
+        };
+        let (actions, halted) = engine.dispatch_event_halt(&ctx, &kind, vars);
+        apply_actions(&app, &server_id, &my_nick, &network, &server, actions);
+        halted
+    }).await.unwrap_or(false)
+}
+
+#[tauri::command]
+pub fn script_dispatch_audio_end(app: AppHandle, server_id: String, kind: String, path: String) {
+    if !matches!(kind.to_ascii_uppercase().as_str(), "WAVEEND" | "PLAYEND") {
+        return;
+    }
+    let engine = app.state::<ScriptEngine>();
+    let state = app
+        .try_state::<crate::irc::state::StateStore>()
+        .map(|store| store.get(&server_id))
+        .unwrap_or_default();
+    let my_nick = state.nick.clone();
+    let (network, server) = engine.connection_context(&server_id).unwrap_or_default();
+    let ctx = RunCtx {
+        my_nick: &my_nick,
+        network: &network,
+        server: &server,
+        data_dir: script_data_dir(&app),
+        state,
+    };
+    let filename = std::path::Path::new(&path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(&path)
+        .to_string();
+    let actions = engine.dispatch_event(
+        &ctx,
+        &kind,
+        EventVars {
+            filename: filename.clone(),
+            text: filename.clone(),
+            params: vec![filename],
+            ..Default::default()
+        },
+    );
+    apply_actions(&app, &server_id, &my_nick, &network, &server, actions);
+}
+
+#[tauri::command]
+pub fn script_dispatch_dns(app: AppHandle, server_id: String, host: String, ips: Vec<String>) {
+    let engine = app.state::<ScriptEngine>();
+    let state = app
+        .try_state::<crate::irc::state::StateStore>()
+        .map(|store| store.get(&server_id))
+        .unwrap_or_default();
+    let my_nick = state.nick.clone();
+    let (network, server) = engine.connection_context(&server_id).unwrap_or_default();
+    let ctx = RunCtx {
+        my_nick: &my_nick,
+        network: &network,
+        server: &server,
+        data_dir: script_data_dir(&app),
+        state,
+    };
+    let vars = EventVars {
+        dns_query: host.clone(),
+        dns_ips: ips,
+        text: host.clone(),
+        params: vec![host],
+        ..Default::default()
+    };
+    let actions = engine.dispatch_event(&ctx, "DNS", vars);
+    apply_actions(&app, &server_id, &my_nick, &network, &server, actions);
 }
 
 /// Records native-window and UI preference state used by client identifiers.
@@ -4391,7 +4738,7 @@ mod tests {
         let actions = engine.run_command(&ctx(), "#c", "/splay alert.wav", &[]);
         assert!(matches!(
             &actions[..],
-            [Action::Audio { operation, path }]
+            [Action::Audio { operation, path, .. }]
                 if operation == "play" && path.ends_with("alert.wav")
         ));
 
@@ -4401,7 +4748,7 @@ mod tests {
                 &actions[..],
                 [
                     Action::Send(line),
-                    Action::Audio { operation, path }
+                    Action::Audio { operation, path, .. }
                 ] if line == "PRIVMSG #c :\u{1}SOUND alert.wav hello\u{1}"
                     && operation == "play"
                     && path.ends_with("alert.wav")
@@ -4413,6 +4760,7 @@ mod tests {
             vec![Action::Audio {
                 operation: "pause".into(),
                 path: String::new(),
+                end_event: "WAVEEND".into(),
             }]
         );
     }
@@ -4568,6 +4916,44 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn richer_panel_toolbar_and_ui_completion_events() {
+        let engine = ScriptEngine::new();
+        assert!(matches!(
+            engine.run_command(&ctx(), "#c", "/panel -i stats query \"Search\" \"hello\" \"/echo -a $!2\"", &[]).as_slice(),
+            [Action::Panel { op, id, label, value, .. }]
+                if op == "input" && id == "query" && label == "Search" && value == "hello"
+        ));
+        assert!(matches!(
+            engine.run_command(&ctx(), "#c", "/panel -k stats enabled \"Enabled\" 1 \"/echo -a $!2\"", &[]).as_slice(),
+            [Action::Panel { op, id, value, .. }]
+                if op == "checkbox" && id == "enabled" && value == "1"
+        ));
+        assert!(matches!(
+            engine.run_command(&ctx(), "#c", "/toolbar -n Cow", &[]).as_slice(),
+            [Action::Toolbar { op, command, .. }] if op == "enabled" && command == "0"
+        ));
+
+        engine.load(
+            "on *:KEYDOWN:*:/echo -a key $1 $2\n\
+             on *:WAVEEND:*:/echo -a wave $filename\n\
+             on *:PLAYEND:*:/echo -a play $filename",
+        );
+        let key = engine.dispatch_event(
+            &ctx(),
+            "KEYDOWN",
+            EventVars { params: vec!["F2".into(), "ctrl".into()], ..Default::default() },
+        );
+        assert_eq!(key, vec![Action::Echo { target: "(status)".into(), text: "key F2 ctrl".into() }]);
+        for (kind, expected) in [("WAVEEND", "wave alert.wav"), ("PLAYEND", "play lines.txt")] {
+            let filename = if kind == "WAVEEND" { "alert.wav" } else { "lines.txt" };
+            assert_eq!(
+                engine.dispatch_event(&ctx(), kind, EventVars { filename: filename.into(), ..Default::default() }),
+                vec![Action::Echo { target: "(status)".into(), text: expected.into() }]
+            );
+        }
     }
 
     #[test]
@@ -5700,6 +6086,208 @@ mod tests {
                 "PRIVMSG #c :6697/$true/me_/Real Name/ix/$true/Gone fishing/MainNick".into()
             )]
         );
+    }
+
+    #[test]
+    fn extended_connection_and_alias_parameter_identifiers() {
+        use sha2::Digest;
+        let certificate = b"test certificate".to_vec();
+        let snap = crate::irc::state::StateSnapshot {
+            server_ip: "203.0.113.4".into(),
+            server_target: "irc.example.test".into(),
+            tls: true,
+            tls_version: "TLSv1.3".into(),
+            tls_peer_certificate: certificate.clone(),
+            tls_cert_valid: true,
+            ..Default::default()
+        };
+        let rctx = RunCtx {
+            state: std::sync::Arc::new(snap),
+            ..ctx()
+        };
+        let engine = ScriptEngine::new();
+        engine.load("alias facts { /msg #c $serverip $servertarget $sslversion $sslcertvalid $sslhash(sha256,s) $parms }");
+        assert_eq!(
+            engine.run_alias(&rctx, "#c", "facts", "one two three"),
+            vec![Action::Send(format!(
+                "PRIVMSG #c :203.0.113.4 irc.example.test TLSv1.3 $true {:x} one two three",
+                sha2::Sha256::digest(&certificate)
+            ))]
+        );
+    }
+
+    #[test]
+    fn remote_command_controls_event_dispatch_bits() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "on *:SIGNAL:test:/echo -a fired\nalias off { /remote off }\nalias on { /remote on }",
+        );
+        let signal = || EventVars {
+            chan: "test".into(),
+            ..Default::default()
+        };
+        assert_eq!(engine.dispatch_event(&ctx(), "SIGNAL", signal()).len(), 1);
+        engine.run_alias(&ctx(), "#c", "off", "");
+        assert!(engine.dispatch_event(&ctx(), "SIGNAL", signal()).is_empty());
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", "/msg #c $remote", &[]),
+            vec![Action::Send("PRIVMSG #c :0".into())]
+        );
+        engine.run_alias(&ctx(), "#c", "on", "");
+        assert_eq!(engine.dispatch_event(&ctx(), "SIGNAL", signal()).len(), 1);
+    }
+
+    #[test]
+    fn dns_event_identifiers_and_command_are_script_visible() {
+        let engine = ScriptEngine::new();
+        engine.load("on *:DNS:{ /echo -a $raddress $dns(0) $dns(1).ip }");
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", "/dns example.test", &[]),
+            vec![Action::DnsLookup {
+                host: "example.test".into()
+            }]
+        );
+        let actions = engine.dispatch_event(
+            &ctx(),
+            "DNS",
+            EventVars {
+                dns_query: "example.test".into(),
+                dns_ips: vec!["192.0.2.1".into()],
+                params: vec!["example.test".into()],
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            actions,
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "example.test 1 192.0.2.1".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn script_lifecycle_commands_preserve_switch_intent() {
+        let engine = ScriptEngine::new();
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", "/load -rs tools.mrc", &[]),
+            vec![Action::ScriptLoad {
+                name: "tools.mrc".into(),
+                load: true,
+                suppress_event: false
+            }]
+        );
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", "/unload -nrs tools.mrc", &[]),
+            vec![Action::ScriptLoad {
+                name: "tools.mrc".into(),
+                load: false,
+                suppress_event: true
+            }]
+        );
+    }
+
+    #[test]
+    fn active_and_tabcomp_events_match_targets_and_can_halt() {
+        let engine = ScriptEngine::new();
+        engine.load("on *:ACTIVE:#chan:{ /echo -a active $target }\non *:TABCOMP:#chan:{ /echo -a tab $1- | /halt }");
+        assert_eq!(
+            engine.dispatch_event(
+                &ctx(),
+                "ACTIVE",
+                EventVars {
+                    target: "#chan".into(),
+                    chan: "#chan".into(),
+                    ..Default::default()
+                }
+            ),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "active #chan".into()
+            }]
+        );
+        let (actions, halted) = engine.dispatch_event_halt(
+            &ctx(),
+            "TABCOMP",
+            EventVars {
+                target: "#chan".into(),
+                chan: "#chan".into(),
+                text: "hello al".into(),
+                params: vec!["hello".into(), "al".into()],
+                ..Default::default()
+            },
+        );
+        assert!(halted);
+        assert_eq!(
+            actions,
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "tab hello al".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn real_world_msl_compatibility_corpus() {
+        use crate::irc::state::{ChannelView, StateSnapshot};
+
+        let daily = ScriptEngine::new();
+        daily.load(include_str!("../../tests/fixtures/msl-compat/daily-aliases.msl"));
+        assert_eq!(
+            daily.run_alias(&ctx(), "#compat", "compat_daily", "10 20 12"),
+            vec![Action::Send(
+                "PRIVMSG #compat :total=42 first=10 parms=10 20 12".into()
+            )]
+        );
+
+        let bot = ScriptEngine::new();
+        bot.load(include_str!("../../tests/fixtures/msl-compat/event-bot.msl"));
+        let message = UiEvent::Message {
+            server_id: "s".into(),
+            kind: MessageKind::Privmsg,
+            from: Some("alice".into()),
+            target: "#compat".into(),
+            text: "!hello world".into(),
+            time: None,
+        };
+        assert_eq!(
+            drive_event(&bot, &ctx(), &message),
+            vec![Action::Send(
+                "PRIVMSG #compat :Hello world, requested by alice on Net".into()
+            )]
+        );
+
+        let stateful = ScriptEngine::new();
+        stateful.load(include_str!("../../tests/fixtures/msl-compat/channel-state.msl"));
+        let snapshot = StateSnapshot {
+            nick: "me".into(),
+            channels: vec![ChannelView {
+                name: "#compat".into(),
+                nicks: vec!["me".into(), "alice".into()],
+                members: vec![("me".into(), "@".into()), ("alice".into(), "".into())],
+                ..Default::default()
+            }],
+            ial: vec![("alice".into(), "alice!u@example.test".into())],
+            ..Default::default()
+        };
+        let state_ctx = RunCtx {
+            state: std::sync::Arc::new(snapshot),
+            ..ctx()
+        };
+        assert_eq!(
+            stateful.run_alias(&state_ctx, "#compat", "compat_state", "alice"),
+            vec![
+                Action::Send("MODE #compat +v alice".into()),
+                Action::Send("PRIVMSG #compat :voiced alice from *!*@*.test".into()),
+            ]
+        );
+
+        let ui = ScriptEngine::new();
+        ui.load(include_str!("../../tests/fixtures/msl-compat/script-ui.msl"));
+        assert!(matches!(
+            ui.run_alias(&ctx(), "#compat", "compat_ui", "").as_slice(),
+            [Action::DialogOpen { name, .. }] if name == "compatbox"
+        ));
     }
 
     #[test]
@@ -6891,6 +7479,22 @@ mod tests {
             vec![Action::Send("MODE #c +o vip".into())]
         );
         assert_eq!(engine.dispatch_event(&rctx, "DEOP", deop("rando")), vec![]);
+
+        let already_restored = StateSnapshot {
+            ial: vec![("vip".into(), "vip!u@vip.com".into())],
+            channels: vec![ChannelView {
+                name: "#c".into(),
+                nicks: vec!["me".into(), "vip".into()],
+                members: vec![("me".into(), "@".into()), ("vip".into(), "@".into())],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let restored_ctx = RunCtx {
+            state: std::sync::Arc::new(already_restored),
+            ..rctx
+        };
+        assert_eq!(engine.dispatch_event(&restored_ctx, "DEOP", deop("vip")), vec![]);
     }
 
     #[test]
@@ -10070,6 +10674,7 @@ mod tests {
         let engine = ScriptEngine::new();
         engine.load(
             "alias p { dcc passive on }\n\
+             alias legacy { pdcc off }\n\
              alias s { dccserver +scf on 50059 }",
         );
         assert_eq!(
@@ -10079,9 +10684,50 @@ mod tests {
             }]
         );
         assert_eq!(
+            engine.run_alias(&ctx(), "", "legacy", ""),
+            vec![Action::Dcc {
+                args: "passive off".into(),
+            }]
+        );
+        assert_eq!(
             engine.run_alias(&ctx(), "", "s", ""),
             vec![Action::DccServer {
                 args: "+scf on 50059".into(),
+            }]
+        );
+    }
+
+    struct ConfiguredDcc;
+
+    impl ScriptDcc for ConfiguredDcc {
+        fn snapshot(&self, _: &str) -> Vec<eval::DccInfo> {
+            Vec::new()
+        }
+
+        fn server_port(&self) -> Option<u16> {
+            None
+        }
+
+        fn bind_ip(&self) -> String {
+            "192.0.2.10".into()
+        }
+
+        fn passive(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn dcc_configuration_identifiers_read_the_current_backend() {
+        let engine = ScriptEngine::new();
+        engine.set_dcc(std::sync::Arc::new(ConfiguredDcc));
+        engine.load("alias inspect { echo -s $bindip $passivedcc }");
+
+        assert_eq!(
+            engine.run_alias(&ctx(), "", "inspect", ""),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "192.0.2.10 on".into(),
             }]
         );
     }

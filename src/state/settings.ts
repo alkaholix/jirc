@@ -10,6 +10,8 @@ export interface Settings {
   /** Colour theme used by the mSL script editor. */
   scriptTheme: ScriptTheme;
   layout: Layout;
+  treebarWidth: number;
+  treebarPosition: "left" | "right";
   timestampMode: TimestampMode;
   showJoinPart: boolean;
   notifications: boolean;
@@ -62,6 +64,7 @@ export interface Settings {
 
   // DCC networking (for transfers across NAT).
   dccIp: string; // advertised IP; "" = auto (local IP)
+  dccBindIp: string; // local listener interface; "" = all interfaces
   dccPortFrom: number; // listen-port range; 0 = ephemeral
   dccPortTo: number;
   /** Use mIRC's passive/reverse DCC negotiation for outgoing offers. */
@@ -77,6 +80,8 @@ const DEFAULTS: Settings = {
   theme: "dark",
   scriptTheme: "vscode-dark",
   layout: "tree",
+  treebarWidth: 220,
+  treebarPosition: "left",
   timestampMode: "inline",
   showJoinPart: true,
   notifications: true,
@@ -115,6 +120,7 @@ const DEFAULTS: Settings = {
   floodSeconds: 2,
 
   dccIp: "",
+  dccBindIp: "",
   dccPortFrom: 0,
   dccPortTo: 0,
   dccPassive: false,

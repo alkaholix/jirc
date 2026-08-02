@@ -1,0 +1,8 @@
+; Typical channel bot trigger with wildcard matchtext and event context.
+on *:TEXT:!hello &:#:{
+  msg $chan Hello $2 $+ , requested by $nick on $network
+}
+
+on *:ACTION:*:#:{
+  if (waves isin $1-) { notice $nick I saw that wave in $chan }
+}

@@ -37,15 +37,16 @@ function tone(volume: number, frequency = 660): void {
   oscillator.addEventListener("ended", () => context.close().catch(() => {}));
 }
 
-export async function playFile(path: string, volume?: number): Promise<void> {
+export async function playFile(path: string, volume?: number, ended?: () => void): Promise<void> {
   if (!path) return;
   player?.pause();
   player = new Audio(convertFileSrc(path));
   player.volume = Math.max(0, Math.min(1, volume ?? useSettings.getState().soundVolume));
+  if (ended) player.addEventListener("ended", ended, { once: true });
   await player.play();
 }
 
-export function controlAudio(operation: string, path = ""): void {
+export function controlAudio(operation: string, path = "", ended?: () => void): void {
   if (operation === "stop") {
     player?.pause();
     if (player) player.currentTime = 0;
@@ -54,7 +55,7 @@ export function controlAudio(operation: string, path = ""): void {
   } else if (operation === "resume") {
     player?.play().catch(() => {});
   } else if (operation === "play") {
-    playFile(path).catch(() => {});
+    playFile(path, undefined, ended).catch(() => {});
   }
 }
 

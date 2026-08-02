@@ -1,6 +1,7 @@
 import { IrcEvent } from "./api";
 import { normalizeAppFontSize, useSettings } from "../state/settings";
 import { STATUS, useStore } from "../state/store";
+import { api } from "./api";
 
 export interface EditboxCommand {
   serverId: string;
@@ -157,9 +158,26 @@ export function routeClientCommand(
       break;
     }
     case "treebar": {
-      const mode = words(event.args)[0]?.toLowerCase();
+      const parts = words(event.args);
+      const mode = parts[0]?.toLowerCase();
       if (mode === "on") useSettings.getState().set("layout", "tree");
       else if (mode === "off") useSettings.getState().set("layout", "switchbar");
+      const widthAt = parts.findIndex((part) => part.toLowerCase() === "-w");
+      if (widthAt >= 0) {
+        const width = Math.max(140, Math.min(600, Number(parts[widthAt + 1]) || 220));
+        useSettings.getState().set("treebarWidth", width);
+      }
+      if (parts.some((part) => part.toLowerCase() === "-l")) useSettings.getState().set("treebarPosition", "left");
+      if (parts.some((part) => part.toLowerCase() === "-r")) useSettings.getState().set("treebarPosition", "right");
+      break;
+    }
+    case "linesep": {
+      const parts = words(event.args);
+      const explicitTarget = parts[0] && (/^[#&+%!@=]/.test(parts[0]) || parts[0] === STATUS);
+      const target = explicitTarget ? parts.shift()! : event.currentTarget || STATUS;
+      const server = useStore.getState().servers[event.serverId];
+      const kind = target === STATUS ? "status" : server?.chanTypes.includes(target[0]) ? "channel" : target.startsWith("@") ? "window" : "query";
+      useStore.getState().appendLine(event.serverId, target, kind, { kind: "separator", text: parts.join(" ") });
       break;
     }
     case "font":
@@ -171,5 +189,39 @@ export function routeClientCommand(
     case "close":
       routeClose(event.serverId, event.args);
       break;
+    case "queryrn": {
+      const [oldName, newName] = words(event.args);
+      const state = useStore.getState();
+      const key = state.order.find((candidate) => {
+        const buffer = state.buffers[candidate];
+        return buffer?.serverId === event.serverId && buffer.kind === "query" && buffer.name.toLowerCase() === oldName?.toLowerCase();
+      });
+      if (key && newName) state.renameBuffer(key, newName);
+      break;
+    }
+    case "help":
+      api.openHelp(words(event.args)[0]).catch(() => {});
+      break;
+    case "log": {
+      const parts = words(event.args);
+      const mode = parts.find((part) => /^(on|off)$/i.test(part))?.toLowerCase();
+      const target = parts.find((part) => !part.startsWith("-") && !/^(on|off)$/i.test(part)) ?? event.currentTarget;
+      useStore.setState((state) => {
+        const buffers = { ...state.buffers };
+        for (const [key, buffer] of Object.entries(buffers)) {
+          if (buffer.serverId === event.serverId && buffer.name.toLowerCase() === target.toLowerCase()) {
+            buffers[key] = { ...buffer, logging: mode !== "off" };
+          }
+        }
+        return { buffers };
+      });
+      break;
+    }
+    case "logview": {
+      const target = words(event.args).find((part) => !part.startsWith("-")) ?? event.currentTarget;
+      const state = useStore.getState();
+      state.setActive(state.ensureBuffer(event.serverId, target, target.startsWith("#") ? "channel" : "query"));
+      break;
+    }
   }
 }

@@ -1,5 +1,6 @@
 import { ChangeEvent, KeyboardEvent, MouseEvent, useEffect, useRef, useState } from "react";
 import { Buffer } from "../state/store";
+import { api } from "../lib/api";
 import { handleInput } from "../lib/slash";
 import { emojiPicker } from "../lib/emoji";
 import { ContextMenu } from "./popupMenu";
@@ -283,6 +284,8 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    const modifiers = [e.ctrlKey && "ctrl", e.altKey && "alt", e.shiftKey && "shift", e.metaKey && "meta"].filter(Boolean).join("+");
+    void api.scriptRunKey(buffer.serverId, buffer.name, "KEYDOWN", e.key, modifiers, value);
     if (e.key === "Enter") {
       e.preventDefault();
       submit();
@@ -303,8 +306,15 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
       e.preventDefault();
     } else if (e.key === "Tab") {
       e.preventDefault();
-      completeNick();
+      void api.scriptRunTabcomp(buffer.serverId, buffer.name, value)
+        .then((halted) => { if (!halted) completeNick(); })
+        .catch(() => completeNick());
     }
+  };
+
+  const onKeyUp = (e: KeyboardEvent<HTMLInputElement>) => {
+    const modifiers = [e.ctrlKey && "ctrl", e.altKey && "alt", e.shiftKey && "shift", e.metaKey && "meta"].filter(Boolean).join("+");
+    void api.scriptRunKey(buffer.serverId, buffer.name, "KEYUP", e.key, modifiers, value);
   };
 
   // Simple nick tab-completion from the last word.
@@ -424,6 +434,7 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
           placeholder="Type a message or /command…"
           onChange={onInputChange}
           onKeyDown={onKeyDown}
+          onKeyUp={onKeyUp}
           onContextMenu={openContextMenu}
           {...spellCheckAttributes(spellCheck, spellCheckLanguage)}
           autoFocus

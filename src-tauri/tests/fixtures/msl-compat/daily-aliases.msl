@@ -1,0 +1,10 @@
+; Representative everyday alias: local variables, loops, token functions,
+; arithmetic and untouched parameter text.
+alias compat_daily {
+  var %i = 1, %total = 0
+  while (%i <= $0) {
+    inc %total $gettok($1-,%i,32)
+    inc %i
+  }
+  msg #compat total=%total first=$gettok($1-,1,32) parms=$parms
+}
