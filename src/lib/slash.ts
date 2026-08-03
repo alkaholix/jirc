@@ -160,8 +160,34 @@ export async function handleInput(input: string, buffer: Buffer): Promise<void> 
       }
       break;
     case "nick":
+    case "tnick":
       if (args) await api.setNick(serverId, args.split(" ")[0]);
       break;
+    case "markasread": {
+      const rawWanted = args.trim().toLowerCase();
+      const wanted = /^(?:status window|\(status\))$/.test(rawWanted) ? "(status)" : rawWanted;
+      useStore.setState((state) => {
+        const buffers = { ...state.buffers };
+        for (const [key, candidate] of Object.entries(buffers)) {
+          if (candidate.serverId !== serverId) continue;
+          if (wanted && candidate.name.toLowerCase() !== wanted) continue;
+          buffers[key] = { ...candidate, unread: 0, mention: false };
+        }
+        return { buffers };
+      });
+      break;
+    }
+    case "strip": {
+      let enabled = new Set(useSettings.getState().stripCodes);
+      let adding = true;
+      for (const ch of args.toLowerCase()) {
+        if (ch === "+") adding = true;
+        else if (ch === "-") adding = false;
+        else if ("buriec".includes(ch)) adding ? enabled.add(ch) : enabled.delete(ch);
+      }
+      useSettings.getState().set("stripCodes", "buriec".split("").filter((ch) => enabled.has(ch)).join(""));
+      break;
+    }
     case "whois":
     case "wi":
       if (args) await api.whois(serverId, args.split(" ")[0]);
@@ -219,7 +245,7 @@ export async function handleInput(input: string, buffer: Buffer): Promise<void> 
       if (args) {
         const isAction = command === "qme";
         const queries = Object.values(store.buffers).filter(
-          (b) => b.serverId === serverId && b.kind === "query"
+          (b) => b.serverId === serverId && b.kind === "query" && !b.name.startsWith("=")
         );
         for (const qb of queries) {
           if (isAction) {
@@ -235,6 +261,29 @@ export async function handleInput(input: string, buffer: Buffer): Promise<void> 
           });
         }
       }
+      break;
+    }
+    case "pop":
+    case "pvoice": {
+      const parts = [...rest];
+      const delay = Number(parts.shift());
+      if (!Number.isFinite(delay) || delay < 0) break;
+      const explicitChannel = parts[0] && srv?.chanTypes.includes(parts[0][0]);
+      const channel = explicitChannel ? parts.shift()! : kind === "channel" ? name : "";
+      const who = parts[0];
+      if (!channel || !who) break;
+      const mode = command === "pop" ? "o" : "v";
+      window.setTimeout(() => {
+        const current = useStore.getState();
+        const liveServer = current.servers[serverId];
+        const live = current.buffers[serverBufferKey(serverId, channel)];
+        const member = live?.members.find((m) => m.nick.toLowerCase() === who.toLowerCase());
+        const prefixAt = liveServer?.prefixModes.indexOf(mode) ?? -1;
+        const symbol = prefixAt >= 0 ? liveServer?.prefixes[prefixAt] : mode === "o" ? "@" : "+";
+        if (member && symbol && !member.prefix.includes(symbol)) {
+          api.sendRaw(serverId, `MODE ${channel} +${mode} ${who}`).catch(() => {});
+        }
+      }, delay * 1000);
       break;
     }
     case "queryrn": {

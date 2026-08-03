@@ -41,7 +41,7 @@ import {
   useSettings,
 } from "./state/settings";
 import { scriptServerAutoReconnect } from "./lib/profileValidation";
-import { routeToolbarEvent } from "./state/toolbar";
+import { routeToolbarEvent, useToolbar } from "./state/toolbar";
 import { ScriptToolbar } from "./components/ScriptToolbar";
 import { routePanelEvent } from "./state/panels";
 import { routeClientCommand } from "./lib/clientCommands";
@@ -125,6 +125,7 @@ function MainApp() {
   );
   const customCss = useSettings((s) => s.customCss);
   const layout = useSettings((s) => s.layout);
+  const scriptToolbarVisible = useToolbar((s) => s.visible);
   const treebarWidth = useSettings((s) => s.treebarWidth);
   const treebarPosition = useSettings((s) => s.treebarPosition);
   const chatFont = useSettings((s) => s.chatFont);
@@ -321,6 +322,12 @@ function MainApp() {
       .scriptSetClientPreferences(resolveTheme(theme) === "dark", notifyList, notifyOnline)
       .catch(() => {});
   }, [theme, notifyList, notifyOnline]);
+
+  useEffect(() => {
+    api
+      .scriptSetClientUiState(scriptToolbarVisible, layout === "tree", layout === "switchbar")
+      .catch(() => {});
+  }, [scriptToolbarVisible, layout]);
 
   useEffect(() => {
     applyCustomCss(customCss);

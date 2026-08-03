@@ -15,7 +15,7 @@ const event = (op: string, overrides: Record<string, string> = {}) =>
   }) as const;
 
 describe("script toolbar state", () => {
-  beforeEach(() => useToolbar.setState({ buttons: [] }));
+  beforeEach(() => useToolbar.setState({ buttons: [], visible: true }));
 
   it("adds, updates, and removes buttons case-insensitively", () => {
     routeToolbarEvent(

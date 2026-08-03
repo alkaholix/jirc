@@ -1771,6 +1771,32 @@ label.inline {
   padding: 0 0.25rem;
   border-radius: 3px;
 }
+.script-tabs {
+  display: flex;
+  gap: 0;
+  margin: 0 0 0.55rem;
+  border-bottom: 1px solid var(--border);
+}
+.script-tabs button {
+  padding: 0.42rem 0.9rem;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 5px 5px 0 0;
+  font-weight: 500;
+  cursor: pointer;
+}
+.script-tabs button:hover {
+  color: var(--fg);
+  background: var(--bg2);
+}
+.script-tabs button.active {
+  color: var(--fg);
+  background: var(--panel2);
+  border-color: var(--border);
+  box-shadow: 0 1px 0 var(--panel2);
+}
 .script-layout {
   display: flex;
   gap: 0.6rem;

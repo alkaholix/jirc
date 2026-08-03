@@ -2,12 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { parseEditboxCommand, routeClientCommand } from "./clientCommands";
 import { useSettings } from "../state/settings";
 import { STATUS, bufferKey, useStore } from "../state/store";
+import { useToolbar } from "../state/toolbar";
 
 vi.mock("./api", () => ({
   api: {
     scriptWindowClose: vi.fn(() => Promise.resolve()),
     disconnect: vi.fn(() => Promise.resolve()),
     openHelp: vi.fn(() => Promise.resolve()),
+    sendRaw: vi.fn(() => Promise.resolve()),
+    sendMessage: vi.fn(() => Promise.resolve()),
   },
 }));
 
@@ -16,6 +19,8 @@ describe("script client commands", () => {
     localStorage.clear();
     useSettings.getState().set("layout", "tree");
     useSettings.getState().set("timestampMode", "inline");
+    useSettings.getState().set("stripCodes", "");
+    useToolbar.getState().setVisible(true);
     useStore.setState({
       servers: {},
       buffers: {},
@@ -57,6 +62,8 @@ describe("script client commands", () => {
     expect(useSettings.getState().layout).toBe("switchbar");
     routeClientCommand({ ...base, command: "treebar", args: "on" }, vi.fn());
     expect(useSettings.getState().layout).toBe("tree");
+    routeClientCommand({ ...base, command: "toolbar", args: "off" }, vi.fn());
+    expect(useToolbar.getState().visible).toBe(false);
   });
 
   it("applies the application font with an 8px minimum", () => {
@@ -113,5 +120,30 @@ describe("script client commands", () => {
     expect(useStore.getState().buffers[query].logging).toBe(false);
     routeClientCommand({ ...base, command: "queryrn", args: "oldnick newnick" }, vi.fn());
     expect(Object.values(useStore.getState().buffers).some((buffer) => buffer.name === "newnick")).toBe(true);
+  });
+
+  it("marks one or every connection buffer as read", () => {
+    const one = bufferKey("s1", "#one");
+    const two = bufferKey("s1", "#two");
+    useStore.setState({
+      buffers: {
+        [one]: { key: one, serverId: "s1", name: "#one", kind: "channel", lines: [], members: [], unread: 2, mention: true },
+        [two]: { key: two, serverId: "s1", name: "#two", kind: "channel", lines: [], members: [], unread: 3, mention: true },
+      }, order: [one, two],
+    });
+    const base = { type: "clientCommand" as const, serverId: "s1", currentTarget: "#one" };
+    routeClientCommand({ ...base, command: "markasread", args: "#one" }, vi.fn());
+    expect(useStore.getState().buffers[one]).toMatchObject({ unread: 0, mention: false });
+    expect(useStore.getState().buffers[two].unread).toBe(3);
+    routeClientCommand({ ...base, command: "markasread", args: "" }, vi.fn());
+    expect(useStore.getState().buffers[two]).toMatchObject({ unread: 0, mention: false });
+  });
+
+  it("updates individual strip flags", () => {
+    const base = { type: "clientCommand" as const, serverId: "s1", currentTarget: "#one" };
+    routeClientCommand({ ...base, command: "strip", args: "+bur-c" }, vi.fn());
+    expect(useSettings.getState().stripCodes).toBe("bur");
+    routeClientCommand({ ...base, command: "strip", args: "-u+i" }, vi.fn());
+    expect(useSettings.getState().stripCodes).toBe("bri");
   });
 });

@@ -7,10 +7,11 @@ const isImage = (icon: string) =>
 
 export function ScriptToolbar() {
   const buttons = useToolbar((state) => state.buttons);
+  const visible = useToolbar((state) => state.visible);
   const active = useStore((state) => (state.active ? state.buffers[state.active] : undefined));
   const servers = useStore((state) => state.servers);
 
-  if (buttons.length === 0) return null;
+  if (!visible || buttons.length === 0) return null;
 
   return (
     <div className="script-toolbar" role="toolbar" aria-label="Script toolbar">

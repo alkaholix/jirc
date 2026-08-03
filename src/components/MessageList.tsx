@@ -4,7 +4,7 @@ import { Buffer, Line, useStore } from "../state/store";
 import { useSettings, type TimestampMode } from "../state/settings";
 import { api, PopupItem } from "../lib/api";
 import { ContextMenu, PopupItems } from "./popupMenu";
-import { parseIrc, stripFormatting } from "../ircFormat/parse";
+import { parseIrc, stripFormatting, stripFormattingCodes } from "../ircFormat/parse";
 import { nickColor } from "../lib/nickColor";
 import { ircxDisplay } from "../lib/ircx";
 
@@ -50,12 +50,15 @@ function LineRow({
   timestampMode,
   selfColor,
   showDivider,
+  stripCodes,
 }: {
   line: Line;
   timestampMode: TimestampMode;
   selfColor: string;
   showDivider: boolean;
+  stripCodes: string;
 }) {
+  const text = stripFormattingCodes(line.text, stripCodes);
   const dividerClass =
     timestampMode === "divider" && showDivider ? " timestamp-divider-mode" : "";
   if (line.kind === "separator") {
@@ -65,7 +68,7 @@ function LineRow({
     return (
       <div className={`line line-${line.kind}${dividerClass}`}>
         <Timestamp line={line} mode={timestampMode} showDivider={showDivider} />
-        <span className="meta">{parseIrc(line.text)}</span>
+        <span className="meta">{parseIrc(text)}</span>
       </div>
     );
   }
@@ -75,7 +78,7 @@ function LineRow({
         <Timestamp line={line} mode={timestampMode} showDivider={showDivider} />
         <span className="action-text">
           * <span style={{ color: nickColor(line.from ?? "", line.self, selfColor) }}>{ircxDisplay(line.from)}</span>{" "}
-          {parseIrc(line.text)}
+          {parseIrc(text)}
         </span>
       </div>
     );
@@ -89,7 +92,7 @@ function LineRow({
       <div className={`line line-whisper${dividerClass}`}>
         <Timestamp line={line} mode={timestampMode} showDivider={showDivider} />
         <span className="whisper-text">
-          <span className="whisper-mark">»</span> {label}: {parseIrc(line.text)}
+          <span className="whisper-mark">»</span> {label}: {parseIrc(text)}
         </span>
       </div>
     );
@@ -103,7 +106,7 @@ function LineRow({
         {ircxDisplay(line.from)}
         {isNotice ? "-" : ""}
       </span>
-      <span className="text">{parseIrc(line.text)}</span>
+      <span className="text">{parseIrc(text)}</span>
     </div>
   );
 }
@@ -114,6 +117,7 @@ export function MessageList({ buffer }: { buffer: Buffer }) {
   const timestampMode = useSettings((s) => s.timestampMode);
   const showJoinPart = useSettings((s) => s.showJoinPart);
   const selfColor = useSettings((s) => s.selfNickColor);
+  const stripCodes = useSettings((s) => s.stripCodes);
 
   const [search, setSearch] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
@@ -306,6 +310,7 @@ export function MessageList({ buffer }: { buffer: Buffer }) {
                   timestampMode={timestampMode}
                   selfColor={selfColor}
                   showDivider={startsTimestampMinute(lines[vi.index], lines[vi.index - 1])}
+                  stripCodes={stripCodes}
                 />
               </div>
             );

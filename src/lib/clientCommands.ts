@@ -2,6 +2,7 @@ import { IrcEvent } from "./api";
 import { normalizeAppFontSize, useSettings } from "../state/settings";
 import { STATUS, useStore } from "../state/store";
 import { api } from "./api";
+import { useToolbar } from "../state/toolbar";
 
 export interface EditboxCommand {
   serverId: string;
@@ -128,11 +129,93 @@ function routeFont(args: string, openSettings: () => void) {
   }
 }
 
+function routeMarkAsRead(serverId: string, args: string) {
+  const rawName = args.trim();
+  const name = /^(?:status window|\(status\))$/i.test(rawName) ? STATUS : rawName;
+  useStore.setState((state) => {
+    const buffers = { ...state.buffers };
+    for (const [key, buffer] of Object.entries(buffers)) {
+      if (buffer.serverId !== serverId) continue;
+      if (name && buffer.name.toLowerCase() !== name.toLowerCase()) continue;
+      buffers[key] = { ...buffer, unread: 0, mention: false };
+    }
+    return { buffers };
+  });
+}
+
+function routeStrip(args: string) {
+  let enabled = new Set(useSettings.getState().stripCodes);
+  let adding = true;
+  for (const ch of args.toLowerCase()) {
+    if (ch === "+") adding = true;
+    else if (ch === "-") adding = false;
+    else if ("buriec".includes(ch)) adding ? enabled.add(ch) : enabled.delete(ch);
+  }
+  useSettings.getState().set("stripCodes", "buriec".split("").filter((ch) => enabled.has(ch)).join(""));
+}
+
+function routeQueryBroadcast(serverId: string, args: string, action: boolean) {
+  if (!args) return;
+  const state = useStore.getState();
+  const nick = state.servers[serverId]?.nick ?? "me";
+  for (const buffer of Object.values(state.buffers)) {
+    if (buffer.serverId !== serverId || buffer.kind !== "query" || buffer.name.startsWith("=")) continue;
+    const sent = action
+      ? api.sendRaw(serverId, `PRIVMSG ${buffer.name} :\x01ACTION ${args}\x01`)
+      : api.sendMessage(serverId, buffer.name, args);
+    sent.then(() => useStore.getState().appendLine(serverId, buffer.name, "query", {
+      kind: action ? "action" : "msg", from: nick, text: args, self: true,
+    })).catch(() => {});
+  }
+}
+
+function routeDelayedPrivilege(serverId: string, currentTarget: string, args: string, mode: "o" | "v") {
+  const parts = words(args);
+  const delay = Number(parts.shift());
+  if (!Number.isFinite(delay) || delay < 0) return;
+  const chanTypes = useStore.getState().servers[serverId]?.chanTypes ?? "#&+!";
+  const channel = parts[0] && chanTypes.includes(parts[0][0]) ? parts.shift()! : currentTarget;
+  const nick = parts[0];
+  if (!channel || !nick) return;
+  window.setTimeout(() => {
+    const state = useStore.getState();
+    const server = state.servers[serverId];
+    const buffer = Object.values(state.buffers).find((b) =>
+      b.serverId === serverId && b.kind === "channel" && b.name.toLowerCase() === channel.toLowerCase()
+    );
+    const member = buffer?.members.find((m) => m.nick.toLowerCase() === nick.toLowerCase());
+    const prefixAt = server?.prefixModes.indexOf(mode) ?? -1;
+    const symbol = prefixAt >= 0 ? server?.prefixes[prefixAt] : mode === "o" ? "@" : "+";
+    if (member && symbol && !member.prefix.includes(symbol)) {
+      api.sendRaw(serverId, `MODE ${channel} +${mode} ${nick}`).catch(() => {});
+    }
+  }, delay * 1000);
+}
+
 export function routeClientCommand(
   event: Extract<IrcEvent, { type: "clientCommand" }>,
   openSettings: () => void
 ) {
   switch (event.command) {
+    case "markasread":
+      routeMarkAsRead(event.serverId, event.args);
+      break;
+    case "strip":
+      routeStrip(event.args);
+      break;
+    case "qmsg":
+    case "qme":
+      routeQueryBroadcast(event.serverId, event.args, event.command === "qme");
+      break;
+    case "pop":
+    case "pvoice":
+      routeDelayedPrivilege(event.serverId, event.currentTarget, event.args, event.command === "pop" ? "o" : "v");
+      break;
+    case "toolbar": {
+      const mode = words(event.args)[0]?.toLowerCase();
+      if (mode === "on" || mode === "off") useToolbar.getState().setVisible(mode === "on");
+      break;
+    }
     case "editbox":
       window.dispatchEvent(
         new CustomEvent<EditboxCommand>(EDITBOX_COMMAND_EVENT, {

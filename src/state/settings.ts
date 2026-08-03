@@ -13,6 +13,8 @@ export interface Settings {
   treebarWidth: number;
   treebarPosition: "left" | "right";
   timestampMode: TimestampMode;
+  /** mIRC /strip flags currently enabled (b/u/r/i/e/c). */
+  stripCodes: string;
   showJoinPart: boolean;
   notifications: boolean;
   soundEnabled: boolean;
@@ -83,6 +85,7 @@ const DEFAULTS: Settings = {
   treebarWidth: 220,
   treebarPosition: "left",
   timestampMode: "inline",
+  stripCodes: "",
   showJoinPart: true,
   notifications: true,
   soundEnabled: true,

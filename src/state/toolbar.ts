@@ -16,9 +16,15 @@ export interface ScriptToolbarButton {
 
 interface ToolbarState {
   buttons: ScriptToolbarButton[];
+  visible: boolean;
+  setVisible: (visible: boolean) => void;
 }
 
-export const useToolbar = create<ToolbarState>(() => ({ buttons: [] }));
+export const useToolbar = create<ToolbarState>((set) => ({
+  buttons: [],
+  visible: true,
+  setVisible: (visible) => set({ visible }),
+}));
 
 export function routeToolbarEvent(event: IrcEvent): void {
   if (event.type !== "toolbar") return;

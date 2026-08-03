@@ -159,6 +159,11 @@ are commands. Common ones:</p>
   <tr><td><code>/msg nick text</code> · <code>/query nick</code></td><td>private message / open a query</td></tr>
   <tr><td><code>/me action</code></td><td>send an action</td></tr>
   <tr><td><code>/nick newnick</code></td><td>change your nick</td></tr>
+  <tr><td><code>/tnick newnick</code></td><td>change nick without changing the saved main or alternate nick</td></tr>
+  <tr><td><code>/markasread [window]</code></td><td>mark one window, or every window on this connection, as read</td></tr>
+  <tr><td><code>/strip [+-buriec]</code></td><td>enable or disable individual incoming-format stripping categories</td></tr>
+  <tr><td><code>/pop delay [#chan] nick</code> · <code>/pvoice …</code></td><td>op / voice after a delay if the nick is still present and not already privileged</td></tr>
+  <tr><td><code>/qmsg text</code> · <code>/qme action</code></td><td>message / action every open query window</td></tr>
   <tr><td><code>/whois nick</code></td><td>look someone up</td></tr>
   <tr><td><code>/topic [text]</code></td><td>view / set the channel topic</td></tr>
   <tr><td><code>/channel [#channel]</code></td><td>open the channel-mode and access-list editor</td></tr>
@@ -369,6 +374,11 @@ This is a <strong>subset</strong> of mIRC — not 100% compatible. See
 and <strong>menus</strong>. Each lives in a <code>.mrc</code> file. All your
 <code>.mrc</code> files are compiled together, so an alias in one file can be called
 from another.</p>
+<p>The script editor provides dedicated <strong>Aliases</strong> and
+<strong>Popups</strong> tabs, saved as <code>aliases.mrc</code> and
+<code>popups.mrc</code>. The <strong>Remote</strong> tab manages all other script
+files. These dedicated files use normal mSL syntax and remain portable alongside
+the rest of the scripts folder.</p>
 
 <h2 id="load">Where scripts live &amp; how to load them</h2>
 <ul>
@@ -927,7 +937,7 @@ are intentionally not exposed.</p>
   <tr><td><code>/fserve nick maxgets homedir [welcome]</code></td><td>Offer a sandboxed DCC file server rooted under <code>scriptdata</code>.</td></tr>
   <tr><td><code>/dialog /did</code></td><td>Open/manage a custom dialog (see Dialogs).</td></tr>
   <tr><td><code>/nickicon nick icon</code></td><td>Badge a nick in the nick list (emoji or image URL).</td></tr>
-  <tr><td><code>/toolbar -a name "tip" icon "/command $!1"</code></td><td>Add or replace a script toolbar button. Supports enabled <code>-e/-n</code>, visible <code>-v/-h</code>, checked <code>-k/-u</code>, separator <code>-s</code>, delete <code>-d</code> and clear <code>-c</code>.</td></tr>
+  <tr><td><code>/toolbar on|off</code> · <code>/toolbar -a name "tip" icon "/command $!1"</code></td><td>Show/hide the script toolbar or add/replace a button. Supports enabled <code>-e/-n</code>, visible <code>-v/-h</code>, checked <code>-k/-u</code>, separator <code>-s</code>, delete <code>-d</code> and clear <code>-c</code>.</td></tr>
   <tr><td><code>/panel -a name "title"</code></td><td>Create a docked panel with text <code>-t</code>, button <code>-b</code>, input <code>-i</code>, checkbox <code>-k</code>, progress <code>-p</code> or separator <code>-s</code>. Interactive commands receive id/value as <code>$1</code>/<code>$2</code>.</td></tr>
   <tr><td><code>/linesep [target] [label]</code></td><td>Add a styled line marker to a buffer.</td></tr>
   <tr><td><code>/editbox [switches] [window] text</code></td><td>Fill the current, active (<code>-a</code>), or status (<code>-s</code>) message box. <code>-f</code> focuses, <code>-p</code> appends a space, <code>-n</code> submits, and <code>-bN</code>/<code>-eN</code> select a range.</td></tr>
@@ -967,6 +977,8 @@ goes to the server.</div>
   <tr><td><code>$active</code></td><td>the name of the window you have focused</td></tr>
   <tr><td><code>$appactive</code> · <code>$appstate</code></td><td>whether any jIRC window is focused · main-window state (<code>normal</code>, <code>minimized</code>, <code>maximized</code>, <code>full</code>, or <code>hidden</code>)</td></tr>
   <tr><td><code>$darkmode</code></td><td><code>$true</code> when jIRC's resolved theme is dark</td></tr>
+  <tr><td><code>$toolbar</code> · <code>$treebar</code> · <code>$switchbar</code></td><td>live <code>on</code>/<code>off</code> state of jIRC's script toolbar and navigation layout</td></tr>
+  <tr><td><code>$keychar</code> · <code>$keyval</code> · <code>$keyrpt</code></td><td>character, virtual-key number and held-key repeat state inside <code>on KEYDOWN</code>/<code>on KEYUP</code></td></tr>
   <tr><td><code>$cid</code> · <code>$activecid</code></td><td>this connection's number · the focused window's connection</td></tr>
   <tr><td><code>$scon(0)</code> · <code>$scon(N)</code></td><td>number of connections · the Nth connection's <code>$cid</code></td></tr>
   <tr><td><code>$wid</code> · <code>$activewid</code></td><td>this window's id · the focused window's id</td></tr>

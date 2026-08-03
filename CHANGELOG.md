@@ -12,6 +12,32 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 📝 26.8.5 — Aliases and popups editor
+
+- Added mIRC-style Aliases, Popups and Remote tabs to the script editor.
+- Added guided starter sources for `aliases.mrc` and `popups.mrc`; both remain
+  normal portable mSL files compiled with every other script.
+- Kept general remote scripts in their existing multi-file browser while
+  reserving the dedicated files for their focused editors.
+
+## 🧳 26.8.4 — Portable client commands
+
+- Added `/markasread [name]` for clearing one window or every unread window on
+  the current connection.
+- Added persistent `/strip [+-buriec]` message-format stripping controls.
+- Added `/tnick`, delayed `/pop` and `/pvoice` with live privilege checks, and
+  `/qmsg`/`/qme` broadcasts to all open query windows.
+
+## 🖥️ 26.8.3 — Live script UI and keyboard state
+
+- Added live `$toolbar`, `$treebar`, and `$switchbar` identifiers that follow
+  the application layout instead of returning fixed compatibility values.
+- Added `/toolbar on|off` for globally showing or hiding the script toolbar
+  without changing its buttons or their properties.
+- Added event-local `$keychar`, `$keyval`, and `$keyrpt` values for
+  `on KEYDOWN` and `on KEYUP`, including browser key codes and held-key repeat
+  state.
+
 ## 🧩 26.8.2 — Portable mSL compatibility follow-up
 
 - Added live `$bindip` and `$passivedcc` identifiers backed by the active DCC

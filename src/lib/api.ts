@@ -260,8 +260,8 @@ export const api = {
     invoke("script_set_active", { name, serverId }),
   scriptRunTabcomp: (serverId: string, target: string, text: string) =>
     invoke<boolean>("script_run_tabcomp", { serverId, target, text }),
-  scriptRunKey: (serverId: string, target: string, kind: "KEYDOWN" | "KEYUP", key: string, modifiers: string, text: string) =>
-    invoke<boolean>("script_run_key", { serverId, target, kind, key, modifiers, text }),
+  scriptRunKey: (serverId: string, target: string, kind: "KEYDOWN" | "KEYUP", key: string, keyVal: number, keyRepeat: boolean, modifiers: string, text: string) =>
+    invoke<boolean>("script_run_key", { serverId, target, kind, key, keyVal, keyRepeat, modifiers, text }),
   scriptDispatchAudioEnd: (serverId: string, kind: string, path: string) =>
     invoke<void>("script_dispatch_audio_end", { serverId, kind, path }),
   scriptSetClientWindowState: (label: string, focused: boolean, appState: string) =>
@@ -271,6 +271,8 @@ export const api = {
     notifyList: string[],
     notifyOnline: string[]
   ) => invoke("script_set_client_preferences", { darkMode, notifyList, notifyOnline }),
+  scriptSetClientUiState: (toolbar: boolean, treebar: boolean, switchbar: boolean) =>
+    invoke("script_set_client_ui_state", { toolbar, treebar, switchbar }),
   /** Register/unregister a window with the engine so it gets a `$wid`. */
   scriptWindowOpen: (serverId: string, name: string) =>
     invoke("script_window_open", { serverId, name }),

@@ -229,3 +229,19 @@ export function stripFormatting(text: string): string {
     .replace(/\x04[0-9a-fA-F]{6}/g, "")
     .replace(/[\x02\x0f\x11\x16\x1d\x1e\x1f]/g, "");
 }
+
+/** Applies the selected mIRC /strip flags while leaving other formatting intact. */
+export function stripFormattingCodes(text: string, flags: string): string {
+  let out = text;
+  if (flags.includes("c")) {
+    out = out.replace(/\x03\d{0,2}(,\d{1,2})?/g, "").replace(/\x04[0-9a-fA-F]{6}/g, "");
+  }
+  const codes = [
+    flags.includes("b") ? "\\x02" : "",
+    flags.includes("u") ? "\\x1f" : "",
+    flags.includes("r") ? "\\x16" : "",
+    flags.includes("i") ? "\\x1d" : "",
+    flags.includes("e") ? "\\x0f\\x11\\x1e" : "",
+  ].join("");
+  return codes ? out.replace(new RegExp(`[${codes}]`, "g"), "") : out;
+}

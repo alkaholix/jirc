@@ -285,7 +285,7 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     const modifiers = [e.ctrlKey && "ctrl", e.altKey && "alt", e.shiftKey && "shift", e.metaKey && "meta"].filter(Boolean).join("+");
-    void api.scriptRunKey(buffer.serverId, buffer.name, "KEYDOWN", e.key, modifiers, value);
+    void api.scriptRunKey(buffer.serverId, buffer.name, "KEYDOWN", e.key, e.keyCode, e.repeat, modifiers, value);
     if (e.key === "Enter") {
       e.preventDefault();
       submit();
@@ -314,7 +314,7 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
 
   const onKeyUp = (e: KeyboardEvent<HTMLInputElement>) => {
     const modifiers = [e.ctrlKey && "ctrl", e.altKey && "alt", e.shiftKey && "shift", e.metaKey && "meta"].filter(Boolean).join("+");
-    void api.scriptRunKey(buffer.serverId, buffer.name, "KEYUP", e.key, modifiers, value);
+    void api.scriptRunKey(buffer.serverId, buffer.name, "KEYUP", e.key, e.keyCode, e.repeat, modifiers, value);
   };
 
   // Simple nick tab-completion from the last word.

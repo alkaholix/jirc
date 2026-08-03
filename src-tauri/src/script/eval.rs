@@ -354,6 +354,9 @@ pub const CLIENT_APP_STATE_KEY: &str = "\u{0}client-app-state";
 pub const CLIENT_DARK_MODE_KEY: &str = "\u{0}client-dark-mode";
 pub const CLIENT_NOTIFY_LIST_KEY: &str = "\u{0}client-notify-list";
 pub const CLIENT_NOTIFY_ONLINE_KEY: &str = "\u{0}client-notify-online";
+pub const CLIENT_TOOLBAR_KEY: &str = "\u{0}client-toolbar";
+pub const CLIENT_TREEBAR_KEY: &str = "\u{0}client-treebar";
+pub const CLIENT_SWITCHBAR_KEY: &str = "\u{0}client-switchbar";
 
 /// Lifetime attached to a variable or hash item by mIRC's `-uN` switch.
 /// `Instant` keeps expiry independent of wall-clock changes; `EndOfRun` is
@@ -412,6 +415,10 @@ pub struct EventVars {
     pub mouse_win: String,
     pub mouse_lb: String,
     pub mouse_key: u32,
+    /// Keyboard context for `on KEYDOWN`/`on KEYUP`.
+    pub key_char: String,
+    pub key_val: Option<u32>,
+    pub key_repeat: bool,
     /// Secondary nick for events that involve two people (e.g. `on KICK`'s
     /// kicked user, exposed as `$knick`).
     pub knick: String,
@@ -1264,7 +1271,19 @@ impl<'a> Runtime<'a> {
         }
         match lname {
             "echo" => self.cmd_echo(raw_args),
-            "toolbar" => self.cmd_toolbar(raw_args),
+            "toolbar" => {
+                if raw_args.trim_start().starts_with('-') {
+                    self.cmd_toolbar(raw_args);
+                } else {
+                    let args = self.expand(raw_args);
+                    let current_target = self.reply_target();
+                    self.actions.push(Action::ClientCommand {
+                        command: "toolbar".into(),
+                        args,
+                        current_target,
+                    });
+                }
+            }
             "panel" => self.cmd_panel(raw_args),
             "say" => {
                 let text = self.expand(raw_args);
@@ -1320,7 +1339,7 @@ impl<'a> Runtime<'a> {
                     self.actions.push(Action::Send(format!("PART {ch}")));
                 }
             }
-            "nick" => {
+            "nick" | "tnick" => {
                 let n = self.expand(raw_args);
                 if !n.is_empty() {
                     self.actions.push(Action::Send(format!("NICK {n}")));
@@ -1966,7 +1985,8 @@ impl<'a> Runtime<'a> {
                 }
             }
             "clearall" | "close" | "editbox" | "font" | "timestamp" | "switchbar" | "treebar" | "linesep"
-            | "help" | "log" | "logview" | "queryrn" => {
+            | "help" | "log" | "logview" | "queryrn" | "markasread" | "strip" | "pop"
+            | "pvoice" | "qmsg" | "qme" => {
                 let args = self.expand(raw_args);
                 let current_target = self.reply_target();
                 self.actions.push(Action::ClientCommand {

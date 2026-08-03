@@ -414,6 +414,17 @@ impl ScriptEngine {
         );
     }
 
+    pub fn set_client_ui_state(&self, toolbar: bool, treebar: bool, switchbar: bool) {
+        let mut inner = self.inner.lock().unwrap();
+        for (key, enabled) in [
+            (eval::CLIENT_TOOLBAR_KEY, toolbar),
+            (eval::CLIENT_TREEBAR_KEY, treebar),
+            (eval::CLIENT_SWITCHBAR_KEY, switchbar),
+        ] {
+            inner.vars.insert(key.into(), if enabled { "on" } else { "off" }.into());
+        }
+    }
+
     /// Compiles the combined source of all loaded script files.
     pub fn load(&self, source: &str) {
         self.load_sources(&[("<memory>".to_string(), source.to_string())]);
@@ -3482,6 +3493,8 @@ pub async fn script_run_key(
     target: String,
     kind: String,
     key: String,
+    key_val: u32,
+    key_repeat: bool,
     modifiers: String,
     text: String,
 ) -> bool {
@@ -3499,7 +3512,10 @@ pub async fn script_run_key(
             target: target.clone(),
             chan: is_channel(&target).then_some(target).unwrap_or_default(),
             text: text.clone(),
-            params: vec![key, modifiers, text],
+            params: vec![key.clone(), modifiers, text],
+            key_char: key.chars().count().eq(&1).then_some(key).unwrap_or_default(),
+            key_val: Some(key_val),
+            key_repeat,
             ..Default::default()
         };
         let (actions, halted) = engine.dispatch_event_halt(&ctx, &kind, vars);
@@ -3595,6 +3611,16 @@ pub fn script_set_client_preferences(
     notify_online: Vec<String>,
 ) {
     engine.set_client_preferences(dark_mode, notify_list, notify_online);
+}
+
+#[tauri::command]
+pub fn script_set_client_ui_state(
+    engine: State<'_, ScriptEngine>,
+    toolbar: bool,
+    treebar: bool,
+    switchbar: bool,
+) {
+    engine.set_client_ui_state(toolbar, treebar, switchbar);
 }
 
 /// The UI opened a window/buffer — assign its `$wid` and fire `on OPEN`.
@@ -4236,15 +4262,16 @@ mod tests {
         let engine = ScriptEngine::new();
         engine.set_client_window_state("main", true, "maximized");
         engine.set_client_preferences(true, vec!["Alice".into(), "Bob".into()], vec!["bob".into()]);
+        engine.set_client_ui_state(true, true, false);
         engine.load(
-            "alias inspect { echo -a $appactive $appstate $darkmode $notify $notify(0) $notify(1) $notify(bob) $notify(Alice).ison $notify(Bob).ison }",
+            "alias inspect { echo -a $appactive $appstate $darkmode $toolbar $treebar $switchbar $notify $notify(0) $notify(1) $notify(bob) $notify(Alice).ison $notify(Bob).ison }",
         );
 
         assert_eq!(
             engine.run_alias(&ctx(), "", "inspect", ""),
             vec![Action::Echo {
                 target: "(status)".into(),
-                text: "$true maximized $true $true 2 Alice 2 $false $true".into(),
+                text: "$true maximized $true on on off $true 2 Alice 2 $false $true".into(),
             }]
         );
 
@@ -4935,24 +4962,57 @@ mod tests {
             engine.run_command(&ctx(), "#c", "/toolbar -n Cow", &[]).as_slice(),
             [Action::Toolbar { op, command, .. }] if op == "enabled" && command == "0"
         ));
+        assert!(matches!(
+            engine.run_command(&ctx(), "#c", "/toolbar off", &[]).as_slice(),
+            [Action::ClientCommand { command, args, .. }] if command == "toolbar" && args == "off"
+        ));
 
         engine.load(
-            "on *:KEYDOWN:*:/echo -a key $1 $2\n\
+            "on *:KEYDOWN:*:/echo -a key $1 $2 $keychar $keyval $keyrpt\n\
              on *:WAVEEND:*:/echo -a wave $filename\n\
              on *:PLAYEND:*:/echo -a play $filename",
         );
         let key = engine.dispatch_event(
             &ctx(),
             "KEYDOWN",
-            EventVars { params: vec!["F2".into(), "ctrl".into()], ..Default::default() },
+            EventVars {
+                params: vec!["A".into(), "ctrl".into()],
+                key_char: "A".into(),
+                key_val: Some(65),
+                key_repeat: true,
+                ..Default::default()
+            },
         );
-        assert_eq!(key, vec![Action::Echo { target: "(status)".into(), text: "key F2 ctrl".into() }]);
+        assert_eq!(key, vec![Action::Echo { target: "(status)".into(), text: "key A ctrl A 65 $true".into() }]);
         for (kind, expected) in [("WAVEEND", "wave alert.wav"), ("PLAYEND", "play lines.txt")] {
             let filename = if kind == "WAVEEND" { "alert.wav" } else { "lines.txt" };
             assert_eq!(
                 engine.dispatch_event(&ctx(), kind, EventVars { filename: filename.into(), ..Default::default() }),
                 vec![Action::Echo { target: "(status)".into(), text: expected.into() }]
             );
+        }
+    }
+
+    #[test]
+    fn portable_client_commands_route_with_mirc_arguments() {
+        let engine = ScriptEngine::new();
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", "/tnick Temporary", &[]),
+            vec![Action::Send("NICK Temporary".into())]
+        );
+        for (line, expected, args) in [
+            ("/markasread", "markasread", ""),
+            ("/strip +bur-c", "strip", "+bur-c"),
+            ("/pop 2 #c Bob", "pop", "2 #c Bob"),
+            ("/pvoice 0 Alice", "pvoice", "0 Alice"),
+            ("/qmsg hello all", "qmsg", "hello all"),
+            ("/qme waves", "qme", "waves"),
+        ] {
+            assert!(matches!(
+                engine.run_command(&ctx(), "#c", line, &[]).as_slice(),
+                [Action::ClientCommand { command, args: actual, current_target }]
+                    if command == expected && actual == args && current_target == "#c"
+            ));
         }
     }
 

@@ -951,6 +951,12 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             .get(super::eval::CLIENT_DARK_MODE_KEY)
             .cloned()
             .unwrap_or_else(|| "$false".into()),
+        "toolbar" => client_on_off(rt, super::eval::CLIENT_TOOLBAR_KEY),
+        "treebar" => client_on_off(rt, super::eval::CLIENT_TREEBAR_KEY),
+        "switchbar" => client_on_off(rt, super::eval::CLIENT_SWITCHBAR_KEY),
+        "keychar" => rt.event.key_char.clone(),
+        "keyval" => rt.event.key_val.map(|value| value.to_string()).unwrap_or_default(),
+        "keyrpt" => if rt.event.key_repeat { "$true" } else { "$false" }.into(),
         "notify" => {
             let list = rt
                 .vars
@@ -2937,6 +2943,10 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             String::new()
         }
     }
+}
+
+fn client_on_off(rt: &Runtime<'_>, key: &str) -> String {
+    rt.vars.get(key).cloned().unwrap_or_else(|| "off".into())
 }
 
 fn process_command_line<I, S>(args: I) -> String

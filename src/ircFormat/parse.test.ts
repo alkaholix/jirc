@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { ReactElement } from "react";
-import { parseIrc, stripFormatting } from "./parse";
+import { parseIrc, stripFormatting, stripFormattingCodes } from "./parse";
 
 /** Concatenates the text content of the spans produced by parseIrc. */
 function text(nodes: ReturnType<typeof parseIrc>): string {
@@ -23,6 +23,13 @@ describe("stripFormatting", () => {
 
   it("removes hex colors", () => {
     expect(stripFormatting("\x04ff8800orange")).toBe("orange");
+  });
+});
+
+describe("stripFormattingCodes", () => {
+  it("removes only enabled /strip categories", () => {
+    expect(stripFormattingCodes("\x02bold\x02 \x0304red\x03 \x1ditalic\x1d", "bc"))
+      .toBe("bold red \x1ditalic\x1d");
   });
 });
 
