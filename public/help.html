@@ -1339,6 +1339,15 @@ work-arounds in jIRC — text from other people, or from files, stays text.</p>
 
 <h2 id="limits">Compatibility limits</h2>
 
+<h3 id="plugins">Sandboxed Luau plugins</h3>
+<p>For extensions beyond mSL, place <code>.lua</code> plugins in the jIRC
+<code>plugins</code> folder and manage them under <strong>Settings → Plugins</strong>.
+Plugins receive IRC event and typed-command hooks and may request local echo,
+jIRC commands, or desktop notifications. They have no filesystem, process,
+native-code, package-loader, or network APIs, and each invocation has strict
+memory, time, source-size, action-count, and string-size limits. Use
+<strong>Add example plugin</strong> for a working template.</p>
+
 <h3>Intentionally left out (by design)</h3>
 <div class="note bad">
 These will <strong>not</strong> be added — they're Windows-only and/or unsafe, and go

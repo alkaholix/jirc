@@ -168,6 +168,14 @@ pub fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// Sandboxed Lua plugins. Kept beside scripts while remaining a separate,
+/// explicitly capability-limited subsystem.
+pub fn plugins_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = config_dir(app)?.join("plugins");
+    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    Ok(dir)
+}
+
 /// Where `logs/` lives: the same custom base when set, else `<os data dir>/jIRC`
 /// (on Windows this is the same folder as [`config_dir`]).
 pub fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {

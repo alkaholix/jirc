@@ -6,6 +6,7 @@
 mod commands;
 mod config;
 mod irc;
+mod plugin;
 mod script;
 mod storage;
 
@@ -45,6 +46,7 @@ pub fn run() {
             // Materialise the data subfolders under the jIRC folder (scripts/ is
             // created when scripts load; dcc/ for received transfers).
             let _ = storage::dcc_dir(app.handle());
+            let _ = storage::plugins_dir(app.handle());
             let engine = app.state::<ScriptEngine>();
             // Install the real socket backend so /socklisten/$sock(...) work.
             engine.set_sockets(std::sync::Arc::new(script::socket::EngineSockets::new(
@@ -129,6 +131,11 @@ pub fn run() {
             storage::set_data_location,
             storage::log_append,
             storage::log_read,
+            plugin::plugins_list,
+            plugin::plugins_path,
+            plugin::plugin_add_example,
+            plugin::plugin_set_enabled,
+            plugin::plugin_dispatch,
             script::scripts_list,
             script::script_add_examples,
             script::script_read,
@@ -156,6 +163,7 @@ pub fn run() {
             script::script_set_client_window_state,
             script::script_set_client_preferences,
             script::script_set_client_editbox,
+            script::script_set_client_unread_windows,
             script::script_set_client_ui_state,
             script::script_window_open,
             script::script_window_close,

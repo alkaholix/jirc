@@ -6,7 +6,7 @@ import {
   useSettings,
   type TimestampMode,
 } from "../state/settings";
-import { api, DataLocation } from "../lib/api";
+import { api, DataLocation, type PluginInfo } from "../lib/api";
 import { dccDetect } from "../state/dcc";
 import { UsersSettings } from "./UsersSettings";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -16,6 +16,7 @@ import {
   installUpdate,
   type UpdateStatus,
 } from "../lib/updater";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 const splitList = (value: string) =>
   value
@@ -23,13 +24,14 @@ const splitList = (value: string) =>
     .map((w) => w.trim())
     .filter(Boolean);
 
-type Tab = "appearance" | "alerts" | "behaviour" | "dcc" | "server" | "users";
+type Tab = "appearance" | "alerts" | "behaviour" | "dcc" | "plugins" | "server" | "users";
 const TABS: { id: Tab; label: string }[] = [
   { id: "appearance", label: "Appearance" },
   { id: "alerts", label: "Alerts" },
   { id: "behaviour", label: "Behaviour" },
   { id: "dcc", label: "DCC" },
   { id: "users", label: "Users" },
+  { id: "plugins", label: "Plugins" },
   { id: "server", label: "Server" },
 ];
 
@@ -49,6 +51,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [systemFonts, setSystemFonts] = useState<string[]>([]);
   const [fontsLoading, setFontsLoading] = useState(true);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ state: "idle" });
+  const [plugins, setPlugins] = useState<PluginInfo[]>([]);
+  const [pluginMessage, setPluginMessage] = useState("");
+
+  const reloadPlugins = () => api.pluginsList().then(setPlugins).catch(() => setPlugins([]));
 
   useEffect(() => {
     api
@@ -63,6 +69,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
       .then(setSystemFonts)
       .catch(() => setSystemFonts([]))
       .finally(() => setFontsLoading(false));
+    void reloadPlugins();
   }, []);
 
   const saveDataLoc = async () => {
@@ -278,6 +285,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 />
               </label>
               {toggle("showInputToolbar", "Show colour and formatting input toolbar")}
+              {toggle("nativePopupMenus", "Use native operating-system script popup menus")}
               <div className="row">
                 {toggle("spellCheck", "Check spelling while typing messages")}
                 {toggle("autoCorrect", "Auto-correct common typing mistakes")}
@@ -544,6 +552,41 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   )}
                 </>
               )}
+            </>
+          )}
+
+          {tab === "plugins" && (
+            <>
+              <div className="settings-label">Sandboxed Luau plugins</div>
+              <div className="field-help">
+                Plugins can receive IRC events and typed commands, then request echo, command, or notification actions. They have no filesystem, process, native, or network API.
+              </div>
+              <div className="row">
+                <button onClick={() => api.pluginsPath().then(revealItemInDir).catch(() => {})}>Show plugins folder</button>
+                <button onClick={() => api.pluginAddExample().then((path) => {
+                  setPluginMessage(`Created ${path}`);
+                  void reloadPlugins();
+                }).catch((error) => setPluginMessage(String(error)))}>Add example plugin</button>
+                <button className="ghost" onClick={reloadPlugins}>Reload</button>
+              </div>
+              {pluginMessage && <div className="keyring-note">{pluginMessage}</div>}
+              {plugins.length === 0 ? (
+                <div className="field-help">No .lua plugins are installed.</div>
+              ) : plugins.map((plugin) => (
+                <div className="setting-row" key={plugin.file}>
+                  <div>
+                    <strong>{plugin.name}</strong>
+                    <div className="field-help">{plugin.file}</div>
+                    {plugin.error && <div className="keyring-note error">{plugin.error}</div>}
+                  </div>
+                  <label className="inline">
+                    <input type="checkbox" checked={plugin.enabled} disabled={!!plugin.error} onChange={(event) => {
+                      void api.pluginSetEnabled(plugin.file, event.target.checked).then(reloadPlugins);
+                    }} />
+                    Enabled
+                  </label>
+                </div>
+              ))}
             </>
           )}
 

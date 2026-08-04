@@ -114,6 +114,10 @@ describe("script client commands", () => {
     expect(useSettings.getState().layout).toBe("tree");
     routeClientCommand({ ...base, command: "toolbar", args: "off" }, vi.fn());
     expect(useToolbar.getState().visible).toBe(false);
+    routeClientCommand({ ...base, command: "menubar", args: "off" }, vi.fn());
+    expect(useSettings.getState().menubarVisible).toBe(false);
+    routeClientCommand({ ...base, command: "tips", args: "off" }, vi.fn());
+    expect(useSettings.getState().tipsEnabled).toBe(false);
   });
 
   it("applies the application font with an 8px minimum", () => {

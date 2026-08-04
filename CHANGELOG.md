@@ -12,6 +12,25 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🧩 26.8.8 — Script UI state and compatibility
+
+- Added stateful mSL `$tip`/`$tips` and `/tip`/`/tips` support with named desktop
+  notifications, in-app tips, expiry, inspection, text updates, closing,
+  connection/window association and double-click alias callbacks.
+- Added a persistent application menubar with `/menubar` and `$menubar` state.
+  Script-defined `menu menubar` entries appear under its Commands menu.
+- Added `$menu`, `$menutype` and `$menucontext` during popup evaluation, including
+  custom `@window` menu types.
+- Added `$markasread` backed by live buffer unread/mention state.
+- Added `$fromeditbox` provenance through aliases invoked from message inputs.
+- Added IRCv3 `invite-notify` and `setname` negotiation; `SETNAME` now updates
+  IAL real-name data and shared-channel notices.
+- Added optional native operating-system script popup menus, including nested,
+  checked, disabled and separator items, with automatic WebView fallback.
+- Added a sandboxed cross-platform Luau plugin API with IRC event and command
+  hooks, validated echo/command/notification capabilities, enable controls,
+  resource limits, an example generator and a dedicated `plugins/` folder.
+
 ## 🧩 26.8.7 — Dockable panes
 
 - Live connections now adopt the server's `005 NETWORK=` display name (including

@@ -361,6 +361,11 @@ pub const CLIENT_EDITBOX_PREFIX: &str = "\u{0}client-editbox\u{0}";
 pub const CLIENT_TOOLBAR_KEY: &str = "\u{0}client-toolbar";
 pub const CLIENT_TREEBAR_KEY: &str = "\u{0}client-treebar";
 pub const CLIENT_SWITCHBAR_KEY: &str = "\u{0}client-switchbar";
+pub const CLIENT_MENUBAR_KEY: &str = "\u{0}client-menubar";
+pub const CLIENT_TIPS_KEY: &str = "\u{0}client-tips";
+pub const CLIENT_UNREAD_WINDOWS_KEY: &str = "\u{0}client-unread-windows";
+pub const CLIENT_TIP_NAMES_KEY: &str = "\u{0}client-tip-names";
+pub const CLIENT_TIP_PREFIX: &str = "\u{0}client-tip\u{0}";
 
 /// Lifetime attached to a variable or hash item by mIRC's `-uN` switch.
 /// `Instant` keeps expiry independent of wall-clock changes; `EndOfRun` is
@@ -413,6 +418,10 @@ pub struct EventVars {
     /// Selected nicknames for a nicklist popup run, exposed as `$snick`/`$snicks`.
     /// Empty for every other run (timers, typed commands, events).
     pub snicks: Vec<String>,
+    pub from_editbox: bool,
+    /// Popup context exposed by `$menu`, `$menutype`, and `$menucontext`.
+    pub menu: String,
+    pub menu_context: String,
     /// Picture/listbox custom-window mouse event state, exposed by `$mouse`.
     pub mouse_x: i32,
     pub mouse_y: i32,
@@ -2019,6 +2028,97 @@ impl<'a> Runtime<'a> {
                     current_target,
                 });
             }
+            "menubar" => {
+                let args = self.expand(raw_args);
+                if args.trim().is_empty() {
+                    self.actions.push(Action::Echo {
+                        target: self.reply_target(),
+                        text: format!(
+                            "Menubar is {}",
+                            client_on_off_value(self.vars, CLIENT_MENUBAR_KEY)
+                        ),
+                    });
+                } else {
+                    self.actions.push(Action::ClientCommand {
+                        command: "menubar".into(),
+                        args,
+                        current_target: self.reply_target(),
+                    });
+                }
+            }
+            "tips" => {
+                let args = self.expand(raw_args);
+                if args.trim().is_empty() {
+                    self.actions.push(Action::Echo {
+                        target: self.reply_target(),
+                        text: format!(
+                            "Tips are {}",
+                            client_on_off_value(self.vars, CLIENT_TIPS_KEY)
+                        ),
+                    });
+                    return;
+                } else if args.trim().eq_ignore_ascii_case("off") {
+                    self.vars.insert(CLIENT_TIP_NAMES_KEY.into(), String::new());
+                    self.vars.insert(CLIENT_TIPS_KEY.into(), "off".into());
+                } else if args.trim().eq_ignore_ascii_case("on") {
+                    self.vars.insert(CLIENT_TIPS_KEY.into(), "on".into());
+                }
+                self.actions.push(Action::ClientCommand {
+                    command: "tips".into(),
+                    args,
+                    current_target: self.reply_target(),
+                });
+            }
+            "tip" => {
+                let expanded = self.expand(raw_args);
+                let mut parts = expanded.split_whitespace();
+                let switch = parts.next().unwrap_or("").to_ascii_lowercase();
+                let selector = parts.next().unwrap_or("");
+                let mut names = self
+                    .vars
+                    .get(CLIENT_TIP_NAMES_KEY)
+                    .map(|value| {
+                        value
+                            .split('\u{1f}')
+                            .filter(|name| !name.is_empty())
+                            .map(str::to_string)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let index = selector
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|number| number.checked_sub(1).filter(|index| *index < names.len()))
+                    .or_else(|| {
+                        names
+                            .iter()
+                            .position(|name| name.eq_ignore_ascii_case(selector))
+                    });
+                if let Some(index) = index {
+                    let name = names[index].clone();
+                    if switch == "-c" {
+                        names.remove(index);
+                        self.vars
+                            .insert(CLIENT_TIP_NAMES_KEY.into(), names.join("\u{1f}"));
+                        self.actions.push(Action::ClientCommand {
+                            command: "tip-close".into(),
+                            args: name,
+                            current_target: self.reply_target(),
+                        });
+                    } else if switch == "-t" {
+                        let text = parts.collect::<Vec<_>>().join(" ");
+                        self.vars.insert(
+                            format!("{}{}\u{0}text", CLIENT_TIP_PREFIX, name.to_lowercase()),
+                            text.clone(),
+                        );
+                        self.actions.push(Action::ClientCommand {
+                            command: "tip-update".into(),
+                            args: [name, text].join("\u{1f}"),
+                            current_target: self.reply_target(),
+                        });
+                    }
+                }
+            }
             "links" => {
                 let args = self
                     .expand(raw_args)
@@ -2035,9 +2135,8 @@ impl<'a> Runtime<'a> {
             // We evaluate any parameters (for identifier side effects) and stop.
             // `/run` is deliberately a no-op — jIRC never launches programs.
             "cline" | "fline" | "renwin" | "background" | "color" | "flash" | "beep" | "ebeeps"
-            | "speak" | "run" | "url" | "debug" | "donotdisturb" | "menubar" | "mdi" | "save"
-            | "showmirc" | "maximize" | "minimize" | "creq" | "sreq" | "clipboard"
-            | "resetidle" => {
+            | "speak" | "run" | "url" | "debug" | "donotdisturb" | "mdi" | "save" | "showmirc"
+            | "maximize" | "minimize" | "creq" | "sreq" | "clipboard" | "resetidle" => {
                 let _ = self.expand(raw_args);
             }
             _ => {
@@ -5752,6 +5851,14 @@ impl<'a> Runtime<'a> {
         let (v1, v2) = split_v(cond);
         self.vars.insert(V1_KEY.to_string(), v1);
         self.vars.insert(V2_KEY.to_string(), v2);
+    }
+}
+
+fn client_on_off_value(vars: &HashMap<String, String>, key: &str) -> &'static str {
+    if vars.get(key).is_some_and(|value| value == "on") {
+        "on"
+    } else {
+        "off"
     }
 }
 

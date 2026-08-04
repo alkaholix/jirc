@@ -8,6 +8,7 @@ import { parseIrc, stripFormatting, stripFormattingCodes } from "../ircFormat/pa
 import { nickColor } from "../lib/nickColor";
 import { ircxDisplay } from "../lib/ircx";
 import { FINDTEXT_COMMAND_EVENT, type FindTextCommand } from "../lib/clientCommands";
+import { showNativePopup } from "../lib/nativePopup";
 
 const isJoinPart = (l: Line) => l.kind === "event" && /^[→←]/.test(l.text);
 
@@ -223,6 +224,7 @@ export function MessageList({ buffer }: { buffer: Buffer }) {
   // Right-click the window → the script-defined channel/query/status popup. Labels
   // are evaluated by the engine (empty ones dropped); the command runs through it.
   const server = useStore((s) => s.servers[buffer.serverId]);
+  const nativePopupMenus = useSettings((s) => s.nativePopupMenus);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [popups, setPopups] = useState<PopupItem[]>([]);
   const popupContext =
@@ -238,17 +240,19 @@ export function MessageList({ buffer }: { buffer: Buffer }) {
     e.preventDefault();
     api
       .scriptPopups(buffer.serverId, popupTarget, server?.nick ?? "", server?.name ?? "", popupContext, "")
-      .then((items) => {
+      .then(async (items) => {
         const visible = buffer.kind === "window"
           ? items.filter((item) => !["mouse", "sclick", "dclick", "uclick", "rclick", "lbclick", "leave", "drop"].includes(item.label.trim().toLowerCase()))
           : items;
         setPopups(visible);
-        if (visible.length) setMenu({ x: e.clientX, y: e.clientY });
+        if (!visible.length) return;
+        if (nativePopupMenus && await showNativePopup(visible, e.clientX, e.clientY, runPopup)) return;
+        setMenu({ x: e.clientX, y: e.clientY });
       })
       .catch(() => {});
   };
   const runPopup = (item: PopupItem) => {
-    api.scriptRunPopup(buffer.serverId, popupTarget, server?.nick ?? "", server?.name ?? "", item.command, [], undefined, item.source).catch(() => {});
+    api.scriptRunPopup(buffer.serverId, popupTarget, server?.nick ?? "", server?.name ?? "", item.command, [], undefined, item.source, popupContext).catch(() => {});
     setMenu(null);
   };
 
@@ -261,7 +265,8 @@ export function MessageList({ buffer }: { buffer: Buffer }) {
         server?.nick ?? "",
         server?.name ?? "",
         "sline",
-        `${add ? "-a " : ""}${buffer.name} ${line}`
+        `${add ? "-a " : ""}${buffer.name} ${line}`,
+        false
       )
       .catch(() => {});
     api

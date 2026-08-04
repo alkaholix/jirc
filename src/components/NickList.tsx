@@ -10,6 +10,7 @@ import { iconKey, useNickIcons } from "../state/nickIcons";
 import { open } from "@tauri-apps/plugin-dialog";
 import { PopupItems } from "./popupMenu";
 import { useAddressBook } from "../state/addressBook";
+import { showNativePopup } from "../lib/nativePopup";
 
 const isUrl = (s: string) => /^(https?:|data:)/i.test(s);
 
@@ -29,6 +30,7 @@ export function NickList({ buffer }: { buffer: Buffer }) {
   const setActive = useStore((s) => s.setActive);
   const server = useStore((s) => s.servers[buffer.serverId]);
   const selfColor = useSettings((s) => s.selfNickColor);
+  const nativePopupMenus = useSettings((s) => s.nativePopupMenus);
   const nickIcons = useNickIcons((s) => s.icons);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [pos, setPos] = useState({ left: 0, top: 0 });
@@ -50,7 +52,15 @@ export function NickList({ buffer }: { buffer: Buffer }) {
     if (menu)
       api
         .scriptPopups(serverId, channel, server?.nick ?? "", server?.name ?? "", "nicklist", menu.nick)
-        .then(setPopups)
+        .then(async (items) => {
+          setPopups(items);
+          if (nativePopupMenus && items.length && await showNativePopup(
+            items,
+            menu.x,
+            menu.y,
+            (item) => runPopup(item, menu.nick)
+          )) setMenu(null);
+        })
         .catch(() => setPopups([]));
   }, [menu]);
 
@@ -124,7 +134,7 @@ export function NickList({ buffer }: { buffer: Buffer }) {
   // selection exposed via $snick/$snicks.
   const runPopup = (item: PopupItem, nick: string) => {
     api
-      .scriptRunPopup(serverId, channel, server?.nick ?? "", server?.name ?? "", item.command, [nick], [nick], item.source)
+      .scriptRunPopup(serverId, channel, server?.nick ?? "", server?.name ?? "", item.command, [nick], [nick], item.source, "nicklist")
       .catch(() => {});
     setMenu(null);
   };

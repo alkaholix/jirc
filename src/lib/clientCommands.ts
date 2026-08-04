@@ -5,6 +5,7 @@ import { api } from "./api";
 import { useToolbar } from "../state/toolbar";
 import { useChannelCentral } from "../state/channelModes";
 import { useAddressBook } from "../state/addressBook";
+import { clearTips, routeTipCommand } from "../state/tips";
 
 export interface EditboxCommand {
   serverId: string;
@@ -224,6 +225,29 @@ export function routeClientCommand(
     }
     case "markasread":
       routeMarkAsRead(event.serverId, event.args);
+      break;
+    case "menubar": {
+      const mode = words(event.args)[0]?.toLowerCase();
+      if (mode === "on" || mode === "off") useSettings.getState().set("menubarVisible", mode === "on");
+      break;
+    }
+    case "tips": {
+      const mode = words(event.args)[0]?.toLowerCase();
+      if (mode === "on" || mode === "off") {
+        useSettings.getState().set("tipsEnabled", mode === "on");
+        if (mode === "off") clearTips();
+      }
+      break;
+    }
+    case "tip-create":
+    case "tip-close":
+    case "tip-update":
+      if (useSettings.getState().tipsEnabled || event.command === "tip-close") {
+        routeTipCommand(event.command, event.args, {
+          serverId: event.serverId,
+          target: event.currentTarget,
+        });
+      }
       break;
     case "strip":
       routeStrip(event.args);

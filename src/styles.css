@@ -851,7 +851,7 @@ select {
   cursor: pointer;
 }
 .win-btn:hover {
-  color: var(--text);
+  color: var(--fg);
   border-color: var(--accent);
 }
 /* Marker on a popped-out buffer's sidebar/switchbar entry. */
@@ -2003,3 +2003,58 @@ label.inline {
   color: var(--ok);
   font-size: 0.85rem;
 }
+.app-menubar {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  min-height: 28px;
+  padding: 2px 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.app-menubar button {
+  padding: 3px 9px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+}
+
+.app-menubar button:hover {
+  background: var(--panel2);
+}
+.tip-overlay {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 1200;
+  display: flex;
+  width: min(360px, calc(100vw - 32px));
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.script-tip {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 34px 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 8px 28px #0008;
+  pointer-events: auto;
+}
+
+.script-tip.clickable { cursor: pointer; }
+.script-tip > button {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+.script-tip > span { white-space: pre-wrap; }

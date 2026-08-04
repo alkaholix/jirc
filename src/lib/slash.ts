@@ -5,11 +5,12 @@ import { useUrlGrabber } from "../state/urlGrabber";
 import { useChannelCentral } from "../state/channelModes";
 import { dccOffers } from "../state/dcc";
 import { expandEmoji } from "./emoji";
+import { dispatchPluginEvent } from "./plugins";
 
 const ACTION = "\x01ACTION ";
 
 /** Handles a line of user input in the context of the active buffer. */
-export async function handleInput(input: string, buffer: Buffer): Promise<void> {
+export async function handleInput(input: string, buffer: Buffer, fromPlugin = false): Promise<void> {
   const text = input.trimEnd();
   if (!text) return;
   const store = useStore.getState();
@@ -88,6 +89,17 @@ export async function handleInput(input: string, buffer: Buffer): Promise<void> 
     const handled = await api
       .scriptRunAlias(serverId, target, nick, srv?.name ?? "", command, args)
       .catch(() => false);
+    if (handled) return;
+  }
+  if (!fromPlugin && command) {
+    const handled = await dispatchPluginEvent("command", {
+      command,
+      args,
+      serverId,
+      target: kind === "status" ? "" : name,
+      nick,
+      network: srv?.name ?? "",
+    }, buffer, (pluginCommand) => handleInput(pluginCommand, buffer, true)).catch(() => false);
     if (handled) return;
   }
 

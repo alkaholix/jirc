@@ -45,12 +45,16 @@ import { routeToolbarEvent, useToolbar } from "./state/toolbar";
 import { ScriptToolbar } from "./components/ScriptToolbar";
 import { routePanelEvent, usePanels } from "./state/panels";
 import { routeClientCommand } from "./lib/clientCommands";
+import { dispatchPluginEvent } from "./lib/plugins";
+import { handleInput } from "./lib/slash";
 import { ScriptPanels } from "./components/ScriptPanels";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAddressBook } from "./state/addressBook";
 import { notify as desktopNotify } from "./lib/notify";
 import { checkForUpdateOnStartup, updateNotificationBody } from "./lib/updater";
 import { DockLayout, type DockPane } from "./components/DockLayout";
+import { TipOverlay } from "./components/TipOverlay";
+import { ScriptMenubarMenu } from "./components/ScriptMenubarMenu";
 
 const ScriptDialog = lazy(() =>
   import("./components/ScriptDialog").then((module) => ({ default: module.ScriptDialog }))
@@ -129,6 +133,8 @@ function MainApp() {
   );
   const customCss = useSettings((s) => s.customCss);
   const layout = useSettings((s) => s.layout);
+  const menubarVisible = useSettings((s) => s.menubarVisible);
+  const tipsEnabled = useSettings((s) => s.tipsEnabled);
   const scriptToolbarVisible = useToolbar((s) => s.visible);
   const panels = usePanels((s) => s.panels);
   const chatFont = useSettings((s) => s.chatFont);
@@ -154,6 +160,13 @@ function MainApp() {
   const active = useStore((s) => (s.active ? s.buffers[s.active] : null));
   const activePoppedOut = useStore((s) => (s.active ? !!s.poppedOut[s.active] : false));
   const hasServers = useStore((s) => Object.keys(s.servers).length > 0);
+  const unreadWindows = useStore((s) =>
+    Object.values(s.buffers)
+      .filter((buffer) => buffer.unread > 0 || buffer.mention)
+      .map((buffer) => `${buffer.serverId}\u001e${buffer.name}`)
+      .sort()
+      .join("\u001f")
+  );
   const dccServerId = useStore((s) => {
     const activeBuffer = s.active ? s.buffers[s.active] : undefined;
     return activeBuffer?.serverId ?? Object.keys(s.servers)[0] ?? "";
@@ -176,6 +189,16 @@ function MainApp() {
   useEffect(() => {
     const unlisten = listen<IrcEvent>("irc-event", (e) => {
       handleEvent(e.payload);
+      if (detachedKey === null) {
+        const state = useStore.getState();
+        const active = state.active ? state.buffers[state.active] : undefined;
+        void dispatchPluginEvent(
+          e.payload.type,
+          e.payload,
+          active,
+          active ? (command) => handleInput(command, active, true) : undefined
+        ).catch(() => {});
+      }
       routeDialogEvent(e.payload);
       routeNickIconEvent(e.payload);
       routeAwayEvent(e.payload);
@@ -332,9 +355,13 @@ function MainApp() {
 
   useEffect(() => {
     api
-      .scriptSetClientUiState(scriptToolbarVisible, layout === "tree", layout === "switchbar")
+      .scriptSetClientUiState(scriptToolbarVisible, layout === "tree", layout === "switchbar", menubarVisible, tipsEnabled)
       .catch(() => {});
-  }, [scriptToolbarVisible, layout]);
+  }, [scriptToolbarVisible, layout, menubarVisible, tipsEnabled]);
+
+  useEffect(() => {
+    api.scriptSetClientUnreadWindows(unreadWindows ? unreadWindows.split("\u001f") : []).catch(() => {});
+  }, [unreadWindows]);
 
   useEffect(() => {
     applyCustomCss(customCss);
@@ -474,6 +501,16 @@ function MainApp() {
 
   return (
     <div className={`app layout-${layout}`}>
+      {menubarVisible && (
+        <nav className="app-menubar" aria-label="Application menu">
+          <button onClick={() => setChooserOpen(true)}>File</button>
+          <button onClick={() => setSettingsOpen(true)}>View</button>
+          <button onClick={() => setScriptOpen(true)}>Scripts</button>
+          <ScriptMenubarMenu buffer={active} server={active ? useStore.getState().servers[active.serverId] : undefined} />
+          <button onClick={() => useAddressBook.getState().show()}>Tools</button>
+          <button onClick={() => setAboutOpen(true)}>Help</button>
+        </nav>
+      )}
       {layout === "switchbar" && <SwitchBar {...actions} />}
       <DockLayout panes={dockPanes} center={<main className="main">
         <ScriptToolbar />
@@ -529,6 +566,7 @@ function MainApp() {
           </div>
         )}
       </main>} />
+      <TipOverlay />
       {chooserOpen && (
         <div className="modal-backdrop" onClick={() => setChooserOpen(false)}>
           <div className="modal chooser-modal" onClick={(e) => e.stopPropagation()}>

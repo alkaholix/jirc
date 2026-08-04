@@ -708,6 +708,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         }
         "halted" => bool_str(rt.event.default_halted),
         "caller" => rt.caller.to_string(),
+        "fromeditbox" => bool_str(rt.event.from_editbox),
         "ctimer" => rt.event.timer.clone(),
         "ltimer" => rt
             .vars
@@ -960,6 +961,40 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "toolbar" => client_on_off(rt, super::eval::CLIENT_TOOLBAR_KEY),
         "treebar" => client_on_off(rt, super::eval::CLIENT_TREEBAR_KEY),
         "switchbar" => client_on_off(rt, super::eval::CLIENT_SWITCHBAR_KEY),
+        "menubar" => client_on_off(rt, super::eval::CLIENT_MENUBAR_KEY),
+        "tips" => client_on_off(rt, super::eval::CLIENT_TIPS_KEY),
+        "tip" => eval_tip_ident(rt, args, prop),
+        "menu" => rt.event.menu.clone(),
+        "menutype" => {
+            if rt.event.menu.starts_with('@') {
+                "custom".into()
+            } else {
+                rt.event.menu.clone()
+            }
+        }
+        "menucontext" => rt.event.menu_context.clone(),
+        "markasread" => {
+            let window = if a(0).is_empty() {
+                rt.active.clone()
+            } else {
+                a(0)
+            };
+            let unread = rt
+                .vars
+                .get(super::eval::CLIENT_UNREAD_WINDOWS_KEY)
+                .is_some_and(|value| {
+                    value
+                        .split('\u{1f}')
+                        .any(|entry| match entry.split_once('\u{1e}') {
+                            Some((server_id, name)) => {
+                                server_id == rt.state.server_id
+                                    && name.eq_ignore_ascii_case(&window)
+                            }
+                            None => entry.eq_ignore_ascii_case(&window),
+                        })
+                });
+            bool_str(!window.is_empty() && !unread).into()
+        }
         "keychar" => rt.event.key_char.clone(),
         "keyval" => rt
             .event
@@ -2999,6 +3034,146 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             // take the opposite branch from the same script in mIRC.
             String::new()
         }
+    }
+}
+
+fn tip_key(name: &str, field: &str) -> String {
+    format!(
+        "{}{}\u{0}{field}",
+        super::eval::CLIENT_TIP_PREFIX,
+        name.to_lowercase()
+    )
+}
+
+fn tip_names(rt: &Runtime<'_>) -> Vec<String> {
+    rt.vars
+        .get(super::eval::CLIENT_TIP_NAMES_KEY)
+        .map(|value| {
+            value
+                .split('\u{1f}')
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn eval_tip_ident(rt: &mut Runtime<'_>, args: &[String], prop: &str) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let mut names = tip_names(rt);
+    names.retain(|name| {
+        rt.vars
+            .get(&tip_key(name, "expires"))
+            .and_then(|value| value.parse::<u64>().ok())
+            .is_none_or(|expires| expires > now)
+    });
+    rt.vars.insert(
+        super::eval::CLIENT_TIP_NAMES_KEY.into(),
+        names.join("\u{1f}"),
+    );
+
+    if args.len() >= 3 {
+        if !rt
+            .vars
+            .get(super::eval::CLIENT_TIPS_KEY)
+            .is_some_and(|value| value == "on")
+        {
+            return "0".into();
+        }
+        let name = args[0].trim();
+        if name.is_empty() {
+            return "0".into();
+        }
+        let delay = args
+            .get(3)
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(10)
+            .clamp(3, 60);
+        if !names.iter().any(|known| known.eq_ignore_ascii_case(name)) {
+            names.push(name.to_string());
+        }
+        for (field, value) in [
+            ("title", args[1].clone()),
+            ("text", args[2].clone()),
+            ("expires", (now + delay).to_string()),
+            ("iconfn", args.get(4).cloned().unwrap_or_default()),
+            ("iconpos", args.get(5).cloned().unwrap_or_default()),
+            ("alias", args.get(6).cloned().unwrap_or_default()),
+            ("wid", args.get(7).cloned().unwrap_or_default()),
+            ("cid", rt.conns.cid_of(&rt.state.server_id).to_string()),
+        ] {
+            rt.vars.insert(tip_key(name, field), value);
+        }
+        rt.vars.insert(
+            super::eval::CLIENT_TIP_NAMES_KEY.into(),
+            names.join("\u{1f}"),
+        );
+        let delay_string = delay.to_string();
+        let tip_target = args
+            .get(7)
+            .and_then(|value| value.parse::<u32>().ok())
+            .and_then(|wid| rt.wins.entry_for_wid(wid))
+            .filter(|(_, server_id, _)| server_id == &rt.state.server_id)
+            .map(|(_, _, name)| name.clone())
+            .unwrap_or_else(|| rt.event.target.clone());
+        rt.actions.push(super::eval::Action::ClientCommand {
+            command: "tip-create".into(),
+            args: [
+                name,
+                &args[1],
+                &args[2],
+                &delay_string,
+                args.get(4).map(String::as_str).unwrap_or(""),
+                args.get(5).map(String::as_str).unwrap_or(""),
+                args.get(6).map(String::as_str).unwrap_or(""),
+                args.get(7).map(String::as_str).unwrap_or(""),
+            ]
+            .join("\u{1f}"),
+            current_target: tip_target,
+        });
+        return names
+            .iter()
+            .position(|known| known.eq_ignore_ascii_case(name))
+            .map(|index| index + 1)
+            .unwrap_or(0)
+            .to_string();
+    }
+
+    let selector = args.first().cloned().unwrap_or_default();
+    if selector == "0" {
+        return names.len().to_string();
+    }
+    let index = selector
+        .parse::<usize>()
+        .ok()
+        .and_then(|number| number.checked_sub(1).filter(|index| *index < names.len()))
+        .or_else(|| {
+            names
+                .iter()
+                .position(|name| name.eq_ignore_ascii_case(&selector))
+        });
+    let Some(index) = index else {
+        return "0".into();
+    };
+    let name = &names[index];
+    match prop.to_ascii_lowercase().as_str() {
+        "name" => name.clone(),
+        "title" | "text" | "iconfn" | "iconpos" | "alias" | "wid" | "cid" => rt
+            .vars
+            .get(&tip_key(name, &prop.to_ascii_lowercase()))
+            .cloned()
+            .unwrap_or_default(),
+        "delay" => rt
+            .vars
+            .get(&tip_key(name, "expires"))
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(now)
+            .saturating_sub(now)
+            .to_string(),
+        _ => (index + 1).to_string(),
     }
 }
 

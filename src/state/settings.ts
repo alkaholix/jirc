@@ -12,6 +12,10 @@ export interface Settings {
   /** Colour theme used by the mSL script editor. */
   scriptTheme: ScriptTheme;
   layout: Layout;
+  menubarVisible: boolean;
+  tipsEnabled: boolean;
+  /** Use OS-level script popup menus; WebView menus remain the fallback. */
+  nativePopupMenus: boolean;
   treebarWidth: number;
   treebarPosition: "left" | "right";
   nicklistWidth: number;
@@ -88,6 +92,9 @@ const DEFAULTS: Settings = {
   theme: "dark",
   scriptTheme: "vscode-dark",
   layout: "tree",
+  menubarVisible: true,
+  tipsEnabled: true,
+  nativePopupMenus: false,
   treebarWidth: 220,
   treebarPosition: "left",
   nicklistWidth: 180,

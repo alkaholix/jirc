@@ -83,6 +83,8 @@ const SUPPORTED_CAPS: &[&str] = &[
     "message-tags",
     "echo-message",
     "account-tag",
+    "invite-notify",
+    "setname",
     "batch",
     "labeled-response",
     "draft/chathistory",

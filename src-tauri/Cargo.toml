@@ -1,6 +1,6 @@
 [package]
 name = "jirc"
-version = "26.8.7"
+version = "26.8.8"
 description = "jIRC — a modern, open-source mIRC-style IRC client (standard IRC + IRCX)"
 authors = ["jIRC contributors"]
 edition = "2021"
@@ -41,6 +41,9 @@ regex = "1"
 # etc.). Keep `regex` above for internal protocol parsing, where its linear-time
 # guarantees are preferable.
 pcre2 = "0.2.11"
+# Sandboxed cross-platform plugins use Luau: no OS/process/network/file APIs are
+# present unless jIRC explicitly exposes them.
+mlua = { version = "0.11.6", features = ["luau", "vendored", "serialize"] }
 # Local time + date formatting for mSL $time/$date/$asctime ($asctime needs a
 # timezone db; chrono's clock feature is already in the tree transitively).
 chrono = { version = "0.4", default-features = false, features = ["clock"] }

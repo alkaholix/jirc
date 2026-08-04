@@ -13,6 +13,14 @@ describe("timestamp settings migration", () => {
     expect(normalizeSavedSettings({ showInputToolbar: false }).showInputToolbar).toBe(false);
   });
 
+  it("keeps the application menubar and scripted tips enabled by default", () => {
+    expect(normalizeSavedSettings({})).toMatchObject({ menubarVisible: true, tipsEnabled: true, nativePopupMenus: false });
+    expect(normalizeSavedSettings({ menubarVisible: false, tipsEnabled: false })).toMatchObject({
+      menubarVisible: false,
+      tipsEnabled: false,
+    });
+  });
+
   it("enables native spell checking for existing settings and preserves language choices", () => {
     expect(normalizeSavedSettings({}).spellCheck).toBe(true);
     expect(normalizeSavedSettings({}).autoCorrect).toBe(false);

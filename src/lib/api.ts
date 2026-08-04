@@ -98,8 +98,33 @@ export interface IrcxChannelKeys {
   updated: number;
 }
 
+export interface PluginInfo {
+  file: string;
+  name: string;
+  enabled: boolean;
+  error: string;
+}
+
+export type PluginAction =
+  | { type: "echo"; target: string; text: string }
+  | { type: "command"; command: string }
+  | { type: "notify"; title: string; text: string };
+
+export interface PluginDispatch {
+  actions: PluginAction[];
+  handled: boolean;
+  errors: string[];
+}
+
 export const api = {
   coreVersion: () => invoke<string>("core_version"),
+  pluginsList: () => invoke<PluginInfo[]>("plugins_list"),
+  pluginsPath: () => invoke<string>("plugins_path"),
+  pluginAddExample: () => invoke<string>("plugin_add_example"),
+  pluginSetEnabled: (name: string, enabled: boolean) =>
+    invoke<void>("plugin_set_enabled", { name, enabled }),
+  pluginDispatch: (event: string, payload: unknown) =>
+    invoke<PluginDispatch>("plugin_dispatch", { event, payload }),
 
   // Detachable windows (pop-out / dock-back).
   openDetachedWindow: (label: string, title: string) =>
@@ -204,8 +229,10 @@ export const api = {
     command: string,
     params: string[],
     snicks?: string[],
-    source?: string
-  ) => invoke("script_run_popup", { serverId, target, myNick, network, command, params, snicks, source }),
+    source?: string,
+    context = "",
+    menuContext = "window"
+  ) => invoke("script_run_popup", { serverId, target, myNick, network, command, params, snicks, source, context, menuContext }),
   scriptWindowMouse: (
     serverId: string,
     target: string,
@@ -278,8 +305,10 @@ export const api = {
   ) => invoke("script_set_client_preferences", { darkMode, notifyList, notifyOnline, ignoreList, highlightList, fontList }),
   scriptSetClientEditbox: (target: string, text: string, start: number, end: number) =>
     invoke("script_set_client_editbox", { target, text, start, end }),
-  scriptSetClientUiState: (toolbar: boolean, treebar: boolean, switchbar: boolean) =>
-    invoke("script_set_client_ui_state", { toolbar, treebar, switchbar }),
+  scriptSetClientUnreadWindows: (windows: string[]) =>
+    invoke("script_set_client_unread_windows", { windows }),
+  scriptSetClientUiState: (toolbar: boolean, treebar: boolean, switchbar: boolean, menubar: boolean, tips: boolean) =>
+    invoke("script_set_client_ui_state", { toolbar, treebar, switchbar, menubar, tips }),
   /** Register/unregister a window with the engine so it gets a `$wid`. */
   scriptWindowOpen: (serverId: string, name: string) =>
     invoke("script_window_open", { serverId, name }),
@@ -297,8 +326,9 @@ export const api = {
     myNick: string,
     network: string,
     command: string,
-    args: string
-  ) => invoke<void>("script_run_command", { serverId, target, myNick, network, command, args }),
+    args: string,
+    fromEditbox = true
+  ) => invoke<void>("script_run_command", { serverId, target, myNick, network, command, args, fromEditbox }),
   scriptRunDialog: (
     serverId: string,
     myNick: string,

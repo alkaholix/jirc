@@ -1526,6 +1526,22 @@ pub fn process_message(ctx: &mut Context, raw: &str, msg: Message) -> Effects {
             if cmd.eq_ignore_ascii_case("BATCH") {
                 return fx;
             }
+            // IRCv3 setname: keep the IAL gecos field current and surface the
+            // change in every shared channel, matching account/chghost notices.
+            if cmd.eq_ignore_ascii_case("SETNAME") {
+                if let (Some(nick), Some(realname)) = (source.as_deref(), args.first()) {
+                    ctx.state.update_ial_gecos(nick, realname);
+                    fx.ial_changed = true;
+                    push_channel_notice(
+                        &mut fx,
+                        ctx,
+                        &server_id,
+                        nick,
+                        &format!("{nick} is now known as {realname}"),
+                    );
+                }
+                return fx;
+            }
             // mIRC's `/ialfill` WHOX request uses token 995 and fields
             // %acdfhlnrstu. WHOX replies always use canonical field order:
             // token, channel, user, host, server, nick, flags, hops, idle,
@@ -3248,6 +3264,21 @@ mod tests {
             }
             _ => panic!("expected Invite"),
         }
+    }
+
+    #[test]
+    fn setname_updates_ial_and_shared_channels() {
+        let mut state = SessionState::default();
+        state.upsert_member("#cool", "bob", String::new());
+        state.record_address("bob", "bob!u@h".into());
+        let mut accum = HashMap::new();
+        let fx = run_line(&mut state, &mut accum, ":bob!u@h SETNAME :Bob Example");
+        assert_eq!(state.ial_info["bob"].gecos, "Bob Example");
+        assert!(fx.events.iter().any(|event| matches!(
+            event,
+            UiEvent::Echo { target, text, .. }
+                if target == "#cool" && text.contains("Bob Example")
+        )));
     }
 
     #[test]

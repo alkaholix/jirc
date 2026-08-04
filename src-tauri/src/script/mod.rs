@@ -435,12 +435,28 @@ impl ScriptEngine {
         );
     }
 
-    pub fn set_client_ui_state(&self, toolbar: bool, treebar: bool, switchbar: bool) {
+    pub fn set_client_unread_windows(&self, windows: Vec<String>) {
+        self.inner.lock().unwrap().vars.insert(
+            eval::CLIENT_UNREAD_WINDOWS_KEY.into(),
+            windows.join("\u{1f}"),
+        );
+    }
+
+    pub fn set_client_ui_state(
+        &self,
+        toolbar: bool,
+        treebar: bool,
+        switchbar: bool,
+        menubar: bool,
+        tips: bool,
+    ) {
         let mut inner = self.inner.lock().unwrap();
         for (key, enabled) in [
             (eval::CLIENT_TOOLBAR_KEY, toolbar),
             (eval::CLIENT_TREEBAR_KEY, treebar),
             (eval::CLIENT_SWITCHBAR_KEY, switchbar),
+            (eval::CLIENT_MENUBAR_KEY, menubar),
+            (eval::CLIENT_TIPS_KEY, tips),
         ] {
             inner
                 .vars
@@ -531,6 +547,8 @@ impl ScriptEngine {
             } else {
                 vec![nick.to_string()]
             },
+            menu: context.to_string(),
+            menu_context: "window".into(),
             ..Default::default()
         };
         let g = &mut *g;
@@ -674,6 +692,9 @@ impl ScriptEngine {
             &[],
             source,
             "command",
+            false,
+            "",
+            "",
             "",
             "",
         )
@@ -696,7 +717,10 @@ impl ScriptEngine {
             &[],
             source,
             "timer",
+            false,
             timer_name,
+            "",
+            "",
             "",
         )
     }
@@ -719,8 +743,11 @@ impl ScriptEngine {
             &[],
             source,
             "play",
+            false,
             "",
             play_target,
+            "",
+            "",
         )
     }
 
@@ -748,8 +775,11 @@ impl ScriptEngine {
             &[],
             source,
             "play",
+            false,
             "",
             play_target,
+            "",
+            "",
         )
     }
 
@@ -765,7 +795,57 @@ impl ScriptEngine {
         snicks: &[String],
     ) -> Vec<Action> {
         self.run_command_snicks_from_source(
-            ctx, target, command, params, snicks, "", "command", "", "",
+            ctx, target, command, params, snicks, "", "command", false, "", "", "", "",
+        )
+    }
+
+    pub fn run_editbox_command(
+        &self,
+        ctx: &RunCtx,
+        target: &str,
+        command: &str,
+        params: &[String],
+    ) -> Vec<Action> {
+        self.run_command_snicks_from_source(
+            ctx,
+            target,
+            command,
+            params,
+            &[],
+            "",
+            "command",
+            true,
+            "",
+            "",
+            "",
+            "",
+        )
+    }
+
+    pub fn run_popup_command(
+        &self,
+        ctx: &RunCtx,
+        target: &str,
+        command: &str,
+        params: &[String],
+        snicks: &[String],
+        source: &str,
+        menu: &str,
+        menu_context: &str,
+    ) -> Vec<Action> {
+        self.run_command_snicks_from_source(
+            ctx,
+            target,
+            command,
+            params,
+            snicks,
+            source,
+            "menu",
+            false,
+            "",
+            "",
+            menu,
+            menu_context,
         )
     }
 
@@ -778,8 +858,11 @@ impl ScriptEngine {
         snicks: &[String],
         source: &str,
         caller: &'static str,
+        from_editbox: bool,
         timer_name: &str,
         play_target: &str,
+        menu: &str,
+        menu_context: &str,
     ) -> Vec<Action> {
         let body = parser::parse_body(command);
         let mut g = self.inner.lock().unwrap();
@@ -794,6 +877,9 @@ impl ScriptEngine {
             target: target.to_string(),
             params: params.to_vec(),
             snicks: snicks.to_vec(),
+            from_editbox,
+            menu: menu.to_string(),
+            menu_context: menu_context.to_string(),
             script_source: source.to_string(),
             timer: timer_name.to_string(),
             pnick: play_target.to_string(),
@@ -3708,13 +3794,20 @@ pub fn script_set_client_editbox(
 }
 
 #[tauri::command]
+pub fn script_set_client_unread_windows(engine: State<'_, ScriptEngine>, windows: Vec<String>) {
+    engine.set_client_unread_windows(windows);
+}
+
+#[tauri::command]
 pub fn script_set_client_ui_state(
     engine: State<'_, ScriptEngine>,
     toolbar: bool,
     treebar: bool,
     switchbar: bool,
+    menubar: bool,
+    tips: bool,
 ) {
-    engine.set_client_ui_state(toolbar, treebar, switchbar);
+    engine.set_client_ui_state(toolbar, treebar, switchbar, menubar, tips);
 }
 
 /// The UI opened a window/buffer — assign its `$wid` and fire `on OPEN`.
@@ -3787,6 +3880,7 @@ pub fn script_run_command(
     network: String,
     command: String,
     args: String,
+    from_editbox: Option<bool>,
 ) {
     // The line may resolve to an alias that calls `$input`/`$?`, which blocks the
     // run waiting for the UI dialog. Run it on a blocking thread so the main
@@ -3809,7 +3903,11 @@ pub fn script_run_command(
         } else {
             format!("{command} {args}")
         };
-        let actions = engine.run_command(&ctx, &target, &line, &[]);
+        let actions = if from_editbox.unwrap_or(true) {
+            engine.run_editbox_command(&ctx, &target, &line, &[])
+        } else {
+            engine.run_command(&ctx, &target, &line, &[])
+        };
         apply_actions(&app, &server_id, &my_nick, &network, "", actions);
     });
 }
@@ -3878,6 +3976,8 @@ pub fn script_run_popup(
     params: Vec<String>,
     snicks: Option<Vec<String>>,
     source: Option<String>,
+    context: String,
+    menu_context: Option<String>,
 ) {
     // A popup command may call `$input`, which blocks the run waiting for the UI
     // dialog. Run it on a blocking thread so the main thread (and WebView2) stay
@@ -3897,16 +3997,15 @@ pub fn script_run_popup(
         // A nicklist popup carries the listbox selection ($snick/$snicks); other
         // contexts (channel/menubar) send none, so fall back to the item params.
         let snicks = snicks.unwrap_or_else(|| params.clone());
-        let actions = engine.run_command_snicks_from_source(
+        let actions = engine.run_popup_command(
             &ctx,
             &target,
             &command,
             &params,
             &snicks,
             source.as_deref().unwrap_or(""),
-            "menu",
-            "",
-            "",
+            &context,
+            menu_context.as_deref().unwrap_or("window"),
         );
         apply_actions(&app, &server_id, &my_nick, &network, "", actions);
     });
@@ -4363,18 +4462,19 @@ mod tests {
             vec!["jIRC".into()],
             vec!["Consolas".into(), "Verdana".into()],
         );
-        engine.set_client_ui_state(true, true, false);
+        engine.set_client_ui_state(true, true, false, true, true);
         engine.set_active_win("server", "#jirc");
         engine.set_client_editbox("#jirc", "hello world", 2, 7);
+        engine.set_client_unread_windows(vec!["\u{1e}#busy".into()]);
         engine.load(
-            "alias inspect { echo -a $appactive $appstate $fullscreen $darkmode $toolbar $treebar $switchbar $notify $notify(0) $notify(1) $notify(bob) $notify(Alice).ison $notify(Bob).ison $ignore(0) $ignore(1) $ignore(Bad!*@*) $highlight(0) $highlight(1).text $font(0) $font(2) $editbox(#jirc) $editbox(#jirc).selstart $editbox(#jirc).selend }",
+            "alias inspect { echo -a $appactive $appstate $fullscreen $darkmode $toolbar $treebar $switchbar $menubar $tips $markasread(#jirc) $markasread(#busy) $notify $notify(0) $notify(1) $notify(bob) $notify(Alice).ison $notify(Bob).ison $ignore(0) $ignore(1) $ignore(Bad!*@*) $highlight(0) $highlight(1).text $font(0) $font(2) $editbox(#jirc) $editbox(#jirc).selstart $editbox(#jirc).selend }",
         );
 
         assert_eq!(
             engine.run_alias(&ctx(), "", "inspect", ""),
             vec![Action::Echo {
                 target: "(status)".into(),
-                text: "$true maximized $false $true on on off $true 2 Alice 2 $false $true 1 Bad!*@* 1 1 jIRC 2 Verdana hello world 2 7".into(),
+                text: "$true maximized $false $true on on off on on $true $false $true 2 Alice 2 $false $true 1 Bad!*@* 1 1 jIRC 2 Verdana hello world 2 7".into(),
             }]
         );
 
@@ -4648,19 +4748,100 @@ mod tests {
         assert_eq!(items[0].source, "one.mrc");
         assert_eq!(items[1].source, "two.mrc");
         assert_eq!(
-            engine.run_command_snicks_from_source(
+            engine.run_popup_command(
                 &ctx(),
                 "#c",
                 &items[1].command,
                 &[],
                 &[],
                 &items[1].source,
-                "menu",
-                "",
-                "",
+                "channel",
+                "window",
             ),
             vec![Action::Send("PRIVMSG #c :from-two".into())]
         );
+    }
+
+    #[test]
+    fn popup_identifiers_expose_menu_type_and_window_context() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "menu channel { $+($menu,|,$menutype,|,$menucontext):noop }\n\
+             menu @tools { $+($menu,|,$menutype,|,$menucontext):noop }",
+        );
+        let channel = engine.popups_evaluated(&ctx(), "channel", "", "#c");
+        assert_eq!(channel[0].label, "channel|channel|window");
+        let custom = engine.popups_evaluated(&ctx(), "@tools", "", "@tools");
+        assert_eq!(custom[0].label, "@tools|custom|window");
+
+        let command = engine.run_popup_command(
+            &ctx(),
+            "#c",
+            "echo -a $menu $menutype $menucontext",
+            &[],
+            &[],
+            "",
+            "channel",
+            "window",
+        );
+        assert!(
+            matches!(command.as_slice(), [Action::Echo { text, .. }] if text == "channel channel window")
+        );
+    }
+
+    #[test]
+    fn scripted_tips_create_query_update_and_close() {
+        let engine = ScriptEngine::new();
+        engine.set_client_ui_state(true, true, false, true, true);
+        engine.load(
+            "alias create_tip { echo -a $tip(counter,Count Down,10 seconds,5,,,clicked,0) }\n\
+             alias inspect_tip { echo -a $tip(0) $tip(counter) $tip(counter).title $tip(counter).text $tip(counter).delay $tip(counter).alias $tip(counter).wid $tip(counter).cid }",
+        );
+        let created = engine.run_alias(&ctx(), "#c", "create_tip", "");
+        assert!(
+            matches!(created.as_slice(), [Action::ClientCommand { command, .. }, Action::Echo { text, .. }] if command == "tip-create" && text == "1")
+        );
+        let inspected = engine.run_alias(&ctx(), "#c", "inspect_tip", "");
+        assert!(
+            matches!(inspected.as_slice(), [Action::Echo { text, .. }] if text.starts_with("1 1 Count Down 10 seconds ") && text.ends_with(" clicked 0 0"))
+        );
+
+        let updated = engine.run_command(&ctx(), "#c", "/tip -t counter 9 seconds", &[]);
+        assert!(
+            matches!(updated.as_slice(), [Action::ClientCommand { command, args, .. }] if command == "tip-update" && args.ends_with("9 seconds"))
+        );
+        let closed = engine.run_command(&ctx(), "#c", "/tip -c counter", &[]);
+        assert!(
+            matches!(closed.as_slice(), [Action::ClientCommand { command, args, .. }] if command == "tip-close" && args == "counter")
+        );
+    }
+
+    #[test]
+    fn menubar_and_tips_commands_report_current_state() {
+        let engine = ScriptEngine::new();
+        engine.set_client_ui_state(true, true, true, true, false);
+        assert!(matches!(
+            engine.run_command(&ctx(), "", "/menubar", &[]).as_slice(),
+            [Action::Echo { text, .. }] if text == "Menubar is on"
+        ));
+        assert!(matches!(
+            engine.run_command(&ctx(), "", "/tips", &[]).as_slice(),
+            [Action::Echo { text, .. }] if text == "Tips are off"
+        ));
+    }
+
+    #[test]
+    fn fromeditbox_survives_into_aliases_called_from_user_input() {
+        let engine = ScriptEngine::new();
+        engine.load("alias origin { echo -a $fromeditbox }");
+        assert!(matches!(
+            engine.run_editbox_command(&ctx(), "#c", "origin", &[]).as_slice(),
+            [Action::Echo { text, .. }] if text == "$true"
+        ));
+        assert!(matches!(
+            engine.run_command(&ctx(), "#c", "origin", &[]).as_slice(),
+            [Action::Echo { text, .. }] if text == "$false"
+        ));
     }
 
     #[test]
