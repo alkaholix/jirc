@@ -105,7 +105,7 @@ export function ConnectDialog({ onClose, onConnect }: Props) {
   const showClientIdentity = !!form.tls || (!!form.sasl && form.saslMechanism === "EXTERNAL");
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop">
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>Add a connection</h2>
         <div className="modal-body">

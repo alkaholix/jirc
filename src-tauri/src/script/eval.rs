@@ -1984,7 +1984,7 @@ impl<'a> Runtime<'a> {
                     }
                 }
             }
-            "clearall" | "close" | "editbox" | "font" | "timestamp" | "switchbar" | "treebar" | "linesep"
+            "channel" | "clearall" | "close" | "editbox" | "font" | "timestamp" | "switchbar" | "treebar" | "linesep"
             | "help" | "log" | "logview" | "queryrn" | "markasread" | "strip" | "pop"
             | "pvoice" | "qmsg" | "qme" => {
                 let args = self.expand(raw_args);

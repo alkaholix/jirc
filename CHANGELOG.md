@@ -12,6 +12,22 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🗂️ 26.8.6 — Context popup management
+
+- Split the Popups editor into Server/status, Channel, Nick list, Query, Custom
+  window and Combined/legacy sections with a Remote-style side menu.
+- Added independent On/Off controls and deletion for every popup section.
+- Starter popup sections are now created and compiled automatically the first
+  time the Popups editor is opened instead of appearing as unsaved examples.
+- Dedicated user popup files now always appear above popup entries contributed
+  by ordinary Remote scripts, regardless of script filename/load order.
+- Retained and regression-tested the complete native nick-list menu whenever no
+  script supplies custom nick-list popup entries.
+- Channel popup entries using `/channel` now open Channel Central for the
+  selected channel instead of sending an unknown command to the IRC server.
+- The connection editor now remains open when its backdrop is clicked, avoiding
+  accidental dismissal while using the native paste menu.
+
 ## 📝 26.8.5 — Aliases and popups editor
 
 - Added mIRC-style Aliases, Popups and Remote tabs to the script editor.

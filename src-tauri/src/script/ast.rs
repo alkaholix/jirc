@@ -313,14 +313,27 @@ impl Script {
     /// Returns the popup items defined for `context` (and `*`-wildcard menus).
     pub fn popup_items(&self, context: &str) -> Vec<PopupItem> {
         let context = context.to_ascii_lowercase();
-        let mut items = Vec::new();
+        let mut dedicated = Vec::new();
+        let mut remote = Vec::new();
         for popup in &self.popups {
             if popup.contexts.iter().any(|c| c == &context || c == "*") {
-                items.extend(popup.items.iter().cloned());
+                for item in popup.items.iter().cloned() {
+                    if is_dedicated_popup_source(&item.source) {
+                        dedicated.push(item);
+                    } else {
+                        remote.push(item);
+                    }
+                }
             }
         }
-        items
+        dedicated.extend(remote);
+        dedicated
     }
+}
+
+fn is_dedicated_popup_source(source: &str) -> bool {
+    let source = source.to_ascii_lowercase();
+    source == "popups.mrc" || source.starts_with("popups-")
 }
 
 fn set_popup_item_source(items: &mut [PopupItem], source: &str) {

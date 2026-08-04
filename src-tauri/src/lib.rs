@@ -134,6 +134,8 @@ pub fn run() {
             script::script_read,
             script::script_write,
             script::script_delete,
+            script::script_is_loaded,
+            script::script_set_loaded,
             script::script_run_alias,
             script::script_run_input,
             script::script_run_command,

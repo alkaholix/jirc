@@ -2252,6 +2252,32 @@ pub fn script_delete(
     Ok(())
 }
 
+/// Returns whether a script file is currently loaded (not present in
+/// `_disabled.json`). Missing files are treated as enabled so a new popup
+/// section starts visible when first saved.
+#[tauri::command]
+pub fn script_is_loaded(app: AppHandle, name: String) -> Result<bool, String> {
+    let filename = format!("{}.mrc", script_stem(name.trim_end_matches(".mrc")));
+    let disabled_path = scripts_dir(&app)?.join("_disabled.json");
+    let disabled: Vec<String> = std::fs::read_to_string(disabled_path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    Ok(!disabled.iter().any(|item| item.eq_ignore_ascii_case(&filename)))
+}
+
+/// Enables or disables one script file without deleting its contents.
+#[tauri::command]
+pub fn script_set_loaded(
+    app: AppHandle,
+    engine: State<'_, ScriptEngine>,
+    name: String,
+    loaded: bool,
+) -> Result<(), String> {
+    set_script_loaded(&app, &engine, &name, loaded, true);
+    Ok(())
+}
+
 /// If `line` is a `PRIVMSG`/`NOTICE`, builds a local echo so the user sees their
 /// own scripted message in the right buffer (`from` = self). Returns `None` for
 /// any other raw line.
@@ -4561,6 +4587,19 @@ mod tests {
     }
 
     #[test]
+    fn dedicated_popup_files_are_ordered_before_remote_script_menus() {
+        let engine = ScriptEngine::new();
+        engine.load_sources(&[
+            ("aaa-remote.mrc".into(), "menu channel { Remote:/echo remote }".into()),
+            ("popups-channel.mrc".into(), "menu channel { Mine:/echo mine }".into()),
+            ("zzz-remote.mrc".into(), "menu channel { Last:/echo last }".into()),
+        ]);
+        let items = engine.popups_evaluated(&ctx(), "channel", "", "#c");
+        assert_eq!(items.iter().map(|item| item.label.as_str()).collect::<Vec<_>>(), vec!["Mine", "Remote", "Last"]);
+        assert_eq!(items[0].source, "popups-channel.mrc");
+    }
+
+    #[test]
     fn text_event_responds() {
         let engine = ScriptEngine::new();
         engine.load("on *:TEXT:!ping*:#:{ /msg $chan pong $nick }");
@@ -5002,6 +5041,7 @@ mod tests {
         );
         for (line, expected, args) in [
             ("/markasread", "markasread", ""),
+            ("/channel #other", "channel", "#other"),
             ("/strip +bur-c", "strip", "+bur-c"),
             ("/pop 2 #c Bob", "pop", "2 #c Bob"),
             ("/pvoice 0 Alice", "pvoice", "0 Alice"),

@@ -192,6 +192,8 @@ export const api = {
   scriptRead: (name: string) => invoke<string>("script_read", { name }),
   scriptWrite: (name: string, source: string) => invoke("script_write", { name, source }),
   scriptDelete: (name: string) => invoke("script_delete", { name }),
+  scriptIsLoaded: (name: string) => invoke<boolean>("script_is_loaded", { name }),
+  scriptSetLoaded: (name: string, loaded: boolean) => invoke("script_set_loaded", { name, loaded }),
   scriptPopups: (serverId: string, target: string, myNick: string, network: string, context: string, nick: string) =>
     invoke<PopupItem[]>("script_popups", { serverId, target, myNick, network, context, nick }),
   scriptRunPopup: (

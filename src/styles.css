@@ -1835,6 +1835,29 @@ label.inline {
   background: var(--panel2);
   border-color: var(--accent);
 }
+.popup-section-row {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.popup-section-row .script-list-item {
+  flex: 1;
+  min-width: 0;
+}
+.popup-visibility {
+  flex: 0 0 2.4rem;
+  padding: 0.22rem 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.68rem;
+  cursor: pointer;
+}
+.popup-visibility.enabled {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 55%, var(--border));
+}
 .script-new {
   margin-top: auto;
   background: transparent;

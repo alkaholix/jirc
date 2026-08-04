@@ -6,6 +6,7 @@ import { SCRIPT_THEMES } from "../lib/mslLanguage";
 import { useSettings, type ScriptTheme } from "../state/settings";
 
 const DRAFT_PREFIX = "jirc.script-draft.";
+const POPUP_INIT_KEY = "jirc.popup-sections.initialized.v1";
 
 type EditorSection = "aliases" | "popups" | "remote";
 
@@ -21,8 +22,30 @@ alias greet {
 }
 `;
 
-const POPUPS_EXAMPLE = `; Popups — customise jIRC's right-click menus.
-; Contexts: nicklist, channel, query, status, or a custom @window name.
+type PopupSectionId = "status" | "channel" | "nicklist" | "query" | "custom" | "combined";
+
+interface PopupSection {
+  id: PopupSectionId;
+  label: string;
+  name: string;
+  template: string;
+}
+
+const POPUP_SECTIONS: PopupSection[] = [
+  { id: "status", label: "Server / status", name: "popups-status", template: `; Server/status window right-click menu.
+menu status {
+  Server links:/links
+  Reconnect:/server
+}
+` },
+  { id: "channel", label: "Channel", name: "popups-channel", template: `; Channel window right-click menu.
+menu channel {
+  Channel modes:/channel $chan
+  -
+  Part:/part $chan
+}
+` },
+  { id: "nicklist", label: "Nick list", name: "popups-nicklist", template: `; Nick-list right-click menu. $1 is the selected nick.
 menu nicklist {
   Whois:/whois $1
   Query:/query $1
@@ -32,17 +55,23 @@ menu nicklist {
   .Voice:/mode $chan +v $1
   .Kick:/kick $chan $1
 }
-
-menu channel {
-  Channel modes:/channel $chan
-  -
-  Part:/part $chan
-}
-
+` },
+  { id: "query", label: "Query", name: "popups-query", template: `; Private-query right-click menu.
 menu query {
   Close:/close
 }
-`;
+` },
+  { id: "custom", label: "Custom window", name: "popups-custom", template: `; Custom @window right-click menu.
+; Change @mywindow to the exact name used by /window.
+menu @mywindow {
+  Clear:/clear
+  Close:/window -c @mywindow
+}
+` },
+  { id: "combined", label: "Combined / legacy", name: "popups", template: `; Optional combined popup file for imported or existing menu blocks.
+; Dedicated context files are shown above entries from Remote scripts.
+` },
+];
 
 const EXAMPLE = `; jIRC script (mSL subset)
 ; Type /hello in a channel
@@ -92,6 +121,7 @@ export function ScriptDialog({
   const [source, setSource] = useState("");
   const [status, setStatus] = useState("");
   const [dirty, setDirty] = useState(false);
+  const [popupLoaded, setPopupLoaded] = useState<Record<string, boolean>>({});
   const scriptTheme = useSettings((state) => state.scriptTheme);
   const setSetting = useSettings((state) => state.set);
   const diagnostics = useMemo(() => mslDiagnostics(source), [source]);
@@ -104,20 +134,48 @@ export function ScriptDialog({
     setDirty(draft !== null && draft !== text);
   };
 
+  const selectPopup = async (popup: PopupSection, knownNames: string[] = names) => {
+    const text = await api.scriptRead(popup.name).catch(() => "");
+    const draft = localStorage.getItem(DRAFT_PREFIX + popup.name);
+    const loaded = await api.scriptIsLoaded(popup.name).catch(() => true);
+    setCurrent(popup.name);
+    setSource(draft ?? (text || popup.template));
+    setDirty(draft !== null || !knownNames.includes(popup.name));
+    setPopupLoaded((state) => ({ ...state, [popup.name]: loaded }));
+  };
+
   const refresh = async (selectName?: string, requestedSection: EditorSection = section) => {
-    const list = await api.scriptsList().catch((): string[] => []);
+    let list = await api.scriptsList().catch((): string[] => []);
+    if (requestedSection === "popups" && localStorage.getItem(POPUP_INIT_KEY) !== "1") {
+      for (const popup of POPUP_SECTIONS.filter((item) => item.id !== "combined")) {
+        if (!list.includes(popup.name)) {
+          await api.scriptWrite(popup.name, popup.template).catch(() => {});
+        }
+      }
+      localStorage.setItem(POPUP_INIT_KEY, "1");
+      list = await api.scriptsList().catch((): string[] => list);
+    }
     setNames(list);
-    if (requestedSection === "aliases" || requestedSection === "popups") {
-      const name = requestedSection;
+    if (requestedSection === "aliases") {
+      const name = "aliases";
       const text = await api.scriptRead(name).catch(() => "");
       const draft = localStorage.getItem(DRAFT_PREFIX + name);
-      const fallback = requestedSection === "aliases" ? ALIASES_EXAMPLE : POPUPS_EXAMPLE;
       setCurrent(name);
-      setSource(draft ?? (text || fallback));
+      setSource(draft ?? (text || ALIASES_EXAMPLE));
       setDirty(draft !== null || !list.includes(name));
       return;
     }
-    const remoteNames = list.filter((name) => name !== "aliases" && name !== "popups");
+    if (requestedSection === "popups") {
+      const states = await Promise.all(
+        POPUP_SECTIONS.map(async (popup) => [popup.name, await api.scriptIsLoaded(popup.name).catch(() => true)] as const)
+      );
+      setPopupLoaded(Object.fromEntries(states));
+      const selected = POPUP_SECTIONS.find((popup) => popup.name === current) ?? POPUP_SECTIONS[0];
+      await selectPopup(selected, list);
+      return;
+    }
+    const popupNames = new Set(POPUP_SECTIONS.map((popup) => popup.name));
+    const remoteNames = list.filter((name) => name !== "aliases" && !popupNames.has(name));
     const pick = selectName ?? (current && remoteNames.includes(current) ? current : null) ?? remoteNames[0] ?? null;
     if (pick && remoteNames.includes(pick)) {
       void select(pick);
@@ -173,7 +231,16 @@ export function ScriptDialog({
     await api.scriptDelete(current).catch(() => {});
     localStorage.removeItem(DRAFT_PREFIX + current);
     setCurrent(null);
-    await refresh();
+    await refresh(undefined, section);
+  };
+
+  const togglePopup = async (name: string) => {
+    if (section !== "popups") return;
+    const loaded = !(popupLoaded[name] ?? true);
+    await api.scriptSetLoaded(name, loaded).catch(() => {});
+    setPopupLoaded((state) => ({ ...state, [name]: loaded }));
+    setStatus(loaded ? "Popup section enabled" : "Popup section hidden");
+    setTimeout(() => setStatus(""), 2000);
   };
 
   return (
@@ -232,14 +299,34 @@ export function ScriptDialog({
           {section === "aliases" ? (
             <>Create custom slash commands in <code>scripts/aliases.mrc</code>.</>
           ) : section === "popups" ? (
-            <>Create right-click menus in <code>scripts/popups.mrc</code>. Nested items begin with a dot; <code>-</code> adds a separator.</>
+            <>Create menus by context. Dedicated popup files are displayed before menus from Remote scripts. Nested items begin with a dot; <code>-</code> adds a separator.</>
           ) : (
             <>Remote scripts live in <code>scripts/*.mrc</code>. All files are compiled together and can share aliases, events and variables.</>
           )}
         </p>
         <div className="script-layout">
+          {section === "popups" && <div className="script-list popup-section-list">
+            {POPUP_SECTIONS.map((popup) => (
+              <div className="popup-section-row" key={popup.id}>
+                <button
+                  className={`script-list-item${popup.name === current ? " active" : ""}`}
+                  onClick={() => void selectPopup(popup)}
+                >
+                  {popup.label}
+                </button>
+                <button
+                  className={`popup-visibility${(popupLoaded[popup.name] ?? true) ? " enabled" : ""}`}
+                  onClick={() => void togglePopup(popup.name)}
+                  title={(popupLoaded[popup.name] ?? true) ? "Hide this popup section" : "Show this popup section"}
+                  aria-label={(popupLoaded[popup.name] ?? true) ? `Disable ${popup.label} popup section` : `Enable ${popup.label} popup section`}
+                >
+                  {(popupLoaded[popup.name] ?? true) ? "On" : "Off"}
+                </button>
+              </div>
+            ))}
+          </div>}
           {section === "remote" && <div className="script-list">
-            {names.filter((name) => name !== "aliases" && name !== "popups").map((n) => (
+            {names.filter((name) => name !== "aliases" && !POPUP_SECTIONS.some((popup) => popup.name === name)).map((n) => (
               <button
                 key={n}
                 className={`script-list-item${n === current ? " active" : ""}`}
@@ -248,7 +335,7 @@ export function ScriptDialog({
                 {n}
               </button>
             ))}
-            {names.filter((name) => name !== "aliases" && name !== "popups").length === 0 && <div className="empty-hint">No remote scripts yet.</div>}
+            {names.filter((name) => name !== "aliases" && !POPUP_SECTIONS.some((popup) => popup.name === name)).length === 0 && <div className="empty-hint">No remote scripts yet.</div>}
             <button className="script-new" onClick={newScript}>
               + New script
             </button>
@@ -281,9 +368,9 @@ export function ScriptDialog({
               {diagnostics.filter((item) => item.severity === "warning").length} warnings
             </span>
           )}
-          {current && section === "remote" && (
+          {current && (section === "remote" || section === "popups") && (
             <button className="ghost danger-text" onClick={remove}>
-              Delete
+              Delete {section === "popups" ? "section" : ""}
             </button>
           )}
           <button className="ghost" onClick={onClose}>

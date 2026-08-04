@@ -3,6 +3,7 @@ import { normalizeAppFontSize, useSettings } from "../state/settings";
 import { STATUS, useStore } from "../state/store";
 import { api } from "./api";
 import { useToolbar } from "../state/toolbar";
+import { useChannelCentral } from "../state/channelModes";
 
 export interface EditboxCommand {
   serverId: string;
@@ -197,6 +198,15 @@ export function routeClientCommand(
   openSettings: () => void
 ) {
   switch (event.command) {
+    case "channel": {
+      const requested = words(event.args)[0] ?? "";
+      const chanTypes = useStore.getState().servers[event.serverId]?.chanTypes ?? "#&!+%";
+      const channel = requested && chanTypes.includes(requested[0])
+        ? requested
+        : chanTypes.includes(event.currentTarget[0]) ? event.currentTarget : "";
+      if (channel) useChannelCentral.getState().open(event.serverId, channel);
+      break;
+    }
     case "markasread":
       routeMarkAsRead(event.serverId, event.args);
       break;

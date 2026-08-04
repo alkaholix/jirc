@@ -3,6 +3,7 @@ import { parseEditboxCommand, routeClientCommand } from "./clientCommands";
 import { useSettings } from "../state/settings";
 import { STATUS, bufferKey, useStore } from "../state/store";
 import { useToolbar } from "../state/toolbar";
+import { useChannelCentral } from "../state/channelModes";
 
 vi.mock("./api", () => ({
   api: {
@@ -21,6 +22,7 @@ describe("script client commands", () => {
     useSettings.getState().set("timestampMode", "inline");
     useSettings.getState().set("stripCodes", "");
     useToolbar.getState().setVisible(true);
+    useChannelCentral.getState().close();
     useStore.setState({
       servers: {},
       buffers: {},
@@ -29,6 +31,17 @@ describe("script client commands", () => {
       channelList: null,
       poppedOut: {},
     });
+  });
+
+  it("opens Channel Central for script and popup channel commands", () => {
+    routeClientCommand({
+      type: "clientCommand",
+      serverId: "s1",
+      command: "channel",
+      args: "#other",
+      currentTarget: "#chat",
+    }, vi.fn());
+    expect(useChannelCentral.getState().target).toEqual({ serverId: "s1", channel: "#other" });
   });
 
   it("parses editbox targets, submission, spacing and selection", () => {

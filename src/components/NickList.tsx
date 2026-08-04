@@ -19,6 +19,11 @@ interface MenuState {
   y: number;
 }
 
+/** Native nick-list actions remain available when scripts define no menu. */
+export function shouldShowDefaultNicklistMenu(popups: PopupItem[]): boolean {
+  return popups.length === 0;
+}
+
 export function NickList({ buffer }: { buffer: Buffer }) {
   const ensureBuffer = useStore((s) => s.ensureBuffer);
   const setActive = useStore((s) => s.setActive);
@@ -172,7 +177,7 @@ export function NickList({ buffer }: { buffer: Buffer }) {
           />
           <div ref={menuRef} className="context-menu" style={{ left: pos.left, top: pos.top }}>
             <div className="menu-title">{ircxDisplay(menu.nick)}</div>
-            {popups.length > 0 ? (
+            {!shouldShowDefaultNicklistMenu(popups) ? (
               <PopupItems items={popups} onRun={(item) => runPopup(item, menu.nick)} />
             ) : (
               <>
