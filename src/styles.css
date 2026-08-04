@@ -90,18 +90,29 @@ input:focus {
 /* ---- Layout ---- */
 .app {
   height: 100%;
-}
-.app.layout-tree {
-  display: grid;
-  grid-template-columns: var(--treebar-width, 220px) 1fr;
-}
-.app.layout-tree.treebar-right { grid-template-columns: 1fr var(--treebar-width, 220px); }
-.app.layout-tree.treebar-right .sidebar { grid-column: 2; grid-row: 1; border-right: 0; border-left: 1px solid var(--border); }
-.app.layout-tree.treebar-right .main { grid-column: 1; grid-row: 1; }
-.app.layout-switchbar {
   display: flex;
   flex-direction: column;
 }
+.dock-layout { flex: 1; min-height: 0; min-width: 0; display: flex; overflow: hidden; }
+.dock-center { flex: 1; min-width: 220px; min-height: 0; display: flex; }
+.dock-zone { display: flex; min-height: 0; flex: 0 0 auto; }
+.dock-zone.dragging:empty { width: 32px; background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.dock-drop-hint { width: 70px; display: grid; place-items: center; color: var(--muted); font-size: 0.7rem; writing-mode: vertical-rl; }
+.dock-pane { position: relative; width: var(--dock-pane-width); flex: 0 0 var(--dock-pane-width); min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg2); }
+.dock-zone-left .dock-pane { border-right: 1px solid var(--border); }
+.dock-zone-right .dock-pane { border-left: 1px solid var(--border); }
+.dock-pane-title { height: 25px; flex: 0 0 25px; padding: 0 0.3rem; display: flex; align-items: center; gap: 0.35rem; color: var(--muted); background: var(--panel); border-bottom: 1px solid var(--border); font-size: 0.72rem; cursor: grab; user-select: none; }
+.dock-pane-title:active { cursor: grabbing; }
+.dock-grip { color: var(--accent); font-size: 0.9rem; }
+.dock-side-button { margin-left: auto; padding: 0 0.28rem; min-width: 22px; height: 19px; color: var(--muted); background: transparent; border: 1px solid var(--border); line-height: 1; }
+.dock-pane-content { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.dock-pane-content > .sidebar,
+.dock-pane-content > .nicklist,
+.dock-pane-content > .script-panels { flex: 1 1 auto; width: 100%; border: 0; }
+.dock-resizer { position: absolute; top: 0; bottom: 0; width: 7px; z-index: 4; cursor: col-resize; touch-action: none; }
+.dock-resizer-left { right: -4px; }
+.dock-resizer-right { left: -4px; }
+.resizing-dock-pane { cursor: col-resize !important; user-select: none !important; }
 /* A detached (popped-out) window hosts a single buffer with no sidebar; it still
    needs a column flex layout so `.main` fills the window (without a layout-* class
    it would default to display:block and collapse to a blank window). */

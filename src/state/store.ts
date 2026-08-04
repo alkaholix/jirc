@@ -730,6 +730,7 @@ export const useStore = create<State>((set, get) => {
                   ...s.servers,
                   [sid]: {
                     ...s.servers[sid],
+                    name: ev.network?.trim() || s.servers[sid].name,
                     chanTypes: ev.chanTypes,
                     prefixes: ev.prefixes,
                     prefixModes: ev.prefixModes,

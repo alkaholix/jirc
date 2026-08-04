@@ -271,8 +271,13 @@ export const api = {
   scriptSetClientPreferences: (
     darkMode: boolean,
     notifyList: string[],
-    notifyOnline: string[]
-  ) => invoke("script_set_client_preferences", { darkMode, notifyList, notifyOnline }),
+    notifyOnline: string[],
+    ignoreList: string[],
+    highlightList: string[],
+    fontList: string[]
+  ) => invoke("script_set_client_preferences", { darkMode, notifyList, notifyOnline, ignoreList, highlightList, fontList }),
+  scriptSetClientEditbox: (target: string, text: string, start: number, end: number) =>
+    invoke("script_set_client_editbox", { target, text, start, end }),
   scriptSetClientUiState: (toolbar: boolean, treebar: boolean, switchbar: boolean) =>
     invoke("script_set_client_ui_state", { toolbar, treebar, switchbar }),
   /** Register/unregister a window with the engine so it gets a `$wid`. */
@@ -420,6 +425,7 @@ export type IrcEvent =
   | {
       type: "isupport";
       serverId: string;
+      network: string | null;
       chanTypes: string;
       prefixes: string;
       prefixModes: string;

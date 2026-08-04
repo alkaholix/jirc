@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { parseEditboxCommand, routeClientCommand } from "./clientCommands";
+import { FINDTEXT_COMMAND_EVENT, parseEditboxCommand, routeClientCommand } from "./clientCommands";
 import { useSettings } from "../state/settings";
 import { STATUS, bufferKey, useStore } from "../state/store";
 import { useToolbar } from "../state/toolbar";
 import { useChannelCentral } from "../state/channelModes";
+import { useAddressBook } from "../state/addressBook";
 
 vi.mock("./api", () => ({
   api: {
@@ -23,6 +24,7 @@ describe("script client commands", () => {
     useSettings.getState().set("stripCodes", "");
     useToolbar.getState().setVisible(true);
     useChannelCentral.getState().close();
+    useAddressBook.setState({ entries: [], loaded: true, error: "", open: false, requestedNick: "", requestedNetwork: "" });
     useStore.setState({
       servers: {},
       buffers: {},
@@ -30,6 +32,22 @@ describe("script client commands", () => {
       active: null,
       channelList: null,
       poppedOut: {},
+    });
+  });
+
+  it("opens the address book from a script command", () => {
+    useStore.setState({ servers: { s1: { id: "s1", name: "IRC7" } as never } });
+    routeClientCommand({
+      type: "clientCommand",
+      serverId: "s1",
+      command: "abook",
+      args: "-w Alice",
+      currentTarget: "#chat",
+    }, vi.fn());
+    expect(useAddressBook.getState()).toMatchObject({
+      open: true,
+      requestedNick: "Alice",
+      requestedNetwork: "IRC7",
     });
   });
 
@@ -65,6 +83,25 @@ describe("script client commands", () => {
       target: "#other",
       text: "hello",
     });
+  });
+
+  it("routes findtext into the current buffer search", () => {
+    const listener = vi.fn();
+    window.addEventListener(FINDTEXT_COMMAND_EVENT, listener);
+    routeClientCommand({
+      type: "clientCommand",
+      serverId: "s1",
+      command: "findtext",
+      args: "-n hello world",
+      currentTarget: "#chat",
+    }, vi.fn());
+    expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual({
+      serverId: "s1",
+      target: "#chat",
+      text: "hello world",
+      next: true,
+    });
+    window.removeEventListener(FINDTEXT_COMMAND_EVENT, listener);
   });
 
   it("routes timestamp and layout commands to persistent settings", () => {

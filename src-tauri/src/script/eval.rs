@@ -354,6 +354,10 @@ pub const CLIENT_APP_STATE_KEY: &str = "\u{0}client-app-state";
 pub const CLIENT_DARK_MODE_KEY: &str = "\u{0}client-dark-mode";
 pub const CLIENT_NOTIFY_LIST_KEY: &str = "\u{0}client-notify-list";
 pub const CLIENT_NOTIFY_ONLINE_KEY: &str = "\u{0}client-notify-online";
+pub const CLIENT_IGNORE_LIST_KEY: &str = "\u{0}client-ignore-list";
+pub const CLIENT_HIGHLIGHT_LIST_KEY: &str = "\u{0}client-highlight-list";
+pub const CLIENT_FONT_LIST_KEY: &str = "\u{0}client-font-list";
+pub const CLIENT_EDITBOX_PREFIX: &str = "\u{0}client-editbox\u{0}";
 pub const CLIENT_TOOLBAR_KEY: &str = "\u{0}client-toolbar";
 pub const CLIENT_TREEBAR_KEY: &str = "\u{0}client-treebar";
 pub const CLIENT_SWITCHBAR_KEY: &str = "\u{0}client-switchbar";
@@ -1888,6 +1892,26 @@ impl<'a> Runtime<'a> {
                 }
                 _ => {}
             },
+            "events" => {
+                let mode = self.expand(raw_args).trim().to_ascii_lowercase();
+                let current = self
+                    .vars
+                    .get(REMOTE_FLAGS_KEY)
+                    .and_then(|value| value.parse::<u8>().ok())
+                    .unwrap_or(7);
+                let next = match mode.as_str() {
+                    "on" => current | 2,
+                    "off" => current & !2,
+                    _ => current,
+                };
+                self.vars.insert(REMOTE_FLAGS_KEY.into(), next.to_string());
+                if mode.is_empty() {
+                    self.actions.push(Action::Echo {
+                        target: self.reply_target(),
+                        text: format!("* Events are {}", if next & 2 != 0 { "on" } else { "off" }),
+                    });
+                }
+            }
             "load" | "unload" => {
                 let expanded = self.expand(raw_args);
                 let parts = expanded.split_whitespace().collect::<Vec<_>>();
@@ -1984,9 +2008,9 @@ impl<'a> Runtime<'a> {
                     }
                 }
             }
-            "channel" | "clearall" | "close" | "editbox" | "font" | "timestamp" | "switchbar" | "treebar" | "linesep"
-            | "help" | "log" | "logview" | "queryrn" | "markasread" | "strip" | "pop"
-            | "pvoice" | "qmsg" | "qme" => {
+            "abook" | "channel" | "clearall" | "close" | "editbox" | "findtext" | "font"
+            | "timestamp" | "switchbar" | "treebar" | "linesep" | "help" | "log" | "logview"
+            | "queryrn" | "markasread" | "strip" | "pop" | "pvoice" | "qmsg" | "qme" => {
                 let args = self.expand(raw_args);
                 let current_target = self.reply_target();
                 self.actions.push(Action::ClientCommand {
@@ -1995,12 +2019,25 @@ impl<'a> Runtime<'a> {
                     current_target,
                 });
             }
+            "links" => {
+                let args = self
+                    .expand(raw_args)
+                    .split_whitespace()
+                    .filter(|part| !part.starts_with('-'))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                self.actions.push(Action::Send(if args.is_empty() {
+                    "LINKS".into()
+                } else {
+                    format!("LINKS {args}")
+                }));
+            }
             // We evaluate any parameters (for identifier side effects) and stop.
             // `/run` is deliberately a no-op — jIRC never launches programs.
-            "cline" | "fline" | "renwin" | "background" | "color" | "flash"
-            | "beep" | "ebeeps" | "speak" | "run" | "url" | "debug" | "donotdisturb"
-            | "menubar" | "mdi" | "save" | "showmirc" | "maximize" | "minimize" | "creq"
-            | "sreq" | "clipboard" | "resetidle" => {
+            "cline" | "fline" | "renwin" | "background" | "color" | "flash" | "beep" | "ebeeps"
+            | "speak" | "run" | "url" | "debug" | "donotdisturb" | "menubar" | "mdi" | "save"
+            | "showmirc" | "maximize" | "minimize" | "creq" | "sreq" | "clipboard"
+            | "resetidle" => {
                 let _ = self.expand(raw_args);
             }
             _ => {
@@ -4258,8 +4295,12 @@ impl<'a> Runtime<'a> {
         };
         if flags.contains('s') {
             self.actions.push(Action::Panel {
-                op: "separator".into(), panel, id,
-                label: String::new(), value: String::new(), command: String::new(),
+                op: "separator".into(),
+                panel,
+                id,
+                label: String::new(),
+                value: String::new(),
+                command: String::new(),
                 source: self.event.script_source.clone(),
             });
         } else if flags.contains('t') {
@@ -4292,20 +4333,41 @@ impl<'a> Runtime<'a> {
                 source: self.event.script_source.clone(),
             });
         } else if flags.contains('i') || flags.contains('k') {
-            let Some((label, tail)) = take_file_arg(tail) else { return };
-            let Some((value, tail)) = take_file_arg(tail) else { return };
-            let Some((command, _)) = take_file_arg(tail) else { return };
+            let Some((label, tail)) = take_file_arg(tail) else {
+                return;
+            };
+            let Some((value, tail)) = take_file_arg(tail) else {
+                return;
+            };
+            let Some((command, _)) = take_file_arg(tail) else {
+                return;
+            };
             self.actions.push(Action::Panel {
-                op: if flags.contains('i') { "input".into() } else { "checkbox".into() },
-                panel, id, label, value, command,
+                op: if flags.contains('i') {
+                    "input".into()
+                } else {
+                    "checkbox".into()
+                },
+                panel,
+                id,
+                label,
+                value,
+                command,
                 source: self.event.script_source.clone(),
             });
         } else if flags.contains('p') {
-            let Some((value, tail)) = take_file_arg(tail) else { return };
+            let Some((value, tail)) = take_file_arg(tail) else {
+                return;
+            };
             let label = take_file_arg(tail).map(|item| item.0).unwrap_or_default();
             self.actions.push(Action::Panel {
-                op: "progress".into(), panel, id, label, value,
-                command: String::new(), source: self.event.script_source.clone(),
+                op: "progress".into(),
+                panel,
+                id,
+                label,
+                value,
+                command: String::new(),
+                source: self.event.script_source.clone(),
             });
         }
     }

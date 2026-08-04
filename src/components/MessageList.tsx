@@ -7,6 +7,7 @@ import { ContextMenu, PopupItems } from "./popupMenu";
 import { parseIrc, stripFormatting, stripFormattingCodes } from "../ircFormat/parse";
 import { nickColor } from "../lib/nickColor";
 import { ircxDisplay } from "../lib/ircx";
+import { FINDTEXT_COMMAND_EVENT, type FindTextCommand } from "../lib/clientCommands";
 
 const isJoinPart = (l: Line) => l.kind === "event" && /^[→←]/.test(l.text);
 
@@ -122,6 +123,7 @@ export function MessageList({ buffer }: { buffer: Buffer }) {
   const [search, setSearch] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [matchIdx, setMatchIdx] = useState(0);
+  const findNextRef = useRef(true);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const lines = useMemo(
@@ -179,7 +181,23 @@ export function MessageList({ buffer }: { buffer: Buffer }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current]);
 
-  useEffect(() => setMatchIdx(0), [search]);
+  useEffect(() => {
+    setMatchIdx(findNextRef.current ? 0 : Math.max(0, matches.length - 1));
+    findNextRef.current = true;
+  }, [search, matches.length]);
+
+  useEffect(() => {
+    const listener = (event: Event) => {
+      const command = (event as CustomEvent<FindTextCommand>).detail;
+      if (command.serverId !== buffer.serverId || command.target.toLowerCase() !== buffer.name.toLowerCase()) return;
+      setSearchOpen(true);
+      findNextRef.current = command.next;
+      setSearch(command.text);
+      setTimeout(() => searchRef.current?.focus(), 0);
+    };
+    window.addEventListener(FINDTEXT_COMMAND_EVENT, listener);
+    return () => window.removeEventListener(FINDTEXT_COMMAND_EVENT, listener);
+  }, [buffer.name, buffer.serverId]);
 
   const step = (dir: number) => {
     if (!matches.length) return;

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { api, IrcEvent, ServerProfile } from "./lib/api";
@@ -43,13 +43,14 @@ import {
 import { scriptServerAutoReconnect } from "./lib/profileValidation";
 import { routeToolbarEvent, useToolbar } from "./state/toolbar";
 import { ScriptToolbar } from "./components/ScriptToolbar";
-import { routePanelEvent } from "./state/panels";
+import { routePanelEvent, usePanels } from "./state/panels";
 import { routeClientCommand } from "./lib/clientCommands";
 import { ScriptPanels } from "./components/ScriptPanels";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAddressBook } from "./state/addressBook";
 import { notify as desktopNotify } from "./lib/notify";
 import { checkForUpdateOnStartup, updateNotificationBody } from "./lib/updater";
+import { DockLayout, type DockPane } from "./components/DockLayout";
 
 const ScriptDialog = lazy(() =>
   import("./components/ScriptDialog").then((module) => ({ default: module.ScriptDialog }))
@@ -118,6 +119,9 @@ function MainApp() {
   const [detachedKey] = useState(() => thisWindowBufferKey());
   const theme = useSettings((s) => s.theme);
   const notifyList = useSettings((s) => s.notifyList);
+  const ignoreList = useSettings((s) => s.ignores);
+  const highlightList = useSettings((s) => s.highlightWords);
+  const [fontList, setFontList] = useState<string[]>([]);
   const notifyByServer = useNotify((s) => s.online);
   const notifyOnline = useMemo(
     () => [...new Set(Object.values(notifyByServer).flat())],
@@ -126,8 +130,7 @@ function MainApp() {
   const customCss = useSettings((s) => s.customCss);
   const layout = useSettings((s) => s.layout);
   const scriptToolbarVisible = useToolbar((s) => s.visible);
-  const treebarWidth = useSettings((s) => s.treebarWidth);
-  const treebarPosition = useSettings((s) => s.treebarPosition);
+  const panels = usePanels((s) => s.panels);
   const chatFont = useSettings((s) => s.chatFont);
   const chatFontSize = useSettings((s) => s.chatFontSize);
   const dccIp = useSettings((s) => s.dccIp);
@@ -319,9 +322,13 @@ function MainApp() {
   useEffect(() => {
     applyTheme(theme);
     api
-      .scriptSetClientPreferences(resolveTheme(theme) === "dark", notifyList, notifyOnline)
+      .scriptSetClientPreferences(resolveTheme(theme) === "dark", notifyList, notifyOnline, ignoreList, highlightList, fontList)
       .catch(() => {});
-  }, [theme, notifyList, notifyOnline]);
+  }, [theme, notifyList, notifyOnline, ignoreList, highlightList, fontList]);
+
+  useEffect(() => {
+    api.systemFonts().then(setFontList).catch(() => {});
+  }, []);
 
   useEffect(() => {
     api
@@ -458,14 +465,17 @@ function MainApp() {
     onOpenAbout: () => setAboutOpen(true),
     onOpenAddressBook: () => useAddressBook.getState().show(),
   };
+  const dockPanes: DockPane[] = [];
+  if (layout === "tree") dockPanes.push({ id: "treebar", label: "Treebar", content: <Sidebar {...actions} /> });
+  if (active?.kind === "channel" && !activePoppedOut) {
+    dockPanes.push({ id: "nicklist", label: "Nick list", content: <NickList buffer={active} /> });
+  }
+  if (panels.length > 0) dockPanes.push({ id: "panels", label: "Script panels", content: <ScriptPanels /> });
 
   return (
-    <div
-      className={`app layout-${layout} treebar-${treebarPosition}`}
-      style={{ "--treebar-width": `${treebarWidth}px` } as CSSProperties}
-    >
-      {layout === "tree" ? <Sidebar {...actions} /> : <SwitchBar {...actions} />}
-      <main className="main">
+    <div className={`app layout-${layout}`}>
+      {layout === "switchbar" && <SwitchBar {...actions} />}
+      <DockLayout panes={dockPanes} center={<main className="main">
         <ScriptToolbar />
         {active ? (
           activePoppedOut ? (
@@ -498,8 +508,6 @@ function MainApp() {
                     <InputBar buffer={active} />
                   )}
                 </div>
-                {active.kind === "channel" && <NickList buffer={active} />}
-                <ScriptPanels />
               </div>
             </>
           )
@@ -520,7 +528,7 @@ function MainApp() {
             </p>
           </div>
         )}
-      </main>
+      </main>} />
       {chooserOpen && (
         <div className="modal-backdrop" onClick={() => setChooserOpen(false)}>
           <div className="modal chooser-modal" onClick={(e) => e.stopPropagation()}>

@@ -386,6 +386,10 @@ sections are displayed before popup entries supplied by Remote scripts.</p>
 <p>On first use, jIRC creates and compiles starter files for the dedicated popup
 sections. They are created only once, so deleting a section does not cause it to
 reappear the next time the editor opens.</p>
+<p>The treebar, channel nick list and script panels are dockable. Drag a pane's
+title bar to reorder it or move it between the left and right sides; drag its
+inside edge to resize it. Pane positions and widths persist automatically. Use
+Settings → Appearance → Reset pane layout to restore the defaults.</p>
 
 <h2 id="load">Where scripts live &amp; how to load them</h2>
 <ul>
@@ -408,7 +412,8 @@ reappear the next time the editor opens.</p>
   <li>Saving in the Scripts dialog recompiles everything immediately — no restart needed.</li>
   <li><code>/unload -rs name.mrc</code> disables a script without deleting it;
       <code>/load -rs name.mrc</code> enables it again. Disabled state persists.
-      <code>/remote on|off</code> enables or suppresses all script events.</li>
+      <code>/remote on|off</code> enables or suppresses all remote processing;
+      <code>/events on|off</code> independently controls ordinary event handlers.</li>
 </ul>
 
 <h2 id="quickstart">Quick start</h2>
@@ -1003,7 +1008,8 @@ goes to the server.</div>
   <tr><td><code>$online</code> · <code>$onlineserver</code> · <code>$onlinetotal</code></td><td>seconds connected to the current server</td></tr>
   <tr><td><code>$status</code></td><td>current server state: <code>disconnected</code>, <code>connecting</code>, or <code>connected</code></td></tr>
   <tr><td><code>$portfree(port[,ip])</code></td><td><code>$true</code> when the TCP port can be bound on all interfaces or the specified IPv4/IPv6 interface</td></tr>
-  <tr><td><code>$remote</code></td><td>enabled remote-handler flags; jIRC returns <code>7</code> because CTCP, event, and raw handlers are active</td></tr>
+  <tr><td><code>$remote</code></td><td>bit flags for enabled CTCP (1), ordinary event (2), and raw (4) handlers</td></tr>
+  <tr><td><code>$fullscreen</code></td><td><code>$true</code> when the focused native jIRC window is fullscreen</td></tr>
   <tr><td><code>$starting</code> · <code>$exiting</code></td><td>process transition flags; scripts run during jIRC's steady state, so both return <code>0</code></td></tr>
   <tr><td><code>$true</code> · <code>$false</code> · <code>$null</code></td><td>constants</td></tr>
 </table>

@@ -208,6 +208,27 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   </select>
                 </label>
               </div>
+              <div className="setting-row">
+                <div>
+                  <strong>Dockable panes</strong>
+                  <div className="field-help">
+                    Drag pane title bars to reorder or move them between sides. Drag pane edges to resize.
+                  </div>
+                </div>
+                <button
+                  className="ghost"
+                  onClick={() => {
+                    settings.set("dockPaneOrder", ["treebar", "nicklist", "panels"]);
+                    settings.set("dockPaneSides", { treebar: "left", nicklist: "right", panels: "right" });
+                    settings.set("treebarPosition", "left");
+                    settings.set("treebarWidth", 220);
+                    settings.set("nicklistWidth", 180);
+                    settings.set("panelsWidth", 240);
+                  }}
+                >
+                  Reset pane layout
+                </button>
+              </div>
               <label className="inline color-row">
                 Your nick colour
                 <input

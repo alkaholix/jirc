@@ -109,18 +109,29 @@ impl AsyncWrite for NetStream {
     }
 }
 
-async fn connect_socket(host: &str, port: u16, local_address: Option<&str>) -> io::Result<TcpStream> {
-    let Some(local) = local_address.map(str::trim).filter(|value| !value.is_empty()) else {
+async fn connect_socket(
+    host: &str,
+    port: u16,
+    local_address: Option<&str>,
+) -> io::Result<TcpStream> {
+    let Some(local) = local_address
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
         return TcpStream::connect((host, port)).await;
     };
-    let local_ip = local.parse::<std::net::IpAddr>().map_err(|_| {
-        invalid_input(format!("invalid local address '{local}'"))
-    })?;
+    let local_ip = local
+        .parse::<std::net::IpAddr>()
+        .map_err(|_| invalid_input(format!("invalid local address '{local}'")))?;
     let remote = lookup_host((host, port))
         .await?
         .find(|address| address.is_ipv4() == local_ip.is_ipv4())
         .ok_or_else(|| invalid_input("local address family does not match the remote host"))?;
-    let socket = if local_ip.is_ipv4() { TcpSocket::new_v4()? } else { TcpSocket::new_v6()? };
+    let socket = if local_ip.is_ipv4() {
+        TcpSocket::new_v4()?
+    } else {
+        TcpSocket::new_v6()?
+    };
     socket.bind(std::net::SocketAddr::new(local_ip, 0))?;
     socket.connect(remote).await
 }
@@ -138,16 +149,23 @@ async fn connect_tcp(profile: &ServerProfile) -> io::Result<TcpStream> {
             .await?;
             match proxy.kind {
                 ProxyKind::Socks4 => {
-                    let stream = match proxy.username.as_deref().filter(|value| !value.is_empty()) {
-                        Some(user) => Socks4Stream::connect_with_userid_and_socket(bound, target, user).await,
-                        None => Socks4Stream::connect_with_socket(bound, target).await,
-                    }
-                    .map_err(|e| io::Error::other(format!("SOCKS4 proxy error: {e}")))?;
+                    let stream =
+                        match proxy.username.as_deref().filter(|value| !value.is_empty()) {
+                            Some(user) => {
+                                Socks4Stream::connect_with_userid_and_socket(bound, target, user)
+                                    .await
+                            }
+                            None => Socks4Stream::connect_with_socket(bound, target).await,
+                        }
+                        .map_err(|e| io::Error::other(format!("SOCKS4 proxy error: {e}")))?;
                     Ok(stream.into_inner())
                 }
                 ProxyKind::Socks5 => {
                     let stream = match (&proxy.username, &proxy.password) {
-                        (Some(u), Some(p)) => Socks5Stream::connect_with_password_and_socket(bound, target, u, p).await,
+                        (Some(u), Some(p)) => {
+                            Socks5Stream::connect_with_password_and_socket(bound, target, u, p)
+                                .await
+                        }
                         _ => Socks5Stream::connect_with_socket(bound, target).await,
                     }
                     .map_err(|e| io::Error::other(format!("SOCKS5 proxy error: {e}")))?;
@@ -155,7 +173,14 @@ async fn connect_tcp(profile: &ServerProfile) -> io::Result<TcpStream> {
                 }
             }
         }
-        None => connect_socket(&profile.host, profile.port, profile.local_address.as_deref()).await,
+        None => {
+            connect_socket(
+                &profile.host,
+                profile.port,
+                profile.local_address.as_deref(),
+            )
+            .await
+        }
     }
 }
 
@@ -439,7 +464,10 @@ mod tests {
         let stream = connect_socket("127.0.0.1", port, Some("127.0.0.1"))
             .await
             .unwrap();
-        assert_eq!(stream.local_addr().unwrap().ip(), std::net::Ipv4Addr::LOCALHOST);
+        assert_eq!(
+            stream.local_addr().unwrap().ip(),
+            std::net::Ipv4Addr::LOCALHOST
+        );
         assert_eq!(accept.await.unwrap().ip(), std::net::Ipv4Addr::LOCALHOST);
     }
 
@@ -459,7 +487,10 @@ mod tests {
             assert_eq!(&request[..2], &[4, 1]);
             assert!(request.windows(5).any(|value| value == b"jirc\0"));
             assert!(request.windows(13).any(|value| value == b"example.test\0"));
-            socket.write_all(&[0, 0x5a, 0, 0, 0, 0, 0, 0]).await.unwrap();
+            socket
+                .write_all(&[0, 0x5a, 0, 0, 0, 0, 0, 0])
+                .await
+                .unwrap();
         });
         let mut profile = profile();
         profile.host = "example.test".into();

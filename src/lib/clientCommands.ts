@@ -4,6 +4,7 @@ import { STATUS, useStore } from "../state/store";
 import { api } from "./api";
 import { useToolbar } from "../state/toolbar";
 import { useChannelCentral } from "../state/channelModes";
+import { useAddressBook } from "../state/addressBook";
 
 export interface EditboxCommand {
   serverId: string;
@@ -17,6 +18,14 @@ export interface EditboxCommand {
 }
 
 export const EDITBOX_COMMAND_EVENT = "jirc-editbox-command";
+export const FINDTEXT_COMMAND_EVENT = "jirc-findtext-command";
+
+export interface FindTextCommand {
+  serverId: string;
+  target: string;
+  text: string;
+  next: boolean;
+}
 
 function words(args: string): string[] {
   return args.trim().match(/"[^"]*"|\S+/g)?.map((word) =>
@@ -198,6 +207,12 @@ export function routeClientCommand(
   openSettings: () => void
 ) {
   switch (event.command) {
+    case "abook": {
+      const nick = words(event.args).find((part) => !part.startsWith("-")) ?? "";
+      const network = useStore.getState().servers[event.serverId]?.name ?? "";
+      void useAddressBook.getState().show(nick, network);
+      break;
+    }
     case "channel": {
       const requested = words(event.args)[0] ?? "";
       const chanTypes = useStore.getState().servers[event.serverId]?.chanTypes ?? "#&!+%";
@@ -233,6 +248,14 @@ export function routeClientCommand(
         })
       );
       break;
+    case "findtext": {
+      const parts = words(event.args);
+      const switches = parts[0]?.startsWith("-") ? parts.shift()!.slice(1) : "";
+      window.dispatchEvent(new CustomEvent<FindTextCommand>(FINDTEXT_COMMAND_EVENT, {
+        detail: { serverId: event.serverId, target: event.currentTarget, text: parts.join(" "), next: switches.includes("n") },
+      }));
+      break;
+    }
     case "timestamp": {
       const mode = words(event.args).find((word) =>
         ["on", "off", "default", "inline", "divider"].includes(word.toLowerCase())

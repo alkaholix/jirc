@@ -105,6 +105,8 @@ fn wildcard_ascii_case(pattern: &str, text: &str) -> bool {
 /// Server capabilities learned from RPL_ISUPPORT (005).
 #[derive(Debug, Clone)]
 pub struct Isupport {
+    /// Human-readable live network name advertised by `NETWORK=`.
+    pub network: Option<String>,
     /// (mode letter, prefix char) in descending rank order.
     pub prefix_modes: Vec<(char, char)>,
     /// Leading characters that denote a channel name.
@@ -132,6 +134,7 @@ pub struct Isupport {
 impl Default for Isupport {
     fn default() -> Self {
         Isupport {
+            network: None,
             prefix_modes: vec![('q', '~'), ('a', '&'), ('o', '@'), ('h', '%'), ('v', '+')],
             chan_types: "#&!+".to_string(),
             chanmodes_a: "beI".to_string(),
@@ -256,7 +259,11 @@ impl Isupport {
     /// Parses a single ISUPPORT token, e.g. `PREFIX=(qov).@+`, `CHANTYPES=%#`,
     /// or `CHANMODES=A,B,C,D`.
     pub fn parse_token(&mut self, token: &str) {
-        if let Some(v) = token.strip_prefix("PREFIX=") {
+        if let Some(v) = token.strip_prefix("NETWORK=") {
+            if !v.trim().is_empty() {
+                self.network = Some(v.trim().to_string());
+            }
+        } else if let Some(v) = token.strip_prefix("PREFIX=") {
             if let Some((modes, prefixes)) = v.strip_prefix('(').and_then(|s| s.split_once(')')) {
                 let pairs: Vec<(char, char)> = modes.chars().zip(prefixes.chars()).collect();
                 if !pairs.is_empty() {
@@ -1038,6 +1045,15 @@ impl StateStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_network_as_the_live_display_name() {
+        let mut support = Isupport::default();
+        support.parse_token("NETWORK=IRC7");
+        assert_eq!(support.network.as_deref(), Some("IRC7"));
+        support.parse_token("NETWORK=");
+        assert_eq!(support.network.as_deref(), Some("IRC7"));
+    }
 
     #[test]
     fn splits_known_prefixes() {

@@ -147,6 +147,8 @@ pub enum UiEvent {
     /// Server ISUPPORT (005) info the frontend needs for routing/rendering.
     Isupport {
         server_id: String,
+        /// Live display name advertised by the server's `NETWORK=` token.
+        network: Option<String>,
         chan_types: String,
         /// Prefix characters, highest rank first (e.g. "~&@%+" or ".@+").
         prefixes: String,
@@ -424,6 +426,7 @@ mod tests {
 
         let isupport = UiEvent::Isupport {
             server_id: "s1".into(),
+            network: Some("TestNet".into()),
             chan_types: "#&".into(),
             prefixes: "@+".into(),
             prefix_modes: "ov".into(),
@@ -434,6 +437,7 @@ mod tests {
         };
         let json = serde_json::to_string(&isupport).unwrap();
         assert!(json.contains("\"caseMapping\":\"rfc1459\""), "{json}");
+        assert!(json.contains("\"network\":\"TestNet\""), "{json}");
         assert!(json.contains("\"statusMsg\":\"@+\""), "{json}");
         assert!(json.contains("\"prefixModes\":\"ov\""), "{json}");
         assert!(json.contains("\"chanModes\":\"beI,k,l,imnst\""), "{json}");

@@ -131,6 +131,21 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
   const history = useRef<string[]>([]);
   const histIdx = useRef(-1);
 
+  const reportEditbox = () => {
+    const input = inputRef.current;
+    void api.scriptSetClientEditbox(
+      buffer.name,
+      input?.value ?? value,
+      input?.selectionStart ?? value.length,
+      input?.selectionEnd ?? value.length
+    ).catch(() => {});
+  };
+
+  useEffect(() => {
+    reportEditbox();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buffer.name, value]);
+
   useEffect(() => {
     const listener = (event: Event) => {
       const command = (event as CustomEvent<EditboxCommand>).detail;
@@ -433,6 +448,7 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
           value={value}
           placeholder="Type a message or /command…"
           onChange={onInputChange}
+          onSelect={reportEditbox}
           onKeyDown={onKeyDown}
           onKeyUp={onKeyUp}
           onContextMenu={openContextMenu}

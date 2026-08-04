@@ -583,7 +583,14 @@ impl DccManager {
     }
 
     /// Updates the advertised IP and listen-port range used for new offers.
-    pub fn configure(&self, ip: String, bind_ip: String, port_from: u16, port_to: u16, passive: bool) {
+    pub fn configure(
+        &self,
+        ip: String,
+        bind_ip: String,
+        port_from: u16,
+        port_to: u16,
+        passive: bool,
+    ) {
         let (port_from, port_to) = if port_from != 0 && port_to != 0 && port_from > port_to {
             (port_to, port_from)
         } else {
@@ -1391,8 +1398,7 @@ impl DccManager {
                 Ok(ip) => ip,
                 Err(error) => return fail_transfer(&app, &xid, &error),
             };
-            let Some((listener, port)) = bind_in_range(bind_ip, cfg.port_from, cfg.port_to)
-            else {
+            let Some((listener, port)) = bind_in_range(bind_ip, cfg.port_from, cfg.port_to) else {
                 return fail_transfer(&app, &xid, "no free DCC port in range");
             };
             if let Err(error) = send_ctcp(
@@ -3460,13 +3466,7 @@ mod tests {
     #[test]
     fn dcc_configuration_normalizes_ranges_and_honours_bind_address() {
         let manager = DccManager::new();
-        manager.configure(
-            "198.51.100.8".into(),
-            "127.0.0.1".into(),
-            5009,
-            5000,
-            true,
-        );
+        manager.configure("198.51.100.8".into(), "127.0.0.1".into(), 5009, 5000, true);
         let config = manager.config.lock().unwrap().clone();
         assert_eq!((config.port_from, config.port_to), (5000, 5009));
         assert!(config.passive);

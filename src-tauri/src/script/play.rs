@@ -382,7 +382,10 @@ async fn run_queue(app: AppHandle, wake: Arc<tokio::sync::Notify>) {
                     state.queue.remove(index);
                     drop(state);
                     super::script_dispatch_audio_end(
-                        app.clone(), run.server_id, "PLAYEND".into(), run.filename,
+                        app.clone(),
+                        run.server_id,
+                        "PLAYEND".into(),
+                        run.filename,
                     );
                     continue;
                 }

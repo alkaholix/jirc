@@ -4,6 +4,8 @@ export type Theme = "dark" | "light" | "system";
 export type ScriptTheme = "vscode-dark" | "vscode-light" | "monokai" | "solarized-dark";
 export type TimestampMode = "inline" | "divider" | "off";
 export type Layout = "tree" | "switchbar";
+export type DockPaneId = "treebar" | "nicklist" | "panels";
+export type DockSide = "left" | "right";
 
 export interface Settings {
   theme: Theme;
@@ -12,6 +14,10 @@ export interface Settings {
   layout: Layout;
   treebarWidth: number;
   treebarPosition: "left" | "right";
+  nicklistWidth: number;
+  panelsWidth: number;
+  dockPaneOrder: DockPaneId[];
+  dockPaneSides: Record<DockPaneId, DockSide>;
   timestampMode: TimestampMode;
   /** mIRC /strip flags currently enabled (b/u/r/i/e/c). */
   stripCodes: string;
@@ -84,6 +90,10 @@ const DEFAULTS: Settings = {
   layout: "tree",
   treebarWidth: 220,
   treebarPosition: "left",
+  nicklistWidth: 180,
+  panelsWidth: 240,
+  dockPaneOrder: ["treebar", "nicklist", "panels"],
+  dockPaneSides: { treebar: "left", nicklist: "right", panels: "right" },
   timestampMode: "inline",
   stripCodes: "",
   showJoinPart: true,
@@ -154,6 +164,22 @@ export function normalizeSavedSettings(
       (showTimestamps === false ? "off" : "inline"),
   } as Settings;
   settings.chatFontSize = normalizeAppFontSize(settings.chatFontSize);
+  const validPanes: DockPaneId[] = ["treebar", "nicklist", "panels"];
+  const savedOrder = Array.isArray(saved.dockPaneOrder)
+    ? saved.dockPaneOrder.filter((pane): pane is DockPaneId => validPanes.includes(pane as DockPaneId))
+    : [];
+  const savedSides = saved.dockPaneSides && typeof saved.dockPaneSides === "object"
+    ? saved.dockPaneSides as Partial<Record<DockPaneId, unknown>>
+    : {};
+  settings.dockPaneOrder = [...new Set([...savedOrder, ...validPanes])];
+  settings.dockPaneSides = {
+    treebar: savedSides.treebar === "right" || settings.treebarPosition === "right" ? "right" : "left",
+    nicklist: savedSides.nicklist === "left" ? "left" : "right",
+    panels: savedSides.panels === "left" ? "left" : "right",
+  };
+  settings.treebarWidth = Math.max(140, Math.min(600, Number(settings.treebarWidth) || 220));
+  settings.nicklistWidth = Math.max(120, Math.min(500, Number(settings.nicklistWidth) || 180));
+  settings.panelsWidth = Math.max(160, Math.min(600, Number(settings.panelsWidth) || 240));
   return settings;
 }
 

@@ -2095,6 +2095,7 @@ fn handle_numeric(ctx: &mut Context, fx: &mut Effects, resp: Response, args: &[S
             }
             fx.events.push(UiEvent::Isupport {
                 server_id,
+                network: ctx.state.isupport.network.clone(),
                 chan_types: ctx.state.isupport.chan_types.clone(),
                 prefixes: ctx.state.isupport.prefix_chars(),
                 prefix_modes: ctx
@@ -2494,18 +2495,13 @@ mod tests {
         let actions = run_perform_commands(
             &engine,
             &ctx,
-            &[
-                "mode $me +i".into(),
-                "msg NickServ network=$network".into(),
-            ],
+            &["mode $me +i".into(), "msg NickServ network=$network".into()],
         );
         assert_eq!(
             actions,
             vec![
                 crate::script::eval::Action::Send("MODE me +i".into()),
-                crate::script::eval::Action::Send(
-                    "PRIVMSG NickServ :network=TestNet".into()
-                ),
+                crate::script::eval::Action::Send("PRIVMSG NickServ :network=TestNet".into()),
             ]
         );
     }

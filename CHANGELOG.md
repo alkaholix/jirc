@@ -12,6 +12,21 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🧩 26.8.7 — Dockable panes
+
+- Live connections now adopt the server's `005 NETWORK=` display name (including
+  local bridge scripts such as `i7.mrc`) without changing the saved profile.
+- Added mSL `$ignore`, `$highlight`, `$font`, and `$editbox` identifiers backed
+  by live client state, plus `/findtext` integration with buffer search.
+- Added draggable left/right docking and persistent ordering for the treebar,
+  channel nick list and script-created panels.
+- Added pointer-resizable pane edges with independent persisted widths.
+- Added accessible side-switch buttons and an Appearance setting to reset the
+  complete pane layout.
+- Preserved the compact switchbar layout and independent detached-window layout.
+- Reconciled the scripting backlog against the bundled mIRCKB and implemented
+  `/abook`, `/events on|off`, scripted `/links`, and `$fullscreen`.
+
 ## 🗂️ 26.8.6 — Context popup management
 
 - Split the Popups editor into Server/status, Channel, Nick list, Query, Custom

@@ -398,6 +398,9 @@ impl ScriptEngine {
         dark_mode: bool,
         notify_list: Vec<String>,
         notify_online: Vec<String>,
+        ignore_list: Vec<String>,
+        highlight_list: Vec<String>,
+        font_list: Vec<String>,
     ) {
         let mut inner = self.inner.lock().unwrap();
         inner.vars.insert(
@@ -412,6 +415,24 @@ impl ScriptEngine {
             eval::CLIENT_NOTIFY_ONLINE_KEY.into(),
             notify_online.join("\u{1f}"),
         );
+        inner.vars.insert(
+            eval::CLIENT_IGNORE_LIST_KEY.into(),
+            ignore_list.join("\u{1f}"),
+        );
+        inner.vars.insert(
+            eval::CLIENT_HIGHLIGHT_LIST_KEY.into(),
+            highlight_list.join("\u{1f}"),
+        );
+        inner
+            .vars
+            .insert(eval::CLIENT_FONT_LIST_KEY.into(), font_list.join("\u{1f}"));
+    }
+
+    pub fn set_client_editbox(&self, target: &str, text: &str, start: usize, end: usize) {
+        self.inner.lock().unwrap().vars.insert(
+            format!("{}{}", eval::CLIENT_EDITBOX_PREFIX, target.to_lowercase()),
+            format!("{start}\u{1f}{end}\u{1f}{text}"),
+        );
     }
 
     pub fn set_client_ui_state(&self, toolbar: bool, treebar: bool, switchbar: bool) {
@@ -421,7 +442,9 @@ impl ScriptEngine {
             (eval::CLIENT_TREEBAR_KEY, treebar),
             (eval::CLIENT_SWITCHBAR_KEY, switchbar),
         ] {
-            inner.vars.insert(key.into(), if enabled { "on" } else { "off" }.into());
+            inner
+                .vars
+                .insert(key.into(), if enabled { "on" } else { "off" }.into());
         }
     }
 
@@ -1253,11 +1276,14 @@ impl ScriptEngine {
                 .iter()
                 .find(|channel| ctx.state.isupport.names_equal(&channel.name, &event.chan))
                 .and_then(|channel| {
-                    channel.members.iter().find(|(nick, _)| {
-                        ctx.state.isupport.names_equal(nick, &event.knick)
-                    })
+                    channel
+                        .members
+                        .iter()
+                        .find(|(nick, _)| ctx.state.isupport.names_equal(nick, &event.knick))
                 })
-                .map(|(_, prefixes)| prefixes.contains('@') || prefixes.contains('&') || prefixes.contains('~'))
+                .map(|(_, prefixes)| {
+                    prefixes.contains('@') || prefixes.contains('&') || prefixes.contains('~')
+                })
                 .unwrap_or(false);
             if am_op
                 && !protected_is_op
@@ -2263,7 +2289,9 @@ pub fn script_is_loaded(app: AppHandle, name: String) -> Result<bool, String> {
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default();
-    Ok(!disabled.iter().any(|item| item.eq_ignore_ascii_case(&filename)))
+    Ok(!disabled
+        .iter()
+        .any(|item| item.eq_ignore_ascii_case(&filename)))
 }
 
 /// Enables or disables one script file without deleting its contents.
@@ -2654,7 +2682,11 @@ fn apply_actions_depth(
                     },
                 );
             }
-            Action::Audio { operation, path, end_event } => {
+            Action::Audio {
+                operation,
+                path,
+                end_event,
+            } => {
                 let _ = app.emit(
                     IRC_EVENT,
                     UiEvent::Audio {
@@ -3529,17 +3561,30 @@ pub async fn script_run_key(
             return false;
         }
         let engine = app.state::<ScriptEngine>();
-        let state = app.try_state::<crate::irc::state::StateStore>()
-            .map(|store| store.get(&server_id)).unwrap_or_default();
+        let state = app
+            .try_state::<crate::irc::state::StateStore>()
+            .map(|store| store.get(&server_id))
+            .unwrap_or_default();
         let my_nick = state.nick.clone();
         let (network, server) = engine.connection_context(&server_id).unwrap_or_default();
-        let ctx = RunCtx { my_nick: &my_nick, network: &network, server: &server, data_dir: script_data_dir(&app), state };
+        let ctx = RunCtx {
+            my_nick: &my_nick,
+            network: &network,
+            server: &server,
+            data_dir: script_data_dir(&app),
+            state,
+        };
         let vars = EventVars {
             target: target.clone(),
             chan: is_channel(&target).then_some(target).unwrap_or_default(),
             text: text.clone(),
             params: vec![key.clone(), modifiers, text],
-            key_char: key.chars().count().eq(&1).then_some(key).unwrap_or_default(),
+            key_char: key
+                .chars()
+                .count()
+                .eq(&1)
+                .then_some(key)
+                .unwrap_or_default(),
             key_val: Some(key_val),
             key_repeat,
             ..Default::default()
@@ -3547,7 +3592,9 @@ pub async fn script_run_key(
         let (actions, halted) = engine.dispatch_event_halt(&ctx, &kind, vars);
         apply_actions(&app, &server_id, &my_nick, &network, &server, actions);
         halted
-    }).await.unwrap_or(false)
+    })
+    .await
+    .unwrap_or(false)
 }
 
 #[tauri::command]
@@ -3635,8 +3682,29 @@ pub fn script_set_client_preferences(
     dark_mode: bool,
     notify_list: Vec<String>,
     notify_online: Vec<String>,
+    ignore_list: Vec<String>,
+    highlight_list: Vec<String>,
+    font_list: Vec<String>,
 ) {
-    engine.set_client_preferences(dark_mode, notify_list, notify_online);
+    engine.set_client_preferences(
+        dark_mode,
+        notify_list,
+        notify_online,
+        ignore_list,
+        highlight_list,
+        font_list,
+    );
+}
+
+#[tauri::command]
+pub fn script_set_client_editbox(
+    engine: State<'_, ScriptEngine>,
+    target: String,
+    text: String,
+    start: usize,
+    end: usize,
+) {
+    engine.set_client_editbox(&target, &text, start, end);
 }
 
 #[tauri::command]
@@ -4287,17 +4355,26 @@ mod tests {
     fn client_state_and_notify_identifiers_follow_frontend_state() {
         let engine = ScriptEngine::new();
         engine.set_client_window_state("main", true, "maximized");
-        engine.set_client_preferences(true, vec!["Alice".into(), "Bob".into()], vec!["bob".into()]);
+        engine.set_client_preferences(
+            true,
+            vec!["Alice".into(), "Bob".into()],
+            vec!["bob".into()],
+            vec!["Bad!*@*".into()],
+            vec!["jIRC".into()],
+            vec!["Consolas".into(), "Verdana".into()],
+        );
         engine.set_client_ui_state(true, true, false);
+        engine.set_active_win("server", "#jirc");
+        engine.set_client_editbox("#jirc", "hello world", 2, 7);
         engine.load(
-            "alias inspect { echo -a $appactive $appstate $darkmode $toolbar $treebar $switchbar $notify $notify(0) $notify(1) $notify(bob) $notify(Alice).ison $notify(Bob).ison }",
+            "alias inspect { echo -a $appactive $appstate $fullscreen $darkmode $toolbar $treebar $switchbar $notify $notify(0) $notify(1) $notify(bob) $notify(Alice).ison $notify(Bob).ison $ignore(0) $ignore(1) $ignore(Bad!*@*) $highlight(0) $highlight(1).text $font(0) $font(2) $editbox(#jirc) $editbox(#jirc).selstart $editbox(#jirc).selend }",
         );
 
         assert_eq!(
             engine.run_alias(&ctx(), "", "inspect", ""),
             vec![Action::Echo {
                 target: "(status)".into(),
-                text: "$true maximized $true on on off $true 2 Alice 2 $false $true".into(),
+                text: "$true maximized $false $true on on off $true 2 Alice 2 $false $true 1 Bad!*@* 1 1 jIRC 2 Verdana hello world 2 7".into(),
             }]
         );
 
@@ -4590,12 +4667,27 @@ mod tests {
     fn dedicated_popup_files_are_ordered_before_remote_script_menus() {
         let engine = ScriptEngine::new();
         engine.load_sources(&[
-            ("aaa-remote.mrc".into(), "menu channel { Remote:/echo remote }".into()),
-            ("popups-channel.mrc".into(), "menu channel { Mine:/echo mine }".into()),
-            ("zzz-remote.mrc".into(), "menu channel { Last:/echo last }".into()),
+            (
+                "aaa-remote.mrc".into(),
+                "menu channel { Remote:/echo remote }".into(),
+            ),
+            (
+                "popups-channel.mrc".into(),
+                "menu channel { Mine:/echo mine }".into(),
+            ),
+            (
+                "zzz-remote.mrc".into(),
+                "menu channel { Last:/echo last }".into(),
+            ),
         ]);
         let items = engine.popups_evaluated(&ctx(), "channel", "", "#c");
-        assert_eq!(items.iter().map(|item| item.label.as_str()).collect::<Vec<_>>(), vec!["Mine", "Remote", "Last"]);
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Mine", "Remote", "Last"]
+        );
         assert_eq!(items[0].source, "popups-channel.mrc");
     }
 
@@ -5022,12 +5114,32 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(key, vec![Action::Echo { target: "(status)".into(), text: "key A ctrl A 65 $true".into() }]);
+        assert_eq!(
+            key,
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "key A ctrl A 65 $true".into()
+            }]
+        );
         for (kind, expected) in [("WAVEEND", "wave alert.wav"), ("PLAYEND", "play lines.txt")] {
-            let filename = if kind == "WAVEEND" { "alert.wav" } else { "lines.txt" };
+            let filename = if kind == "WAVEEND" {
+                "alert.wav"
+            } else {
+                "lines.txt"
+            };
             assert_eq!(
-                engine.dispatch_event(&ctx(), kind, EventVars { filename: filename.into(), ..Default::default() }),
-                vec![Action::Echo { target: "(status)".into(), text: expected.into() }]
+                engine.dispatch_event(
+                    &ctx(),
+                    kind,
+                    EventVars {
+                        filename: filename.into(),
+                        ..Default::default()
+                    }
+                ),
+                vec![Action::Echo {
+                    target: "(status)".into(),
+                    text: expected.into()
+                }]
             );
         }
     }
@@ -5040,6 +5152,7 @@ mod tests {
             vec![Action::Send("NICK Temporary".into())]
         );
         for (line, expected, args) in [
+            ("/abook -w Alice", "abook", "-w Alice"),
             ("/markasread", "markasread", ""),
             ("/channel #other", "channel", "#other"),
             ("/strip +bur-c", "strip", "+bur-c"),
@@ -5054,6 +5167,10 @@ mod tests {
                     if command == expected && actual == args && current_target == "#c"
             ));
         }
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", "/links -nx", &[]),
+            vec![Action::Send("LINKS".into())]
+        );
     }
 
     #[test]
@@ -6235,6 +6352,21 @@ mod tests {
         );
         engine.run_alias(&ctx(), "#c", "on", "");
         assert_eq!(engine.dispatch_event(&ctx(), "SIGNAL", signal()).len(), 1);
+        engine.run_command(&ctx(), "#c", "/events off", &[]);
+        assert!(engine.dispatch_event(&ctx(), "SIGNAL", signal()).is_empty());
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", "/msg #c $remote", &[]),
+            vec![Action::Send("PRIVMSG #c :5".into())]
+        );
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", "/events", &[]),
+            vec![Action::Echo {
+                target: "#c".into(),
+                text: "* Events are off".into(),
+            }]
+        );
+        engine.run_command(&ctx(), "#c", "/events on", &[]);
+        assert_eq!(engine.dispatch_event(&ctx(), "SIGNAL", signal()).len(), 1);
     }
 
     #[test]
@@ -6332,7 +6464,9 @@ mod tests {
         use crate::irc::state::{ChannelView, StateSnapshot};
 
         let daily = ScriptEngine::new();
-        daily.load(include_str!("../../tests/fixtures/msl-compat/daily-aliases.msl"));
+        daily.load(include_str!(
+            "../../tests/fixtures/msl-compat/daily-aliases.msl"
+        ));
         assert_eq!(
             daily.run_alias(&ctx(), "#compat", "compat_daily", "10 20 12"),
             vec![Action::Send(
@@ -6341,7 +6475,9 @@ mod tests {
         );
 
         let bot = ScriptEngine::new();
-        bot.load(include_str!("../../tests/fixtures/msl-compat/event-bot.msl"));
+        bot.load(include_str!(
+            "../../tests/fixtures/msl-compat/event-bot.msl"
+        ));
         let message = UiEvent::Message {
             server_id: "s".into(),
             kind: MessageKind::Privmsg,
@@ -6358,7 +6494,9 @@ mod tests {
         );
 
         let stateful = ScriptEngine::new();
-        stateful.load(include_str!("../../tests/fixtures/msl-compat/channel-state.msl"));
+        stateful.load(include_str!(
+            "../../tests/fixtures/msl-compat/channel-state.msl"
+        ));
         let snapshot = StateSnapshot {
             nick: "me".into(),
             channels: vec![ChannelView {
@@ -6383,7 +6521,9 @@ mod tests {
         );
 
         let ui = ScriptEngine::new();
-        ui.load(include_str!("../../tests/fixtures/msl-compat/script-ui.msl"));
+        ui.load(include_str!(
+            "../../tests/fixtures/msl-compat/script-ui.msl"
+        ));
         assert!(matches!(
             ui.run_alias(&ctx(), "#compat", "compat_ui", "").as_slice(),
             [Action::DialogOpen { name, .. }] if name == "compatbox"
@@ -7594,7 +7734,10 @@ mod tests {
             state: std::sync::Arc::new(already_restored),
             ..rctx
         };
-        assert_eq!(engine.dispatch_event(&restored_ctx, "DEOP", deop("vip")), vec![]);
+        assert_eq!(
+            engine.dispatch_event(&restored_ctx, "DEOP", deop("vip")),
+            vec![]
+        );
     }
 
     #[test]

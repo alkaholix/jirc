@@ -946,6 +946,12 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             .get(super::eval::CLIENT_APP_STATE_KEY)
             .cloned()
             .unwrap_or_else(|| "normal".into()),
+        "fullscreen" => bool_str(
+            rt.vars
+                .get(super::eval::CLIENT_APP_STATE_KEY)
+                .is_some_and(|state| state == "full"),
+        )
+        .to_string(),
         "darkmode" => rt
             .vars
             .get(super::eval::CLIENT_DARK_MODE_KEY)
@@ -955,8 +961,17 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "treebar" => client_on_off(rt, super::eval::CLIENT_TREEBAR_KEY),
         "switchbar" => client_on_off(rt, super::eval::CLIENT_SWITCHBAR_KEY),
         "keychar" => rt.event.key_char.clone(),
-        "keyval" => rt.event.key_val.map(|value| value.to_string()).unwrap_or_default(),
-        "keyrpt" => if rt.event.key_repeat { "$true" } else { "$false" }.into(),
+        "keyval" => rt
+            .event
+            .key_val
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        "keyrpt" => if rt.event.key_repeat {
+            "$true"
+        } else {
+            "$false"
+        }
+        .into(),
         "notify" => {
             let list = rt
                 .vars
@@ -1022,6 +1037,48 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                         String::new()
                     }
                 }
+            }
+        }
+        "ignore" => eval_client_list_ident(
+            rt,
+            args,
+            prop,
+            super::eval::CLIENT_IGNORE_LIST_KEY,
+            "ignore",
+        ),
+        "highlight" => eval_client_list_ident(
+            rt,
+            args,
+            prop,
+            super::eval::CLIENT_HIGHLIGHT_LIST_KEY,
+            "highlight",
+        ),
+        "font" => eval_client_list_ident(rt, args, prop, super::eval::CLIENT_FONT_LIST_KEY, "font"),
+        "editbox" => {
+            let target = if a(0).is_empty() {
+                rt.active.clone()
+            } else {
+                a(0)
+            };
+            let packed = rt.vars.get(&format!(
+                "{}{}",
+                super::eval::CLIENT_EDITBOX_PREFIX,
+                target.to_lowercase()
+            ));
+            let mut fields = packed.map(|value| value.splitn(3, '\u{1f}'));
+            let start = fields
+                .as_mut()
+                .and_then(|parts| parts.next())
+                .unwrap_or("0");
+            let end = fields
+                .as_mut()
+                .and_then(|parts| parts.next())
+                .unwrap_or("0");
+            let text = fields.as_mut().and_then(|parts| parts.next()).unwrap_or("");
+            match prop.to_ascii_lowercase().as_str() {
+                "selstart" => start.to_string(),
+                "selend" => end.to_string(),
+                _ => text.to_string(),
             }
         }
         "server" => rt.server.to_string(),
@@ -2942,6 +2999,65 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             // take the opposite branch from the same script in mIRC.
             String::new()
         }
+    }
+}
+
+fn eval_client_list_ident(
+    rt: &Runtime<'_>,
+    args: &[String],
+    prop: &str,
+    key: &str,
+    kind: &str,
+) -> String {
+    let list = rt
+        .vars
+        .get(key)
+        .map(|value| {
+            value
+                .split('\u{1f}')
+                .filter(|item| !item.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if args.is_empty() {
+        return bool_str(!list.is_empty()).to_string();
+    }
+    let selector = &args[0];
+    if selector == "0" {
+        return list.len().to_string();
+    }
+    let numeric = selector.parse::<usize>().ok();
+    let index = numeric
+        .filter(|number| *number > 0 && *number <= list.len())
+        .map(|number| number - 1)
+        .or_else(|| {
+            list.iter()
+                .position(|item| item.eq_ignore_ascii_case(selector))
+        });
+    let Some(position) = index else {
+        return if numeric.is_some() {
+            String::new()
+        } else {
+            "0".into()
+        };
+    };
+    if prop.is_empty() {
+        return if numeric.is_some() {
+            list[position].to_string()
+        } else {
+            (position + 1).to_string()
+        };
+    }
+    match (kind, prop.to_ascii_lowercase().as_str()) {
+        ("ignore", "type") => "pcntikd".into(),
+        ("ignore", "secs") => "0".into(),
+        ("ignore", "network") => String::new(),
+        ("highlight", "text") => list[position].to_string(),
+        ("highlight", "flash" | "regex" | "cs") => "$false".into(),
+        ("highlight", "message" | "nicks") => "$true".into(),
+        ("highlight", "color" | "sound" | "chans") => String::new(),
+        ("font", "size" | "pitch" | "type") => String::new(),
+        _ => String::new(),
     }
 }
 

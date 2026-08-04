@@ -35,4 +35,22 @@ describe("timestamp settings migration", () => {
     expect(normalizeAppFontSize(0)).toBe(0);
     expect(normalizeSavedSettings({ chatFontSize: 5 }).chatFontSize).toBe(8);
   });
+
+  it("migrates and validates dockable pane layout settings", () => {
+    expect(normalizeSavedSettings({ treebarPosition: "right" })).toMatchObject({
+      dockPaneOrder: ["treebar", "nicklist", "panels"],
+      dockPaneSides: { treebar: "right", nicklist: "right", panels: "right" },
+      nicklistWidth: 180,
+      panelsWidth: 240,
+    });
+    expect(normalizeSavedSettings({
+      dockPaneOrder: ["panels", "bad", "panels"],
+      dockPaneSides: { panels: "left" },
+      nicklistWidth: 20,
+    })).toMatchObject({
+      dockPaneOrder: ["panels", "treebar", "nicklist"],
+      dockPaneSides: { treebar: "left", nicklist: "right", panels: "left" },
+      nicklistWidth: 120,
+    });
+  });
 });

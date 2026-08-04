@@ -33,6 +33,22 @@ describe("connection lifecycle", () => {
     expect(srv.registered).toBe(true);
     expect(srv.nick).toBe("me");
   });
+
+  it("uses NETWORK as the live label without requiring a profile rename", () => {
+    useStore.getState().handleEvent({
+      type: "isupport",
+      serverId: SID,
+      network: "IRC7",
+      chanTypes: "%#",
+      prefixes: ".@+",
+      prefixModes: "qov",
+      caseMapping: "rfc1459",
+      statusMsg: "",
+      chanModes: "beI,k,l,imnst",
+      modesPerLine: 3,
+    });
+    expect(useStore.getState().servers[SID].name).toBe("IRC7");
+  });
 });
 
 describe("IRC casemapping", () => {
@@ -45,6 +61,7 @@ describe("IRC casemapping", () => {
   it("uses ASCII identity after the server advertises it", () => {
     useStore.getState().handleEvent({
       type: "isupport",
+      network: null,
       serverId: SID,
       chanTypes: "#&",
       prefixes: "~&@%+",
@@ -63,6 +80,7 @@ describe("channel routing", () => {
     const s = useStore.getState();
     s.handleEvent({
       type: "isupport",
+      network: null,
       serverId: SID,
       chanTypes: "#&",
       prefixes: "~&@%+",
@@ -109,6 +127,7 @@ describe("channel routing", () => {
     const s = useStore.getState();
     s.handleEvent({
       type: "isupport",
+      network: null,
       serverId: SID,
       chanTypes: "%#",
       prefixes: "~&@%+",
@@ -230,6 +249,7 @@ describe("channel membership", () => {
       .getState()
       .handleEvent({
         type: "isupport",
+        network: null,
         serverId: SID,
         chanTypes: "#&",
         prefixes: ".@+",

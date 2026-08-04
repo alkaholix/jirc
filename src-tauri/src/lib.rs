@@ -155,6 +155,7 @@ pub fn run() {
             script::script_dispatch_dns,
             script::script_set_client_window_state,
             script::script_set_client_preferences,
+            script::script_set_client_editbox,
             script::script_set_client_ui_state,
             script::script_window_open,
             script::script_window_close,
