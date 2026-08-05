@@ -58,7 +58,8 @@ Versions use CalVer (`YY.M.D`) — newest first.
   a pattern such as `*a*a*a*b` against a long non-matching message.
 - Unified the accent colour on a brand ramp derived from the application icon.
   The light theme and the About mark previously used blues that did not appear
-  in the logo, one of them noticeably darker and duller.
+  in the logo, one of them noticeably darker and duller. Both themes now use
+  the same accent, so the blue is identical throughout the application.
 - Rebuilt the message colour picker. The Apply button no longer paints itself
   in the selected IRC colours and no longer needs a text shadow to stay
   readable; a separate swatch previews the choice, and a 16-cell palette grid

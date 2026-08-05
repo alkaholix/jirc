@@ -3,9 +3,9 @@
      src-tauri/icons/icon-source.svg) so the UI accent and the logo can never
      drift apart. Hue stays ~221deg and saturation ~90% across the ramp; only
      lightness moves, which is what keeps it recognisable as one colour.
-     --brand-600 is the light-theme accent: #7aa2f7 only reaches 2.3:1 on the
-     light background and fails AA for text, so the ramp steps down to 4.5:1
-     without leaving the logo's hue. */
+     Both themes use --brand-400 as their accent so the blue is identical
+     everywhere. --brand-600/700 are the darker steps for cases that need more
+     contrast against a light ground. */
   --brand-300: #93b7ff;
   --brand-400: #7aa2f7;
   --brand-500: #5677d8;
@@ -147,7 +147,9 @@
   --border: #d3d8e6;
   --fg: #1a1b26;
   --muted: #6b7394;
-  --accent: var(--brand-600);
+  /* Deliberately the same --brand-400 as the dark theme: the accent is the
+     logo's blue and stays identical across themes. */
+  --accent: var(--brand-400);
   --accent2: #8a5cf6;
   --err: #d6204a;
   --ok: #2f8a3b;
