@@ -26,19 +26,76 @@ const splitList = (value: string) =>
     .filter(Boolean);
 
 type Tab = "appearance" | "alerts" | "behaviour" | "dcc" | "plugins" | "server" | "users";
-const TABS: { id: Tab; label: string }[] = [
-  { id: "appearance", label: "Appearance" },
-  { id: "alerts", label: "Alerts" },
-  { id: "behaviour", label: "Behaviour" },
-  { id: "dcc", label: "DCC" },
-  { id: "users", label: "Users" },
-  { id: "plugins", label: "Plugins" },
-  { id: "server", label: "Server" },
+/// Sections, grouped for the settings rail. `keywords` is what search matches
+/// against, so someone can find an option by what they call it rather than by
+/// guessing which section it lives in.
+const TAB_GROUPS: {
+  title: string;
+  tabs: { id: Tab; label: string; keywords: string }[];
+}[] = [
+  {
+    title: "Look",
+    tabs: [
+      {
+        id: "appearance",
+        label: "Appearance",
+        keywords:
+          "theme dark light system layout tree sidebar switchbar tabs dockable panes " +
+          "nick colour color font size timestamps compact spacing toolbar formatting " +
+          "url previews emoji",
+      },
+    ],
+  },
+  {
+    title: "Behaviour",
+    tabs: [
+      {
+        id: "alerts",
+        label: "Alerts",
+        keywords:
+          "highlight mention words sound beep notification tray flash taskbar alert notify",
+      },
+      {
+        id: "behaviour",
+        label: "General",
+        keywords:
+          "logging logs data folder location spell check autocorrect away reconnect " +
+          "join part quit updates",
+      },
+    ],
+  },
+  {
+    title: "Network",
+    tabs: [
+      {
+        id: "server",
+        label: "Server",
+        keywords: "server port tls ssl proxy sasl password nickserv encoding ircx",
+      },
+      {
+        id: "dcc",
+        label: "Transfers",
+        keywords: "dcc send receive file transfer port passive downloads folder resume",
+      },
+    ],
+  },
+  {
+    title: "Advanced",
+    tabs: [
+      {
+        id: "users",
+        label: "Users",
+        keywords: "users list levels access auser guser remote protect ignore",
+      },
+      { id: "plugins", label: "Plugins", keywords: "plugins scripts extensions load reload" },
+    ],
+  },
 ];
 
 export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const settings = useSettings();
   const [tab, setTab] = useState<Tab>("appearance");
+  const [search, setSearch] = useState("");
   const [words, setWords] = useState(settings.highlightWords.join(", "));
   const [ignores, setIgnores] = useState(settings.ignores.join("\n"));
   const [notifyList, setNotifyList] = useState(settings.notifyList.join(", "));
@@ -54,6 +111,19 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ state: "idle" });
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [pluginMessage, setPluginMessage] = useState("");
+
+  // Search narrows the rail to the sections that mention the term, so "sound"
+  // or "proxy" leads straight to the right section instead of a tab-by-tab hunt.
+  const query = search.trim().toLowerCase();
+  const railGroups = query
+    ? TAB_GROUPS.map((group) => ({
+        ...group,
+        tabs: group.tabs.filter(
+          (t) =>
+            t.label.toLowerCase().includes(query) || t.keywords.includes(query)
+        ),
+      })).filter((group) => group.tabs.length > 0)
+    : TAB_GROUPS;
 
   const reloadPlugins = () => api.pluginsList().then(setPlugins).catch(() => setPlugins([]));
 
@@ -166,14 +236,20 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     if (typeof selected === "string") settings.set(key, selected);
   };
 
-  const toggle = (key: Parameters<typeof settings.set>[0], label: string) => (
-    <label className="inline">
+  // One row idiom for every option: name (with optional one-line help) on the
+  // left, control on the right. Every toggle goes through here, so they all
+  // stay consistent. The whole row is a label, so the click target is the row.
+  const toggle = (key: Parameters<typeof settings.set>[0], label: string, help?: string) => (
+    <label className="setting-item">
+      <span className="setting-item-text">
+        <span className="setting-item-label">{label}</span>
+        {help && <span className="field-help">{help}</span>}
+      </span>
       <input
         type="checkbox"
         checked={settings[key] as boolean}
         onChange={(e) => settings.set(key, e.target.checked as never)}
       />
-      {label}
     </label>
   );
 
@@ -181,19 +257,36 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal settings-modal" onClick={(e) => e.stopPropagation()}>
         <h2>Settings</h2>
-        <div className="tabs">
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              className={`tab${tab === t.id ? " active" : ""}`}
-              onClick={() => setTab(t.id)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+        <div className="settings-split">
+          <div className="settings-rail">
+            <input
+              type="search"
+              className="settings-search"
+              placeholder="Search settings…"
+              aria-label="Search settings"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            {railGroups.map((group) => (
+              <div key={group.title} className="settings-rail-group">
+                <div className="settings-rail-title">{group.title}</div>
+                {group.tabs.map((t) => (
+                  <button
+                    key={t.id}
+                    className={`settings-rail-item${tab === t.id ? " active" : ""}`}
+                    onClick={() => setTab(t.id)}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            ))}
+            {railGroups.length === 0 && (
+              <div className="settings-rail-empty">No section matches “{search}”.</div>
+            )}
+          </div>
 
-        <div className="modal-body settings-body">
+          <div className="modal-body settings-body">
           {tab === "appearance" && (
             <>
               <div className="row">
@@ -752,6 +845,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               </p>
             </>
           )}
+          </div>
         </div>
 
         <div className="modal-actions">

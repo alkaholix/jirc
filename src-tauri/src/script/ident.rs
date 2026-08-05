@@ -1393,7 +1393,15 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "cr" => "\r".to_string(),
         "lf" => "\n".to_string(),
         "tab" => "\t".to_string(),
-        "ctime" => now_secs().to_string(),
+        // $ctime -> now; $ctime(text) -> the Unix time of that date/time.
+        "ctime" => {
+            let text = a(0);
+            if text.trim().is_empty() {
+                now_secs().to_string()
+            } else {
+                parse_ctime(&text).map_or_else(String::new, |t| t.to_string())
+            }
+        }
         // $gmt -> current GMT time as unixtime (absolute, == $ctime here).
         "gmt" => now_secs().to_string(),
         // $ticks -> milliseconds since this process started (deltas are what
@@ -1418,19 +1426,23 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 _ => milliseconds.to_string(),
             })
         }
-        "time" => chrono::Local::now().format("%H:%M:%S").to_string(),
-        "date" => chrono::Local::now().format("%d/%m/%Y").to_string(),
         "fulldate" => chrono::Local::now()
             .format("%a %b %d %H:%M:%S %Y")
             .to_string(),
-        "asctime" => {
-            // $asctime([N,] format) -> the ctime N (or now) in local time.
+        // $asctime([N,] format) -> the ctime N (or now) in local time. $time and
+        // $date take the same arguments and differ only in their default format.
+        "asctime" | "time" | "date" => {
             let (ts, fmt) = match a(0).parse::<i64>() {
                 Ok(n) => (n, a(1)),
                 Err(_) => (now_secs() as i64, a(0)),
             };
             let fmt = if fmt.is_empty() {
-                "ddd mmm dd HH:nn:ss yyyy".to_string()
+                match name.to_ascii_lowercase().as_str() {
+                    "time" => "HH:nn:ss",
+                    "date" => "dd/mm/yyyy",
+                    _ => "ddd mmm dd HH:nn:ss yyyy",
+                }
+                .to_string()
             } else {
                 fmt
             };
@@ -1484,10 +1496,16 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             .and_then(char::from_u32)
             .map(String::from)
             .unwrap_or_default(),
+        // mIRC is UTF-16 internally, so a character above the BMP reports its
+        // leading surrogate rather than the whole code point.
         "asc" => a(0)
             .chars()
             .next()
-            .map(|c| (c as u32).to_string())
+            .map(|c| match c as u32 {
+                cp if cp > 0xFFFF => 0xD800 + ((cp - 0x10000) >> 10),
+                cp => cp,
+            })
+            .map(|cp| cp.to_string())
             .unwrap_or_default(),
         // $input(message, type, title, default, …) — a modal text prompt. We
         // drive the edit form; returns the entered text, or empty if cancelled.
@@ -1574,15 +1592,26 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             let inb: u32 = a(1).parse().unwrap_or(10);
             let outb: u32 = a(2).parse().unwrap_or(10);
             let zeropad: usize = a(3).parse().unwrap_or(0);
-            base_convert(&a(0), inb, outb, zeropad)
+            // Precision caps the output's fraction digits; mIRC's own base-10
+            // precision of 6 is the ceiling and the default.
+            let precision: usize = a(4).trim().parse().unwrap_or(6).min(6);
+            base_convert(&a(0), inb, outb, zeropad, precision)
         }
+        // $round(N,D). D=0 rounds to a whole number; an omitted/$null D leaves
+        // the number unchanged. Trailing fraction zeros are not padded out.
         "round" => match a(0).parse::<f64>() {
             Ok(x) => {
-                let d: usize = a(1).parse().unwrap_or(0);
-                if d == 0 {
-                    (x.round() as i64).to_string()
+                let d_arg = a(1);
+                if d_arg.trim().is_empty() {
+                    a(0)
                 } else {
-                    format!("{x:.d$}")
+                    let d: usize = d_arg.trim().parse().unwrap_or(0);
+                    if d == 0 {
+                        (x.round() as i64).to_string()
+                    } else {
+                        let s = format!("{x:.d$}");
+                        s.trim_end_matches('0').trim_end_matches('.').to_string()
+                    }
                 }
             }
             Err(_) => String::new(),
@@ -1707,7 +1736,8 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 a(2)
             }
         }
-        "calc" => calc(&a(0)).map(fmt_num).unwrap_or_default(),
+        // mIRC rounds $calc results to 6 decimal places.
+        "calc" => calc(&a(0)).map(fmt_round6).unwrap_or_default(),
         // Roots / powers / logs (6-decimal default like mIRC).
         "sqrt" => fmt_round6(num(&a(0)).sqrt()),
         "cbrt" => fmt_round6(num(&a(0)).cbrt()),
@@ -2597,21 +2627,11 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "gettok" => {
             let sep = sep_code(&a(2));
             let text = a(0);
-            // mIRC token identifiers ignore null tokens. Consecutive, leading,
-            // and trailing delimiters therefore do not change token positions.
-            let toks: Vec<&str> = text.split(sep).filter(|tok| !tok.is_empty()).collect();
-            gettok_range(&toks, &a(1), sep)
+            gettok_range(&split_toks(&text, sep), &a(1), sep)
         }
         "numtok" => {
-            let sep = a(1)
-                .parse::<u32>()
-                .ok()
-                .and_then(char::from_u32)
-                .unwrap_or(' ');
-            a(0).split(sep)
-                .filter(|tok| !tok.is_empty())
-                .count()
-                .to_string()
+            let sep = sep_code(&a(1));
+            split_toks(&a(0), sep).len().to_string()
         }
         "hget" => {
             // $hget(table) -> table name if it exists; $hget(table, item) -> value;
@@ -2748,11 +2768,11 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             // $instok(text, token, N, C) -> insert token at the Nth position.
             // Negative N counts from the end (-1 = before the last element).
             let sep = sep_code(&a(3));
-            let mut toks: Vec<String> = if a(0).is_empty() {
-                Vec::new()
-            } else {
-                a(0).split(sep).map(String::from).collect()
-            };
+            let list = a(0);
+            let mut toks: Vec<String> = split_toks(&list, sep)
+                .into_iter()
+                .map(String::from)
+                .collect();
             let len = toks.len() as i64;
             let raw: i64 = a(2).trim().parse().unwrap_or(1);
             let idx = (if raw < 0 {
@@ -2762,7 +2782,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             } as usize)
                 .min(toks.len());
             toks.insert(idx, a(1));
-            toks.join(&sep.to_string())
+            join_toks(&toks, sep)
         }
         "reptok" => {
             // $reptok(text, token, new, N, C) -> replace the Nth matching token
@@ -2772,8 +2792,9 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             let new = a(2);
             let n: usize = a(3).parse().unwrap_or(1);
             let mut count = 0usize;
-            let out: Vec<String> = a(0)
-                .split(sep)
+            let list = a(0);
+            let out: Vec<String> = split_toks(&list, sep)
+                .into_iter()
                 .map(|t| {
                     if t.eq_ignore_ascii_case(&token) {
                         count += 1;
@@ -2784,7 +2805,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                     t.to_string()
                 })
                 .collect();
-            out.join(&sep.to_string())
+            join_toks(&out, sep)
         }
         "lastpos" => {
             // $lastpos(text, string, N) -> position of the Nth-from-last
@@ -2873,7 +2894,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "istokcs" => {
             let sep = sep_code(&a(2));
             let needle = a(1);
-            bool_str(!needle.is_empty() && a(0).split(sep).any(|t| t == needle.as_str()))
+            bool_str(!needle.is_empty() && split_toks(&a(0), sep).contains(&needle.as_str()))
         }
         "findtokcs" => {
             let sep = sep_code(&a(3));
@@ -2881,8 +2902,8 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             let n = a(2).parse::<usize>().unwrap_or(1);
             let mut seen = 0;
             let mut result = 0;
-            for (i, t) in a(0).split(sep).enumerate() {
-                if t == needle.as_str() {
+            for (i, t) in split_toks(&a(0), sep).iter().enumerate() {
+                if *t == needle.as_str() {
                     seen += 1;
                     if seen == n {
                         result = i + 1;
@@ -2899,12 +2920,12 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "addtokcs" => {
             let sep = sep_code(&a(2));
             let (list, tok) = (a(0), a(1));
-            if tok.is_empty() || list.split(sep).any(|t| t == tok.as_str()) {
-                list
-            } else if list.is_empty() {
-                tok
+            let mut toks = split_toks(&list, sep);
+            if tok.is_empty() || toks.contains(&tok.as_str()) {
+                join_toks(&toks, sep)
             } else {
-                format!("{list}{sep}{tok}")
+                toks.push(&tok);
+                join_toks(&toks, sep)
             }
         }
         "remtokcs" => {
@@ -2912,7 +2933,8 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             let n = a(2).parse::<usize>().unwrap_or(1);
             let (list, token) = (a(0), a(1));
             let mut seen = 0;
-            list.split(sep)
+            let kept: Vec<&str> = split_toks(&list, sep)
+                .into_iter()
                 .filter(|t| {
                     if *t == token.as_str() {
                         seen += 1;
@@ -2921,15 +2943,17 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                         true
                     }
                 })
-                .collect::<Vec<_>>()
-                .join(&sep.to_string())
+                .collect();
+            join_toks(&kept, sep)
         }
         "reptokcs" => {
             let sep = sep_code(&a(4));
             let (token, new) = (a(1), a(2));
             let n: usize = a(3).parse().unwrap_or(1);
             let mut count = 0usize;
-            a(0).split(sep)
+            let list = a(0);
+            let out: Vec<String> = split_toks(&list, sep)
+                .into_iter()
                 .map(|t| {
                     if t == token.as_str() {
                         count += 1;
@@ -2939,15 +2963,15 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                     }
                     t.to_string()
                 })
-                .collect::<Vec<_>>()
-                .join(&sep.to_string())
+                .collect();
+            join_toks(&out, sep)
         }
         "matchtokcs" => {
             let sep = sep_code(&a(3));
             let n = a(2).parse::<usize>().unwrap_or(1);
             let (list, needle) = (a(0), a(1));
-            let m: Vec<&str> = list
-                .split(sep)
+            let m: Vec<&str> = split_toks(&list, sep)
+                .into_iter()
                 .filter(|t| t.contains(needle.as_str()))
                 .collect();
             if n == 0 {
@@ -2960,8 +2984,8 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             let sep = sep_code(&a(3));
             let n = a(2).parse::<usize>().unwrap_or(1);
             let (list, wild) = (a(0), a(1));
-            let m: Vec<&str> = list
-                .split(sep)
+            let m: Vec<&str> = split_toks(&list, sep)
+                .into_iter()
                 .filter(|t| wildcard_match_cs(&wild, t))
                 .collect();
             if n == 0 {
@@ -2973,7 +2997,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "reverse" => a(0).chars().rev().collect(),
         "abs" => a(0)
             .parse::<f64>()
-            .map(|n| fmt_num(n.abs()))
+            .map(|n| fmt_round6(n.abs()))
             .unwrap_or_default(),
         "int" => a(0)
             .parse::<f64>()
@@ -2992,32 +3016,36 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "addtok" => {
             // $addtok(list, token, sepcode)
             let sep = sep_code(&a(2));
-            let exists = a(0).split(sep).any(|t| t.eq_ignore_ascii_case(&a(1)));
-            if exists || a(1).is_empty() {
-                a(0)
-            } else if a(0).is_empty() {
-                a(1)
+            let list = a(0);
+            let mut toks = split_toks(&list, sep);
+            let token = a(1);
+            if token.is_empty() || toks.iter().any(|t| t.eq_ignore_ascii_case(&token)) {
+                join_toks(&toks, sep)
             } else {
-                format!("{}{}{}", a(0), sep, a(1))
+                toks.push(&token);
+                join_toks(&toks, sep)
             }
         }
         "istok" => {
             // $istok(list, token, sepcode) -> $true/$false
             let sep = sep_code(&a(2));
-            if !a(1).is_empty() && a(0).split(sep).any(|t| t.eq_ignore_ascii_case(&a(1))) {
-                "$true".to_string()
-            } else {
-                "$false".to_string()
-            }
+            let token = a(1);
+            bool_str(
+                !token.is_empty()
+                    && split_toks(&a(0), sep)
+                        .iter()
+                        .any(|t| t.eq_ignore_ascii_case(&token)),
+            )
         }
         "findtok" => {
             // $findtok(list, token, N, sepcode) -> position of the Nth match (else 0)
             let sep = sep_code(&a(3));
             let n = a(2).parse::<usize>().unwrap_or(1);
+            let needle = a(1);
             let mut seen = 0;
             let mut result = 0;
-            for (i, t) in a(0).split(sep).enumerate() {
-                if t.eq_ignore_ascii_case(&a(1)) {
+            for (i, t) in split_toks(&a(0), sep).iter().enumerate() {
+                if t.eq_ignore_ascii_case(&needle) {
                     seen += 1;
                     if seen == n {
                         result = i + 1;
@@ -3035,17 +3063,18 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             // $deltok(list, N[-N2], sepcode) -> list with token(s) removed
             let sep = sep_code(&a(2));
             let list = a(0);
-            let toks: Vec<&str> = list.split(sep).collect();
+            let toks = split_toks(&list, sep);
             let (lo, hi) = parse_range(&a(1), toks.len());
-            toks.iter()
+            let kept: Vec<&str> = toks
+                .iter()
                 .enumerate()
                 .filter(|(i, _)| {
                     let p = i + 1;
                     p < lo || p > hi
                 })
                 .map(|(_, t)| *t)
-                .collect::<Vec<_>>()
-                .join(&sep.to_string())
+                .collect();
+            join_toks(&kept, sep)
         }
         "remtok" => {
             // $remtok(list, token, N, sepcode) -> remove the Nth occurrence of token
@@ -3053,7 +3082,8 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             let n = a(2).parse::<usize>().unwrap_or(1);
             let (list, token) = (a(0), a(1));
             let mut seen = 0;
-            list.split(sep)
+            let kept: Vec<&str> = split_toks(&list, sep)
+                .into_iter()
                 .filter(|t| {
                     if t.eq_ignore_ascii_case(&token) {
                         seen += 1;
@@ -3062,21 +3092,25 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                         true
                     }
                 })
-                .collect::<Vec<_>>()
-                .join(&sep.to_string())
+                .collect();
+            join_toks(&kept, sep)
         }
         "puttok" => {
             // $puttok(list, token, N, sepcode) -> replace the Nth token.
             // Negative N counts from the end (-1 = last token).
             let sep = sep_code(&a(3));
-            let mut toks: Vec<String> = a(0).split(sep).map(String::from).collect();
+            let list = a(0);
+            let mut toks: Vec<String> = split_toks(&list, sep)
+                .into_iter()
+                .map(String::from)
+                .collect();
             let len = toks.len() as i64;
             let raw: i64 = a(2).trim().parse().unwrap_or(0);
             let n = if raw < 0 { len + raw + 1 } else { raw };
             if n >= 1 && n <= len {
                 toks[(n - 1) as usize] = a(1);
             }
-            toks.join(&sep.to_string())
+            join_toks(&toks, sep)
         }
         "sorttok" | "sorttokcs" => {
             // $sorttok(list, sepcode, [options]) -> sorted.
@@ -3085,7 +3119,11 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             let sep = sep_code(&a(1));
             let opts = a(2).to_lowercase();
             let cs = name.eq_ignore_ascii_case("sorttokcs");
-            let mut toks: Vec<String> = a(0).split(sep).map(String::from).collect();
+            let list = a(0);
+            let mut toks: Vec<String> = split_toks(&list, sep)
+                .into_iter()
+                .map(String::from)
+                .collect();
             if opts.contains('c') {
                 // Channel prefix order ~ & @ % + then none; stable within a rank.
                 let rank = |t: &str| match t.chars().next() {
@@ -3105,6 +3143,18 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                     );
                     x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal)
                 });
+            } else if opts.contains('a') {
+                // 'a' = alpha-then-numerics: wholly-numeric tokens sort
+                // numerically *after* the non-numeric ones.
+                toks.sort_by(|x, y| {
+                    match (x.parse::<f64>(), y.parse::<f64>()) {
+                        (Ok(x), Ok(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
+                        (Ok(_), Err(_)) => std::cmp::Ordering::Greater,
+                        (Err(_), Ok(_)) => std::cmp::Ordering::Less,
+                        (Err(_), Err(_)) if cs => x.cmp(y),
+                        (Err(_), Err(_)) => x.to_lowercase().cmp(&y.to_lowercase()),
+                    }
+                });
             } else if cs {
                 toks.sort();
             } else {
@@ -3113,15 +3163,15 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             if opts.contains('r') {
                 toks.reverse();
             }
-            toks.join(&sep.to_string())
+            join_toks(&toks, sep)
         }
         "wildtok" => {
             // $wildtok(list, wildcard, N, sepcode) -> Nth matching token (N=0 -> count)
             let sep = sep_code(&a(3));
             let n = a(2).parse::<usize>().unwrap_or(1);
             let (list, wild) = (a(0), a(1));
-            let m: Vec<&str> = list
-                .split(sep)
+            let m: Vec<&str> = split_toks(&list, sep)
+                .into_iter()
                 .filter(|t| wildcard_match(&wild, t))
                 .collect();
             if n == 0 {
@@ -3136,8 +3186,8 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             let n = a(2).parse::<usize>().unwrap_or(1);
             let needle = a(1).to_lowercase();
             let list = a(0);
-            let m: Vec<&str> = list
-                .split(sep)
+            let m: Vec<&str> = split_toks(&list, sep)
+                .into_iter()
                 .filter(|t| t.to_lowercase().contains(&needle))
                 .collect();
             if n == 0 {
@@ -3218,6 +3268,10 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 (String::new(), a(0), a(1))
             };
             clear_regex_results(rt, &result_name);
+            // A bad pattern (or a failed match) is an *error*, not "no match":
+            // mIRC reports it as a negative result, which is why scripts are
+            // told to test `$regex(...) != 0` rather than plain truthiness.
+            // $regerrstr carries the detail.
             match mirc_regex(&pat) {
                 Ok(spec) => {
                     let matched_text = spec.prepare_text(&text);
@@ -3229,13 +3283,13 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                         Err(e) => {
                             clear_regex_results(rt, &result_name);
                             rt.vars.insert(REGERR_KEY.to_string(), e);
-                            "0".to_string()
+                            "-1".to_string()
                         }
                     }
                 }
                 Err(e) => {
                     rt.vars.insert(REGERR_KEY.to_string(), e);
-                    "0".to_string()
+                    "-1".to_string()
                 }
             }
         }
@@ -3892,17 +3946,18 @@ pub(super) fn mask_address(addr: &str, kind: u32) -> String {
         Some((_, tail)) => format!("*.{tail}"),
         None => "*".to_string(),
     };
+    // mIRC's mask types are 0-based; type 2 (`*!*@host`) is the common default.
     match kind {
-        1 => format!("*!{user}@{host}"),
-        2 => format!("*!{star_user}@{host}"),
-        3 => format!("*!*@{host}"),
-        4 => format!("*!{star_user}@{dot_host}"),
-        5 => format!("*!*@{dot_host}"),
-        6 => format!("{nick}!{user}@{host}"),
-        7 => format!("{nick}!{star_user}@{host}"),
-        8 => format!("{nick}!*@{host}"),
-        9 => format!("{nick}!{star_user}@{dot_host}"),
-        10 => format!("{nick}!*@{dot_host}"),
+        0 => format!("*!{user}@{host}"),
+        1 => format!("*!{star_user}@{host}"),
+        2 => format!("*!*@{host}"),
+        3 => format!("*!{star_user}@{dot_host}"),
+        4 => format!("*!*@{dot_host}"),
+        5 => format!("{nick}!{user}@{host}"),
+        6 => format!("{nick}!{star_user}@{host}"),
+        7 => format!("{nick}!*@{host}"),
+        8 => format!("{nick}!{star_user}@{dot_host}"),
+        9 => format!("{nick}!*@{dot_host}"),
         _ => format!("*!*@{host}"),
     }
 }
@@ -4503,6 +4558,21 @@ fn sep_code(s: &str) -> char {
         .unwrap_or(' ')
 }
 
+/// Splits a token list on `sep`, dropping null tokens. Every mIRC token
+/// identifier ignores consecutive, leading, and trailing delimiters, so they
+/// never shift token positions and never survive into the result.
+fn split_toks(list: &str, sep: char) -> Vec<&str> {
+    list.split(sep).filter(|tok| !tok.is_empty()).collect()
+}
+
+/// Rejoins tokens with `sep` — the counterpart to [`split_toks`].
+fn join_toks<S: AsRef<str>>(toks: &[S], sep: char) -> String {
+    toks.iter()
+        .map(AsRef::as_ref)
+        .collect::<Vec<_>>()
+        .join(&sep.to_string())
+}
+
 fn bool_str(b: bool) -> String {
     if b { "$true" } else { "$false" }.to_string()
 }
@@ -4623,10 +4693,15 @@ fn gettok_range(toks: &[&str], spec: &str, sep: char) -> String {
             };
             (l, r)
         }
-        None => {
-            let n = norm(spec.parse().unwrap_or(0));
-            (n, n)
-        }
+        None => match spec.parse::<i64>() {
+            // `$gettok(list,0,C)` returns the token count, like `$numtok`.
+            Ok(0) => return len.to_string(),
+            Ok(n) => {
+                let n = norm(n);
+                (n, n)
+            }
+            Err(_) => return String::new(),
+        },
     };
     if lo < 1 || lo > len {
         return String::new();
@@ -4688,22 +4763,63 @@ fn port_is_free(port: &str, bind_ip: &str) -> bool {
 
 /// `$base(N, frombase, tobase, [zeropad])` — integer base conversion, 2..=36.
 /// The fractional part (if any) is dropped; output digits A–Z are uppercase.
-fn base_convert(n: &str, inb: u32, outb: u32, zeropad: usize) -> String {
+fn base_convert(n: &str, inb: u32, outb: u32, zeropad: usize, precision: usize) -> String {
     if !(2..=36).contains(&inb) || !(2..=36).contains(&outb) {
         return String::new();
     }
-    let intpart = n.trim().split('.').next().unwrap_or("").trim();
+    let trimmed = n.trim();
+    let (intpart, fracpart) = match trimmed.split_once('.') {
+        Some((i, f)) => (i.trim(), f.trim()),
+        None => (trimmed, ""),
+    };
     let Ok(val) = i64::from_str_radix(intpart, inb) else {
         return String::new();
     };
     let mut out = to_radix(val.unsigned_abs(), outb);
+    // Zero-padding sets a minimum width for the non-fraction digits only.
     while out.len() < zeropad {
         out.insert(0, '0');
     }
     if val < 0 {
         out.insert(0, '-');
     }
+    // Convert the fraction by repeated multiplication, truncating (not
+    // rounding) at `precision` digits.
+    if !fracpart.is_empty() && precision > 0 {
+        if let Some(mut frac) = fraction_value(fracpart, inb) {
+            const DIGITS: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            let mut digits = String::new();
+            for _ in 0..precision {
+                if frac == 0.0 {
+                    break;
+                }
+                frac *= f64::from(outb);
+                let d = frac.trunc();
+                digits.push(DIGITS[(d as usize).min(35)] as char);
+                frac -= d;
+            }
+            let digits = digits.trim_end_matches('0');
+            if !digits.is_empty() {
+                out.push('.');
+                out.push_str(digits);
+            }
+        }
+    }
     out
+}
+
+/// Reads `digits` as the fractional part of a base-`base` number, i.e. the sum
+/// of each digit divided by successive powers of the base. `None` if a digit
+/// isn't valid for the base.
+fn fraction_value(digits: &str, base: u32) -> Option<f64> {
+    let mut scale = 1.0_f64;
+    let mut value = 0.0_f64;
+    for c in digits.chars() {
+        let d = c.to_digit(base)?;
+        scale /= f64::from(base);
+        value += f64::from(d) * scale;
+    }
+    Some(value)
 }
 
 fn to_radix(mut v: u64, base: u32) -> String {
@@ -4722,21 +4838,41 @@ fn to_radix(mut v: u64, base: u32) -> String {
 }
 
 /// Parses a token index spec (`N`, `N-M`, or `N-`) into an inclusive 1-based
-/// range, clamped against `len`.
+/// range, clamped against `len`. Either end may be negative, counting back from
+/// the last token (`-1` is the last), so `-1--2` is the last two tokens. The
+/// separating `-` is the first one after position 0 — a leading `-` is a sign.
 fn parse_range(spec: &str, len: usize) -> (usize, usize) {
     let spec = spec.trim();
-    if let Some((lo, hi)) = spec.split_once('-') {
-        let lo = lo.trim().parse().unwrap_or(1);
-        let hi = if hi.trim().is_empty() {
-            len
-        } else {
-            hi.trim().parse().unwrap_or(lo)
-        };
-        (lo, hi)
-    } else {
-        let n = spec.parse().unwrap_or(0);
-        (n, n)
-    }
+    let ilen = len as i64;
+    let norm = |n: i64| if n < 0 { ilen + n + 1 } else { n };
+    let range_dash = spec
+        .char_indices()
+        .find(|&(i, c)| c == '-' && i > 0)
+        .map(|(i, _)| i);
+    let (lo, hi) = match range_dash {
+        Some(p) => {
+            let left = spec[..p].trim();
+            let right = spec[p + 1..].trim();
+            let lo = if left.is_empty() {
+                1
+            } else {
+                norm(left.parse().unwrap_or(1))
+            };
+            let hi = if right.is_empty() {
+                ilen
+            } else {
+                norm(right.parse().unwrap_or(lo))
+            };
+            (lo, hi)
+        }
+        None => {
+            let n = norm(spec.parse().unwrap_or(0));
+            (n, n)
+        }
+    };
+    // A range given back-to-front (`-1--2`) covers the same tokens either way.
+    let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
+    (lo.max(1) as usize, hi.clamp(0, ilen) as usize)
 }
 
 /// Removes mIRC formatting control codes (bold, colour, underline, …).
@@ -5582,6 +5718,129 @@ fn powmod(b: i64, e: i64, m: i64) -> String {
 }
 
 /// Formats a unixtime `ts` in local time using a mIRC format string ($asctime).
+/// Expands a 2-digit year the way mIRC does: 70-99 are 1900s, 00-69 are 2000s.
+/// Anything else is already a full year.
+fn expand_year(y: i32) -> i32 {
+    match y {
+        0..=69 => 2000 + y,
+        70..=99 => 1900 + y,
+        _ => y,
+    }
+}
+
+/// `$ctime(text)` — parses a date/time string to Unix time, covering the forms
+/// mIRC accepts: an optional leading weekday; a date written `yyyy-m-d`,
+/// `d/m/y` (never `m/d/y`), or a month name with a day and year in either
+/// order; and an optional `h:m[:s]` with optional am/pm. A date with no time
+/// takes the current time of day. Returns `None` if nothing parses.
+fn parse_ctime(text: &str) -> Option<i64> {
+    use chrono::{Datelike, NaiveDate, TimeZone, Timelike};
+    const MONTHS: [&str; 12] = [
+        "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+    ];
+    const WEEKDAYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+
+    let lower = text.trim().to_ascii_lowercase();
+    let mut toks: Vec<String> = lower
+        .split([' ', ',', '\t'])
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+        .collect();
+    if toks.is_empty() {
+        return None;
+    }
+    // A leading weekday name is decoration.
+    if toks[0].len() >= 3 && WEEKDAYS.iter().any(|d| toks[0].starts_with(d)) {
+        toks.remove(0);
+    }
+
+    // Pull out the time, along with an attached or detached am/pm marker.
+    let mut clock = None;
+    if let Some(i) = toks.iter().position(|t| t.contains(':')) {
+        let tok = toks.remove(i);
+        let (tok, mut pm) = match tok.strip_suffix("pm") {
+            Some(rest) => (rest.to_string(), Some(true)),
+            None => match tok.strip_suffix("am") {
+                Some(rest) => (rest.to_string(), Some(false)),
+                None => (tok, None),
+            },
+        };
+        if pm.is_none() {
+            if let Some(j) = toks.iter().position(|t| t == "am" || t == "pm") {
+                pm = Some(toks.remove(j) == "pm");
+            }
+        }
+        let mut parts = tok.split(':');
+        let mut h: u32 = parts.next()?.trim().parse().ok()?;
+        let m: u32 = parts.next().unwrap_or("0").trim().parse().unwrap_or(0);
+        let s: u32 = parts.next().unwrap_or("0").trim().parse().unwrap_or(0);
+        match pm {
+            Some(true) if h < 12 => h += 12,
+            Some(false) if h == 12 => h = 0,
+            _ => {}
+        }
+        clock = Some((h, m, s));
+    }
+
+    let (year, month, day) = if let Some(tok) = toks
+        .iter()
+        .find(|t| (t.contains('-') || t.contains('/')) && t.chars().any(|c| c.is_ascii_digit()))
+    {
+        let sep = if tok.contains('-') { '-' } else { '/' };
+        let parts: Vec<&str> = tok.split(sep).collect();
+        if parts.len() != 3 {
+            return None;
+        }
+        let nums: Vec<i32> = parts
+            .iter()
+            .map(|p| p.trim().parse::<i32>().ok())
+            .collect::<Option<_>>()?;
+        if parts[0].trim().len() == 4 {
+            (nums[0], nums[1], nums[2])
+        } else {
+            // mIRC always reads an n/n/n string as day/month/year.
+            (expand_year(nums[2]), nums[1], nums[0])
+        }
+    } else {
+        // A month name plus a day and (optionally) a year, in either order.
+        let mut month = None;
+        let mut nums: Vec<i32> = Vec::new();
+        for t in &toks {
+            if month.is_none() {
+                if let Some(i) = MONTHS.iter().position(|m| t.starts_with(m)) {
+                    month = Some(i as i32 + 1);
+                    continue;
+                }
+            }
+            // Tolerate an ordinal suffix: 1st, 2nd, 3rd, 4th.
+            let digits: String = t.chars().take_while(char::is_ascii_digit).collect();
+            if let Ok(n) = digits.parse::<i32>() {
+                nums.push(n);
+            }
+        }
+        let month = month?;
+        let (day, year) = match nums.len() {
+            0 => return None,
+            1 => (nums[0], chrono::Local::now().year()),
+            // Whichever value can't be a day-of-month is the year.
+            _ if nums[0] > 31 => (nums[1], nums[0]),
+            _ => (nums[0], expand_year(nums[1])),
+        };
+        (year, month, day)
+    };
+
+    let date = NaiveDate::from_ymd_opt(year, u32::try_from(month).ok()?, u32::try_from(day).ok()?)?;
+    let (h, m, s) = clock.unwrap_or_else(|| {
+        let now = chrono::Local::now();
+        (now.hour(), now.minute(), now.second())
+    });
+    let naive = date.and_hms_opt(h, m, s)?;
+    chrono::Local
+        .from_local_datetime(&naive)
+        .single()
+        .map(|dt| dt.timestamp())
+}
+
 fn asctime(ts: i64, mirc_fmt: &str) -> String {
     use chrono::TimeZone;
     match chrono::Local.timestamp_opt(ts, 0).single() {
@@ -6389,11 +6648,17 @@ impl CalcParser {
     }
 
     fn term(&mut self) -> Option<f64> {
-        let mut v = self.factor()?;
+        let mut v = self.power()?;
         while let Some(op) = self.peek() {
-            if op == '*' || op == '/' || op == '%' {
+            // `//` (floor division) shares this precedence level with `* / %`,
+            // and must be matched before plain `/`.
+            if op == '/' && self.toks.get(self.pos + 1) == Some(&'/') {
+                self.pos += 2;
+                let rhs = self.power()?;
+                v = (v / rhs).floor();
+            } else if op == '*' || op == '/' || op == '%' {
                 self.pos += 1;
-                let rhs = self.factor()?;
+                let rhs = self.power()?;
                 v = match op {
                     '*' => v * rhs,
                     '/' => v / rhs,
@@ -6402,6 +6667,18 @@ impl CalcParser {
             } else {
                 break;
             }
+        }
+        Some(v)
+    }
+
+    /// `^` binds tighter than `* / // %`, and mIRC evaluates it left-to-right
+    /// rather than right-associatively: `4 ^ .5 ^ 3` is `(4 ^ .5) ^ 3` = 8.
+    fn power(&mut self) -> Option<f64> {
+        let mut v = self.factor()?;
+        while self.peek() == Some('^') {
+            self.pos += 1;
+            let rhs = self.factor()?;
+            v = v.powf(rhs);
         }
         Some(v)
     }
@@ -6724,8 +7001,9 @@ mod tests {
         assert_eq!(id("regex", &["Hello", "/hello/i"]), "1");
         assert_eq!(id("regex", &["Hello", "hello"]), "0");
         assert_eq!(id("regsub", &["Hello World", "/o/g", "0"]), "Hell0 W0rld");
-        // $regerrstr — set on a bad pattern, cleared on a good one.
-        assert_eq!(id("regex", &["x", "("]), "0");
+        // $regerrstr — set on a bad pattern, cleared on a good one. A bad
+        // pattern is a negative result, not "no match".
+        assert_eq!(id("regex", &["x", "("]), "-1");
         assert!(!id("regerrstr", &[]).is_empty());
         assert_eq!(id("regex", &["x", "x"]), "1");
         assert_eq!(id("regerrstr", &[]), "");
@@ -7251,6 +7529,30 @@ mod tests {
         assert_eq!(e("regml", &["1"]), "abc");
         assert_eq!(e("regml", &["2"]), "123");
         assert_eq!(e("regsub", &["hello world", "o", "0"]), "hell0 world");
+
+        // Every token identifier ignores null tokens, not just $gettok/$numtok:
+        // consecutive/leading/trailing delimiters never shift positions and
+        // never survive into the output.
+        let list = "..a..b...c.";
+        assert_eq!(e("gettok", &[list, "0", "46"]), "3");
+        assert_eq!(e("findtok", &[list, "b", "1", "46"]), "2");
+        assert_eq!(e("findtokcs", &[list, "c", "1", "46"]), "3");
+        assert_eq!(e("istok", &[list, "c", "46"]), "$true");
+        assert_eq!(e("deltok", &[list, "1", "46"]), "b.c");
+        assert_eq!(e("deltok", &[list, "-1", "46"]), "a.b");
+        assert_eq!(e("puttok", &[list, "X", "2", "46"]), "a.X.c");
+        assert_eq!(e("remtok", &[list, "b", "1", "46"]), "a.c");
+        assert_eq!(e("reptok", &[list, "b", "X", "1", "46"]), "a.X.c");
+        assert_eq!(e("addtok", &[list, "d", "46"]), "a.b.c.d");
+        assert_eq!(e("addtokcs", &[list, "C", "46"]), "a.b.c.C");
+        assert_eq!(e("instok", &[list, "X", "2", "46"]), "a.X.b.c");
+        assert_eq!(e("sorttok", &["..c..a...b.", "46"]), "a.b.c");
+        assert_eq!(e("matchtok", &[list, "b", "0", "46"]), "1");
+        assert_eq!(e("wildtok", &[list, "?", "0", "46"]), "3");
+        // $deltok with a negative range deletes from the end.
+        assert_eq!(e("deltok", &["a b c d", "-1--2", "32"]), "a b");
+        // $sorttok 'a' — numeric tokens sort numerically, after the rest.
+        assert_eq!(e("sorttok", &["10 b 2 a", "32", "a"]), "a b 2 10");
     }
 
     #[test]
@@ -7344,17 +7646,78 @@ mod tests {
 
     #[test]
     fn base_and_number_identifiers() {
-        assert_eq!(base_convert("255", 10, 16, 0), "FF");
-        assert_eq!(base_convert("5", 10, 16, 2), "05");
-        assert_eq!(base_convert("FF", 16, 10, 0), "255");
-        assert_eq!(base_convert("1010", 2, 10, 0), "10");
-        assert_eq!(base_convert("-15", 10, 16, 0), "-F");
+        assert_eq!(base_convert("255", 10, 16, 0, 6), "FF");
+        assert_eq!(base_convert("5", 10, 16, 2, 6), "05");
+        assert_eq!(base_convert("FF", 16, 10, 0, 6), "255");
+        assert_eq!(base_convert("1010", 2, 10, 0, 6), "10");
+        assert_eq!(base_convert("-15", 10, 16, 0, 6), "-F");
+        // Fractions convert too; `precision` truncates them (zero-pad covers
+        // only the integer digits).
+        assert_eq!(base_convert("123.456", 10, 10, 6, 2), "000123.45");
+        assert_eq!(base_convert("1.5", 10, 2, 0, 6), "1.1");
+        assert_eq!(base_convert("1.5", 10, 2, 0, 0), "1");
         assert_eq!(format_duration(0), "0secs");
         assert_eq!(format_duration(1), "1sec");
         assert_eq!(format_duration(90), "1min30secs");
         assert_eq!(format_duration(90061), "1day1hr1min1sec");
         assert_eq!(format_duration_without_seconds(30), "0mins");
         assert_eq!(format_duration_without_seconds(3691), "1hr1min");
+    }
+
+    #[test]
+    fn calc_operator_set_and_precedence_match_mirc() {
+        assert_eq!(calc("2 + 3 * 4"), Some(14.0));
+        assert_eq!(calc("(2 + 3) * 4"), Some(20.0));
+        // `^` binds tighter than `*`/`/` and evaluates left-to-right, so
+        // 4^.5^3 is (4^.5)^3 = 8, not 4^(.5^3).
+        assert_eq!(calc("2 ^ 3"), Some(8.0));
+        assert_eq!(calc("4 ^ .5 ^ 3"), Some(8.0));
+        assert_eq!(calc("2 * 3 ^ 2"), Some(18.0));
+        assert_eq!(calc("2 ^ -1"), Some(0.5));
+        // `//` is floor division and shares precedence with `*` `/` `%`.
+        assert_eq!(calc("7 // 2"), Some(3.0));
+        assert_eq!(calc("-7 // 2"), Some(-4.0));
+        assert_eq!(calc("10 % 3"), Some(1.0));
+        // Results round to 6 decimal places, trailing zeros trimmed.
+        assert_eq!(calc("1 / 3").map(fmt_round6).as_deref(), Some("0.333333"));
+        assert_eq!(calc("2 / 3").map(fmt_round6).as_deref(), Some("0.666667"));
+        assert_eq!(calc("1 / 2").map(fmt_round6).as_deref(), Some("0.5"));
+    }
+
+    #[test]
+    fn mask_types_follow_the_mirc_table() {
+        let addr = "nick!~user@a.host.com";
+        assert_eq!(mask_address(addr, 0), "*!~user@a.host.com");
+        assert_eq!(mask_address(addr, 1), "*!*user@a.host.com");
+        assert_eq!(mask_address(addr, 2), "*!*@a.host.com");
+        assert_eq!(mask_address(addr, 3), "*!*user@*.host.com");
+        assert_eq!(mask_address(addr, 4), "*!*@*.host.com");
+        assert_eq!(mask_address(addr, 5), "nick!~user@a.host.com");
+        assert_eq!(mask_address(addr, 6), "nick!*user@a.host.com");
+        assert_eq!(mask_address(addr, 7), "nick!*@a.host.com");
+        assert_eq!(mask_address(addr, 8), "nick!*user@*.host.com");
+        assert_eq!(mask_address(addr, 9), "nick!*@*.host.com");
+    }
+
+    #[test]
+    fn ctime_parses_the_date_formats_mirc_accepts() {
+        use chrono::TimeZone;
+        // Compare against the local wall-clock instant rather than a fixed
+        // offset — the UTC offset in 1970 need not be today's.
+        let at = |y, m, d, hh, mi, ss| {
+            chrono::Local
+                .with_ymd_and_hms(y, m, d, hh, mi, ss)
+                .single()
+                .map(|dt| dt.timestamp())
+        };
+        // An n/n/n date is always day/month/year, never month/day/year.
+        assert_eq!(parse_ctime("2/1/70 0:0"), at(1970, 1, 2, 0, 0, 0));
+        assert_eq!(parse_ctime("21/4/72 1:30:37"), at(1972, 4, 21, 1, 30, 37));
+        // Month names, ordinals, a leading weekday, ISO order, and am/pm.
+        assert_eq!(parse_ctime("January 1 1970 00:00:00"), at(1970, 1, 1, 0, 0, 0));
+        assert_eq!(parse_ctime("3rd August 1987 3:46pm"), at(1987, 8, 3, 15, 46, 0));
+        assert_eq!(parse_ctime("Wed 1998-3-27 21:16"), at(1998, 3, 27, 21, 16, 0));
+        assert_eq!(parse_ctime("not a date"), None);
     }
 
     #[test]
@@ -7365,6 +7728,21 @@ mod tests {
         assert_eq!(gettok_range(&toks, "2-", '.'), "b.c.d.e");
         assert_eq!(gettok_range(&toks, "-1", '.'), "e");
         assert_eq!(gettok_range(&toks, "9", '.'), "");
+        // N=0 is the token count, like $numtok; junk is still $null.
+        assert_eq!(gettok_range(&toks, "0", '.'), "5");
+        assert_eq!(gettok_range(&toks, "x", '.'), "");
+    }
+
+    #[test]
+    fn parse_range_handles_negative_and_reversed_bounds() {
+        // Plain and open-ended ranges.
+        assert_eq!(parse_range("1", 3), (1, 1));
+        assert_eq!(parse_range("2-3", 3), (2, 3));
+        assert_eq!(parse_range("2-", 3), (2, 3));
+        // A leading `-` is a sign, not a range separator: -1 is the last token.
+        assert_eq!(parse_range("-1", 3), (3, 3));
+        // `-1--2` is the last two tokens, given back-to-front.
+        assert_eq!(parse_range("-1--2", 3), (2, 3));
     }
 
     #[test]
@@ -7414,6 +7792,22 @@ mod tests {
         assert_eq!(e("base", &["255", "10", "16"]), "FF");
         assert_eq!(e("round", &["3.14159", "2"]), "3.14");
         assert_eq!(e("round", &["3.6", "0"]), "4");
+        // An omitted D leaves the number alone; a fraction is not zero-padded.
+        assert_eq!(e("round", &["3.14159"]), "3.14159");
+        assert_eq!(e("round", &["1.5", "3"]), "1.5");
+        // $calc and $abs round to 6 decimals like mIRC.
+        assert_eq!(e("calc", &["1 / 3"]), "0.333333");
+        assert_eq!(e("calc", &["2 ^ 10"]), "1024");
+        assert_eq!(e("calc", &["7 // 2"]), "3");
+        assert_eq!(e("abs", &["-3.14159265358979"]), "3.141593");
+        // $time/$date take $asctime's arguments; bare forms keep their defaults.
+        assert_eq!(e("time", &["0", "HH:nn"]), e("asctime", &["0", "HH:nn"]));
+        assert_eq!(e("date", &["0", "yyyy"]), e("asctime", &["0", "yyyy"]));
+        assert_eq!(e("date", &["86400"]), "02/01/1970");
+        assert_eq!(e("time", &[]).len(), 8);
+        // $asc reports the leading surrogate for astral characters.
+        assert_eq!(e("asc", &["A"]), "65");
+        assert_eq!(e("asc", &["\u{1F51F}"]), "55357");
         assert_eq!(e("duration", &["3661"]), "1hr1min1sec");
         assert_eq!(e("timestampfmt", &[]), "[HH:nn]");
         assert_eq!(e("logstampfmt", &[]), "[HH:nn]");

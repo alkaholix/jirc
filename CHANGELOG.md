@@ -12,6 +12,63 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🎨 26.8.13 — mSL accuracy and interface polish
+
+- Fixed `$mask` and every identifier built on it. The mask type table was
+  offset by one, so each type returned the mask for the type below it. This
+  also corrected `/ban`, which produced `*!*user@host` instead of the intended
+  `*!*@host` for the default type 2, and `$address`.
+- Added `^` (exponent) and `//` (floor division) to `$calc`, which previously
+  returned `$null` for any expression using them. `^` binds tighter than
+  `* / // %` and evaluates left to right, so `$calc(4 ^ .5 ^ 3)` is `8`.
+- `$calc` and `$abs` now round to six decimal places as mIRC does, so
+  `$calc(1/3)` returns `0.333333` rather than full float precision.
+- Recognised `isaop`, `isavoice`, `isignore`, `isprotect`, `isnotify`, and
+  `isquiet`. Previously an unrecognised operator fell through to a truthiness
+  test, so `if (%address isaop)` was always true; these now test against an
+  empty list and return false.
+- `<`, `>`, `<=`, and `>=` fall back to lexicographic comparison when either
+  side is not numeric, so `if (apple < banana)` is true.
+- Applied mIRC's null-token rule to every token identifier rather than only
+  `$gettok` and `$numtok`. Consecutive, leading, and trailing delimiters no
+  longer shift token positions or survive into the result of `$findtok`,
+  `$deltok`, `$puttok`, `$remtok`, `$reptok`, `$addtok`, `$instok`, `$sorttok`,
+  `$matchtok`, `$wildtok`, `$istok`, and their `cs` variants.
+- Fixed `$deltok` with a negative index, which deleted the first token instead
+  of counting back from the last, and added support for reversed ranges such as
+  `-1--2`. `$gettok(list,0,C)` now returns the token count.
+- `$time`, `$date`, and `$ctime` accept their arguments. `$time` and `$date`
+  take `$asctime`'s format string, and `$ctime(text)` parses a date, including
+  `d/m/y`, `yyyy-m-d`, month names, ordinals, weekday prefixes, and am/pm.
+- Fixed `$round` so an omitted decimal count leaves the number unchanged and
+  fractions are no longer padded with trailing zeros. `$base` converts
+  fractions and honours its precision parameter.
+- Added `on MIDIEND`, `on MP3END`, and `on SONGEND`. `/splay` selects the event
+  from the file extension and pairs each sound event with `on SONGEND`.
+- Fixed the parser dropping playback events written in mIRC's documented form.
+  `on *:MP3END:<command>` takes no matchtext or target field; it previously
+  parsed the command as a target and discarded the handler, which also affected
+  `on WAVEEND` and `on PLAYEND`.
+- `$regex` returns a negative result for an invalid pattern instead of `0`, so
+  a bad expression is distinguishable from no match. `$sorttok`'s `a` switch
+  sorts numeric tokens after non-numeric ones. `isnum` no longer accepts `inf`,
+  `NaN`, or exponent forms, and `islower`/`isupper` allow non-alphabetic text.
+  `$asc` reports the leading surrogate for characters above the BMP.
+- Removed exponential backtracking from wildcard matching, which could hang on
+  a pattern such as `*a*a*a*b` against a long non-matching message.
+- Unified the accent colour on a brand ramp derived from the application icon.
+  The light theme and the About mark previously used blues that did not appear
+  in the logo, one of them noticeably darker and duller.
+- Rebuilt the message colour picker. The Apply button no longer paints itself
+  in the selected IRC colours and no longer needs a text shadow to stay
+  readable; a separate swatch previews the choice, and a 16-cell palette grid
+  replaces the two dropdowns, which could not show colours on Windows.
+- Reorganised Settings into a grouped sidebar with search, replacing seven tabs
+  that wrapped onto two rows. Options share one row layout, and the dialog no
+  longer changes height between sections.
+
+---
+
 ## 🔗 26.8.12 — Safe URL previews
 
 - Added URL preview cards beneath channel, query, action, notice, and whisper

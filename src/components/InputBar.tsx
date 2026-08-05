@@ -111,6 +111,7 @@ export function replaceInputSelection(
 export function InputBar({ buffer }: { buffer: Buffer }) {
   const [value, setValue] = useState("");
   const [picker, setPicker] = useState(false);
+  const [colorPicker, setColorPicker] = useState(false);
   const [foreground, setForeground] = useState(DEFAULT_FOREGROUND);
   const [background, setBackground] = useState<number | undefined>();
   const [activeColours, setActiveColours] = useState<{
@@ -361,6 +362,65 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
           </div>
         </>
       )}
+      {colorPicker && (
+        <>
+          <div className="emoji-backdrop" onClick={() => setColorPicker(false)} />
+          {/* A 16-cell grid rather than two <select>s: WebView2 ignores
+              background-color on <option>, so a dropdown could only ever list
+              colour *names*. The grid shows the actual colour everywhere. */}
+          <div className="color-picker" role="dialog" aria-label="Message colours">
+            <div className="color-picker-group">
+              <div className="color-picker-title" id="fg-colours">
+                Text colour
+              </div>
+              <div className="color-grid" role="radiogroup" aria-labelledby="fg-colours">
+                {IRC_COLORS.map((color, index) => (
+                  <button
+                    key={index}
+                    type="button"
+                    role="radio"
+                    aria-checked={foreground === index}
+                    className={`color-cell${foreground === index ? " selected" : ""}`}
+                    style={{ backgroundColor: color }}
+                    title={IRC_COLOR_NAMES[index]}
+                    aria-label={IRC_COLOR_NAMES[index]}
+                    onClick={() => setForeground(index)}
+                  />
+                ))}
+              </div>
+            </div>
+            <div className="color-picker-group">
+              <div className="color-picker-title" id="bg-colours">
+                Background
+              </div>
+              <div className="color-grid with-none" role="radiogroup" aria-labelledby="bg-colours">
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={background === undefined}
+                  className={`color-cell none${background === undefined ? " selected" : ""}`}
+                  title="No background"
+                  aria-label="No background"
+                  onClick={() => setBackground(undefined)}
+                />
+                {IRC_COLORS.map((color, index) => (
+                  <button
+                    key={index}
+                    type="button"
+                    role="radio"
+                    aria-checked={background === index}
+                    className={`color-cell${background === index ? " selected" : ""}`}
+                    style={{ backgroundColor: color }}
+                    title={IRC_COLOR_NAMES[index]}
+                    aria-label={IRC_COLOR_NAMES[index]}
+                    onClick={() => setBackground(index)}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
       <div className="composer-toolbar" role="toolbar" aria-label="Message tools">
         <button
           type="button"
@@ -384,51 +444,55 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
                 <u>U</u>
               </button>
             </div>
-            <label className="composer-color-control">
-              Text colour
-              <select
-                aria-label="Text colour"
-                value={foreground}
-                onChange={(event) => setForeground(Number(event.target.value))}
+            {/* The swatch previews the chosen colours; the button applies them.
+                Keeping those apart is what lets the button keep the theme's own
+                contrast instead of painting itself in an arbitrary IRC colour. */}
+            <button
+              type="button"
+              className={`color-swatch${activeColours ? " active" : ""}`}
+              aria-label={
+                activeColours
+                  ? `Colours active: ${IRC_COLOR_NAMES[activeColours.foreground]} on ${
+                      activeColours.background === undefined
+                        ? "no background"
+                        : IRC_COLOR_NAMES[activeColours.background]
+                    }. Choose colours`
+                  : "Choose text and background colours"
+              }
+              aria-expanded={colorPicker}
+              title={
+                activeColours ? "Colours are active — click to change" : "Choose message colours"
+              }
+              onClick={() => setColorPicker((open) => !open)}
+            >
+              <span
+                className="color-swatch-chip"
+                style={{
+                  color: IRC_COLORS[foreground],
+                  // With no background the message sits on the chat background,
+                  // so preview it there — that is what the reader will see.
+                  backgroundColor:
+                    background === undefined ? "var(--bg)" : IRC_COLORS[background],
+                }}
+                aria-hidden="true"
               >
-                {IRC_COLORS.map((color, index) => (
-                  <option key={index} value={index} style={{ backgroundColor: color }}>
-                    {IRC_COLOR_NAMES[index]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="composer-color-control">
-              Background
-              <select
-                aria-label="Background colour"
-                value={background ?? ""}
-                onChange={(event) =>
-                  setBackground(event.target.value === "" ? undefined : Number(event.target.value))
-                }
-              >
-                <option value="">None</option>
-                {IRC_COLORS.map((color, index) => (
-                  <option key={index} value={index} style={{ backgroundColor: color }}>
-                    {IRC_COLOR_NAMES[index]}
-                  </option>
-                ))}
-              </select>
-            </label>
+                Aa
+              </span>
+              <span className="color-swatch-label">
+                {IRC_COLOR_NAMES[foreground]}
+                {background === undefined ? "" : ` on ${IRC_COLOR_NAMES[background]}`}
+              </span>
+            </button>
             <button
               type="button"
               title="Use these text and background colours until Reset is clicked"
-              className={`input-color-apply${activeColours ? " active" : ""}`}
-              style={{
-                color: IRC_COLORS[foreground],
-                backgroundColor: background === undefined ? undefined : IRC_COLORS[background],
-              }}
+              className="input-color-apply"
               onClick={() => {
                 setActiveColours({ foreground, background });
                 inputRef.current?.focus();
               }}
             >
-              {activeColours ? "Colours active" : "Apply colours"}
+              Apply
             </button>
             <button
               type="button"
@@ -437,6 +501,7 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
                 setForeground(DEFAULT_FOREGROUND);
                 setBackground(undefined);
                 setActiveColours(null);
+                setColorPicker(false);
                 inputRef.current?.focus();
               }}
             >

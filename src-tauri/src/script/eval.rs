@@ -2039,7 +2039,7 @@ impl<'a> Runtime<'a> {
                 self.actions.push(Action::Audio {
                     operation: operation.into(),
                     path,
-                    end_event: "WAVEEND".into(),
+                    end_event: sound_end_event(&file).into(),
                 });
             }
             "sound" => {
@@ -2067,7 +2067,7 @@ impl<'a> Runtime<'a> {
                             path: sandbox_path(&self.data_dir, &file)
                                 .to_string_lossy()
                                 .into_owned(),
-                            end_event: "WAVEEND".into(),
+                            end_event: sound_end_event(&file).into(),
                         });
                     }
                 }
@@ -2875,10 +2875,12 @@ impl<'a> Runtime<'a> {
             .find(|(n, _)| self.state.isupport.names_equal(n, &who))
         {
             Some((_, full)) => {
+                // Default to mIRC mask type 5 (`nick!user@host`) — the whole
+                // address, which is what a user list entry wants.
                 let t: u32 = if typ.is_empty() {
-                    6
+                    5
                 } else {
-                    typ.parse().unwrap_or(6)
+                    typ.parse().unwrap_or(5)
                 };
                 crate::script::ident::mask_address(full, t)
             }
@@ -6170,6 +6172,12 @@ fn is_binary_word_op(op: &str) -> bool {
             | "isadmin"
             | "isreg"
             | "isban"
+            | "isquiet"
+            | "isaop"
+            | "isavoice"
+            | "isignore"
+            | "isprotect"
+            | "isnotify"
     )
 }
 
@@ -6241,6 +6249,12 @@ fn is_supported_positive_operator(op: &str) -> bool {
             | "isreg"
             | "ischan"
             | "isban"
+            | "isquiet"
+            | "isaop"
+            | "isavoice"
+            | "isignore"
+            | "isprotect"
+            | "isnotify"
     )
 }
 
@@ -6832,6 +6846,12 @@ fn state_op(state: &crate::irc::state::StateSnapshot, term: &str) -> Option<bool
         }),
         // `#chan ischan` -> are we on that channel?
         "ischan" => Some(find_channel(a).is_some()),
+        // jIRC keeps no auto-op/auto-voice/ignore/protect/notify lists and the
+        // servers it targets expose no quiet list, so these membership tests
+        // resolve against an empty list. They must still be *recognised*:
+        // an unknown operator falls through to a truthiness test, which would
+        // make `if (%addr isaop)` silently true and open access up.
+        "isaop" | "isavoice" | "isignore" | "isprotect" | "isnotify" | "isquiet" => Some(false),
         _ => None,
     };
     result.map(|value| if negated { !value } else { value })
@@ -6857,7 +6877,24 @@ fn is_state_word_op(op: &str) -> bool {
             | "isreg"
             | "ischan"
             | "isban"
+            | "isquiet"
+            | "isaop"
+            | "isavoice"
+            | "isignore"
+            | "isprotect"
+            | "isnotify"
     )
+}
+
+/// mIRC's idea of a number: an optional sign, decimal digits, and at most one
+/// decimal point. Rust's `f64` parser is looser — it also accepts `inf`, `NaN`,
+/// and exponent forms like `1e5`, none of which mIRC counts as numeric.
+fn is_mirc_number(s: &str) -> bool {
+    let body = s.strip_prefix(['+', '-']).unwrap_or(s);
+    !body.is_empty()
+        && body.chars().all(|c| c.is_ascii_digit() || c == '.')
+        && body.chars().filter(|&c| c == '.').count() <= 1
+        && body.chars().any(|c| c.is_ascii_digit())
 }
 
 fn truthy(s: &str) -> bool {
@@ -6874,19 +6911,18 @@ fn unary_op(a: &str, op: &str) -> bool {
     let lower = op.to_ascii_lowercase();
     let (negated, op) = split_operator_negation(&lower);
     let result = match op {
-        "isnum" => !a.is_empty() && a.parse::<f64>().is_ok(),
+        "isnum" => is_mirc_number(a),
+        // Lists jIRC keeps no equivalent of — always an empty list. Answered
+        // here as well as in `state_op` so the result never depends on a state
+        // resolver being wired up: an unrecognised operator would otherwise
+        // fall through to a truthiness test and read as true.
+        "isaop" | "isavoice" | "isignore" | "isprotect" | "isnotify" | "isquiet" => false,
         "isletter" | "isalpha" => !a.is_empty() && a.chars().all(|c| c.is_alphabetic()),
         "isalnum" => !a.is_empty() && a.chars().all(|c| c.is_alphanumeric()),
-        "islower" => {
-            !a.is_empty()
-                && a.chars().any(|c| c.is_alphabetic())
-                && a.chars().all(|c| !c.is_uppercase())
-        }
-        "isupper" => {
-            !a.is_empty()
-                && a.chars().any(|c| c.is_alphabetic())
-                && a.chars().all(|c| !c.is_lowercase())
-        }
+        // mIRC only asks that no character of the opposite case is present —
+        // the value may be entirely non-alphabetic.
+        "islower" => !a.is_empty() && a.chars().all(|c| !c.is_uppercase()),
+        "isupper" => !a.is_empty() && a.chars().all(|c| !c.is_lowercase()),
         // A bare two-token expression with an unknown operator: treat as truthy
         // of the whole (mIRC would generally see this as a non-empty string).
         _ => truthy(&format!("{a} {op}")),
@@ -6907,11 +6943,13 @@ fn compare(a: &str, op: &str, b: &str) -> bool {
         "!=" => !a.eq_ignore_ascii_case(b),
         "isin" => b.to_lowercase().contains(&a.to_lowercase()),
         "isincs" => b.contains(a),
+        // See `unary_op`: lists jIRC does not keep, tested against empty.
+        "isaop" | "isavoice" | "isignore" | "isprotect" | "isnotify" | "isquiet" => false,
         "iswm" => wildcard_match(a, b),
         "iswmcs" => wildcard_match_cs(a, b),
         // `v1 isnum n1-n2` — numeric and within the inclusive range.
         "isnum" => match a.parse::<f64>() {
-            Ok(x) => match b.split_once('-') {
+            Ok(x) if is_mirc_number(a) => match b.split_once('-') {
                 Some((lo, hi)) => {
                     let lo = lo.trim().parse::<f64>().unwrap_or(f64::MIN);
                     let hi = hi.trim().parse::<f64>().unwrap_or(f64::MAX);
@@ -6919,7 +6957,7 @@ fn compare(a: &str, op: &str, b: &str) -> bool {
                 }
                 None => true,
             },
-            Err(_) => false,
+            _ => false,
         },
         // `v1 isletter list` — every char of v1 is alphabetic and in `list`.
         "isletter" => {
@@ -6944,15 +6982,21 @@ fn compare(a: &str, op: &str, b: &str) -> bool {
             (Ok(x), Ok(y)) => (x & y) != 0,
             _ => false,
         },
-        "<" | ">" | "<=" | ">=" => match (a.parse::<f64>(), b.parse::<f64>()) {
-            (Ok(x), Ok(y)) => match op {
-                "<" => x < y,
-                ">" => x > y,
-                "<=" => x <= y,
-                _ => x >= y,
-            },
-            _ => false,
-        },
+        // Numeric when both sides are numbers; otherwise mIRC falls back to a
+        // lexicographic (code-point order) comparison, where a shorter string
+        // that is otherwise equal sorts first.
+        "<" | ">" | "<=" | ">=" => {
+            let ord = match (a.parse::<f64>(), b.parse::<f64>()) {
+                (Ok(x), Ok(y)) => x.partial_cmp(&y),
+                _ => Some(a.cmp(b)),
+            };
+            ord.is_some_and(|ord| match op {
+                "<" => ord.is_lt(),
+                ">" => ord.is_gt(),
+                "<=" => ord.is_le(),
+                _ => ord.is_ge(),
+            })
+        }
         _ => false,
     };
     if negated {
@@ -6981,6 +7025,12 @@ fn is_binary_test_op(op: &str) -> bool {
             | ">"
             | "<="
             | ">="
+            | "isaop"
+            | "isavoice"
+            | "isignore"
+            | "isprotect"
+            | "isnotify"
+            | "isquiet"
     )
 }
 
@@ -7134,6 +7184,24 @@ fn hash_text_format(flags: &str) -> super::hash::TextFormat {
 }
 
 /// Takes one command argument, accepting mIRC's common quoted-filename form.
+/// The `/splay` end event for a sound file, chosen by extension the way mIRC
+/// does: MIDI files fire `on MIDIEND`, MP3s fire `on MP3END`, and everything
+/// else fires `on WAVEEND`. `on SONGEND` fires alongside whichever applies —
+/// see `script_dispatch_audio_end`. An empty name (a `/splay -p`-style control
+/// operation, which never reaches an end event) keeps the WAVEEND default.
+pub(super) fn sound_end_event(file: &str) -> &'static str {
+    let ext = std::path::Path::new(file)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "mid" | "midi" | "rmi" => "MIDIEND",
+        "mp3" => "MP3END",
+        _ => "WAVEEND",
+    }
+}
+
 fn take_file_arg(raw: &str) -> Option<(String, &str)> {
     let raw = raw.trim_start();
     if raw.is_empty() {
@@ -7244,38 +7312,60 @@ pub fn wildcard_match_cs(pattern: &str, text: &str) -> bool {
 }
 
 fn wm(p: &[char], t: &[char]) -> bool {
+    // Remember which (pattern, text) positions already failed. Without this,
+    // a pattern like `*a*a*a*a*b` backtracks exponentially over a long
+    // non-matching subject — reachable from any `on TEXT` handler.
+    let mut failed = std::collections::HashSet::new();
     // The pattern starts at a word boundary (prev_space = true).
-    wm_at(p, t, true)
+    wm_at(p, t, true, &mut failed)
 }
 
 /// `prev_space` = the previous pattern char was a space (or we're at the start).
 /// mIRC's `&` is a whole-word wildcard only when it stands alone — space-bounded
 /// on both sides; otherwise it's a literal `&`.
-fn wm_at(p: &[char], t: &[char], prev_space: bool) -> bool {
+///
+/// `failed` memoises dead ends. Both slices only ever shrink from the front, so
+/// their remaining lengths identify a position uniquely.
+fn wm_at(
+    p: &[char],
+    t: &[char],
+    prev_space: bool,
+    failed: &mut std::collections::HashSet<(usize, usize, bool)>,
+) -> bool {
     if p.is_empty() {
         return t.is_empty();
     }
-    match p[0] {
+    let key = (p.len(), t.len(), prev_space);
+    if failed.contains(&key) {
+        return false;
+    }
+    let matched = match p[0] {
         '*' => {
             // Match zero or more characters.
-            wm_at(&p[1..], t, false) || (!t.is_empty() && wm_at(p, &t[1..], false))
+            wm_at(&p[1..], t, false, failed)
+                || (!t.is_empty() && wm_at(p, &t[1..], false, failed))
         }
-        '?' => !t.is_empty() && wm_at(&p[1..], &t[1..], false),
+        '?' => !t.is_empty() && wm_at(&p[1..], &t[1..], false, failed),
         // `&` alone matches one whole word (one or more non-space chars). Since a
         // word is space-bounded and `&` must be followed by space/end, the word is
         // the maximal non-space run — match it and continue.
         '&' if prev_space && (p.len() == 1 || p[1] == ' ') => {
             if t.is_empty() || t[0] == ' ' {
-                return false; // needs at least one non-space character
+                false // needs at least one non-space character
+            } else {
+                let mut i = 1;
+                while i < t.len() && t[i] != ' ' {
+                    i += 1;
+                }
+                wm_at(&p[1..], &t[i..], false, failed)
             }
-            let mut i = 1;
-            while i < t.len() && t[i] != ' ' {
-                i += 1;
-            }
-            wm_at(&p[1..], &t[i..], false)
         }
-        c => !t.is_empty() && t[0] == c && wm_at(&p[1..], &t[1..], c == ' '),
+        c => !t.is_empty() && t[0] == c && wm_at(&p[1..], &t[1..], c == ' ', failed),
+    };
+    if !matched {
+        failed.insert(key);
     }
+    matched
 }
 
 #[cfg(test)]
@@ -7418,7 +7508,37 @@ mod tests {
         assert!(eval_bool("!isnum 2-20")); // LHS expanded to $null
         assert!(!eval_bool("5 !< 10"));
         assert!(eval_bool("15 !< 10"));
-        assert!(eval_bool("!<5"));
+        // `$null < 5` is true (empty sorts before "5"), so `!<` is false.
+        assert!(!eval_bool("!<5"));
+        // `<`/`>` are numeric when both sides are numbers, and lexicographic
+        // otherwise — an equal-but-shorter string sorts first.
+        assert!(eval_bool("9 < 10"));
+        assert!(eval_bool("apple < banana"));
+        assert!(!eval_bool("banana < apple"));
+        assert!(eval_bool("abc < abcd"));
+        assert!(eval_bool("A < a"));
+        assert!(eval_bool("apple <= apple"));
+        // mIRC's isnum rejects what Rust's float parser would accept.
+        assert!(eval_bool("5.5 isnum"));
+        assert!(eval_bool("-5 isnum"));
+        assert!(!eval_bool("inf isnum"));
+        assert!(!eval_bool("NaN isnum"));
+        assert!(!eval_bool("1e5 isnum"));
+        // islower/isupper only require that no opposite-case letter appears.
+        assert!(eval_bool("123 islower"));
+        assert!(eval_bool("123 isupper"));
+        assert!(eval_bool("abc123 islower"));
+        assert!(!eval_bool("Abc islower"));
+        // Lists jIRC does not keep must read as empty, never as truthy text:
+        // an unrecognised operator would make these silently true.
+        assert!(!eval_bool("*!*@host isaop"));
+        assert!(!eval_bool("*!*@host isaop #chan"));
+        assert!(!eval_bool("*!*@host isavoice"));
+        assert!(!eval_bool("*!*@host isignore"));
+        assert!(!eval_bool("*!*@host isprotect"));
+        assert!(!eval_bool("nick isnotify"));
+        assert!(!eval_bool("*!*@host isquiet #chan"));
+        assert!(eval_bool("*!*@host !isaop"));
         assert!(!eval_bool("same !== same"));
         assert!(eval_bool("Same !=== same"));
         assert!(eval_bool("!==x"));

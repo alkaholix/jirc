@@ -1,4 +1,17 @@
 :root {
+  /* Brand ramp — taken from the app icon's gradient stops (see
+     src-tauri/icons/icon-source.svg) so the UI accent and the logo can never
+     drift apart. Hue stays ~221deg and saturation ~90% across the ramp; only
+     lightness moves, which is what keeps it recognisable as one colour.
+     --brand-600 is the light-theme accent: #7aa2f7 only reaches 2.3:1 on the
+     light background and fails AA for text, so the ramp steps down to 4.5:1
+     without leaving the logo's hue. */
+  --brand-300: #93b7ff;
+  --brand-400: #7aa2f7;
+  --brand-500: #5677d8;
+  --brand-600: #2566f4;
+  --brand-700: #1a4bb8;
+
   --bg: #16161e;
   --bg2: #1a1b26;
   --panel: #1f2335;
@@ -6,7 +19,7 @@
   --border: #2a2e42;
   --fg: #c0caf5;
   --muted: #565f89;
-  --accent: #7aa2f7;
+  --accent: var(--brand-400);
   --accent2: #bb9af7;
   --err: #f7768e;
   --ok: #9ece6a;
@@ -134,7 +147,7 @@
   --border: #d3d8e6;
   --fg: #1a1b26;
   --muted: #6b7394;
-  --accent: #3056d3;
+  --accent: var(--brand-600);
   --accent2: #8a5cf6;
   --err: #d6204a;
   --ok: #2f8a3b;
@@ -1177,45 +1190,95 @@ img.nick-icon {
   min-width: 1.8rem;
   padding-inline: 0.35rem;
 }
-.composer-color-control {
-  display: flex;
+/* The swatch is the preview of the chosen colours; `.input-color-apply` is an
+   ordinary button. Because the button no longer paints itself in the selected
+   IRC colour, it keeps the theme's own contrast and needs no text-shadow to
+   stay legible. */
+.color-swatch {
+  display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  padding-left: 0.35rem;
-  color: var(--muted);
-  font-size: 0.8rem;
-}
-.composer-color-control select {
-  max-width: 7.5rem;
-  padding: 0.15rem 1.5rem 0.15rem 0.4rem;
+  padding: 0.15rem 0.45rem 0.15rem 0.15rem;
   cursor: pointer;
 }
-.composer-toolbar .input-color-apply {
+.color-swatch-chip {
+  display: grid;
+  place-items: center;
+  min-width: 2.1rem;
+  padding: 0.05rem 0.25rem;
+  border-radius: 4px;
+  /* A neutral outline keeps white-on-transparent readable without a glow. */
+  box-shadow: inset 0 0 0 1px var(--border);
   font-weight: 700;
-  text-shadow: 0 0 2px #000;
+  font-size: 0.78rem;
+  line-height: 1.5;
 }
-.composer-toolbar .input-color-apply.active {
+.color-swatch-label {
+  color: var(--muted);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+.color-swatch.active {
   border-color: var(--ok);
   box-shadow: 0 0 0 1px var(--ok);
 }
+.color-picker {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0.5rem;
+  z-index: 51;
+  display: flex;
+  gap: 0.9rem;
+  padding: 0.6rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 35%);
+}
+.color-picker-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.color-picker-title {
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.color-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1.1rem);
+  gap: 3px;
+}
+/* The background grid carries an extra "none" cell, so 9 columns keeps it to
+   two even rows instead of leaving one orphan on a third. */
+.color-grid.with-none {
+  grid-template-columns: repeat(9, 1.1rem);
+}
+.color-cell {
+  width: 1.1rem;
+  height: 1.1rem;
+  min-width: 0;
+  padding: 0;
+  border-radius: 3px;
+  border: 1px solid rgb(0 0 0 / 28%);
+  cursor: pointer;
+}
+.color-cell.none {
+  background:
+    linear-gradient(45deg, transparent 44%, var(--err) 44%, var(--err) 56%, transparent 56%),
+    var(--panel2);
+}
+.color-cell.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 @media (max-width: 760px) {
-  .composer-color-control {
-    font-size: 0;
-    padding-left: 0;
-    gap: 0.2rem;
-  }
-  .composer-color-control select {
-    width: 4.75rem;
-  }
-  .composer-toolbar .input-color-apply {
-    font-size: 0;
-  }
-  .composer-toolbar .input-color-apply::after {
-    content: "Apply";
-    font-size: 0.8rem;
-  }
-  .composer-toolbar .input-color-apply.active::after {
-    content: "Active";
+  /* Drop the wordy part of the swatch rather than collapsing the button to
+     font-size: 0 and re-labelling it through ::after. */
+  .color-swatch-label {
+    display: none;
   }
 }
 .emoji-backdrop {
@@ -1303,7 +1366,9 @@ img.nick-icon {
   display: grid;
   place-items: center;
   color: #fff;
-  background: linear-gradient(145deg, var(--accent), #315c9e);
+  /* The same stops as the app icon, so the mark reads as the logo rather than
+     an approximation of it. */
+  background: linear-gradient(145deg, var(--brand-300), var(--brand-500));
   font-size: 1.25rem;
   font-weight: 800;
   letter-spacing: -.04em;
@@ -1368,26 +1433,129 @@ img.nick-icon {
   color: var(--accent);
   border-bottom-color: var(--accent);
 }
-.settings-body {
-  min-height: 230px;
-}
 .settings-modal {
-  width: min(48rem, calc(100vw - 2rem));
-  max-height: calc(100vh - 2rem);
+  width: min(52rem, calc(100vw - 2rem));
+  height: min(38rem, calc(100vh - 2rem));
   display: flex;
   flex-direction: column;
 }
-.settings-modal > .tabs {
-  flex-wrap: wrap;
-  overflow-x: visible;
+/* A vertical rail instead of a wrapping tab strip: seven sections never fit on
+   one row at this width, and a fixed body height stops the dialog resizing
+   every time you switch section. */
+.settings-split {
+  display: grid;
+  grid-template-columns: 11rem minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
 }
-.settings-modal > .tabs .tab {
-  flex: 1 1 auto;
+.settings-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0.5rem 0.4rem;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  overflow-y: auto;
+}
+.settings-search {
+  margin-bottom: 0.4rem;
+  width: 100%;
+}
+.settings-rail-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.settings-rail-title {
+  padding: 0.6rem 0.5rem 0.2rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.settings-rail-item {
+  justify-content: flex-start;
+  padding: 0.35rem 0.5rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+}
+.settings-rail-item:hover {
+  background: var(--panel2);
+  color: var(--fg);
+}
+.settings-rail-item.active {
+  background: var(--panel2);
+  color: var(--fg);
+  font-weight: 700;
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.settings-rail-empty {
+  padding: 0.5rem;
+  color: var(--muted);
+  font-size: 0.8rem;
 }
 .settings-modal .settings-body {
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
+}
+/* The shared option row — name (plus optional help) left, control right.
+   Scoped under .modal-body so it outranks `.modal-body label`, which lays
+   every other dialog label out as a column. */
+.modal-body .setting-item {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.modal-body .setting-item:last-child {
+  border-bottom: 0;
+}
+.modal-body .setting-item-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+.modal-body .setting-item-label {
+  color: var(--fg);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+.modal-body .setting-item input[type="checkbox"] {
+  flex: none;
+  margin: 0;
+}
+@media (max-width: 640px) {
+  .settings-split {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .settings-rail {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .settings-rail-group {
+    flex-direction: row;
+    align-items: center;
+    gap: 2px;
+  }
+  .settings-rail-title {
+    display: none;
+  }
+  .settings-search {
+    margin-bottom: 0;
+  }
 }
 .address-book-modal {
   width: min(50rem, calc(100vw - 2rem));

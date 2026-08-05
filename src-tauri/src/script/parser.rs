@@ -60,6 +60,10 @@ const PLAIN_EVENTS: &[&str] = &[
     "NOSOUND",
 ];
 
+/// Playback-finished events. mIRC writes these with no matchtext and no target
+/// (`on *:MP3END:<command>`), filling `$filename` with the file that ended.
+const AUDIO_END_EVENTS: &[&str] = &["WAVEEND", "MIDIEND", "MP3END", "SONGEND", "PLAYEND"];
+
 struct Cursor {
     chars: Vec<char>,
     pos: usize,
@@ -709,6 +713,18 @@ fn parse_braceless_event(header: &str, source_line: usize) -> Option<Event> {
             String::new(),
             rest.trim().to_string(),
         )
+    } else if AUDIO_END_EVENTS.contains(&kind.as_str()) {
+        // on *:MP3END|WAVEEND|…:<command> — mIRC has no matchtext or target
+        // field here, so the whole tail is the command. Also accept the
+        // historical jIRC form with a leading `*` target, which earlier scripts
+        // (and this crate's own tests) were written against. Only a bare `*` is
+        // treated that way, so a command containing a colon stays intact.
+        let rest = rest.trim();
+        let command = match rest.split_once(':') {
+            Some((candidate, command)) if candidate.trim() == "*" => command.trim().to_string(),
+            _ => rest.to_string(),
+        };
+        (String::new(), String::new(), String::new(), command)
     } else if kind == "OPEN" {
         // on *:OPEN:<type>:<matchtext>:<command> — the window type is the target,
         // the matchtext matches the opening message. Note the reversed field

@@ -3865,9 +3865,25 @@ pub async fn script_run_hotlink(
     .unwrap_or(false)
 }
 
+/// The events a finished audio file fires, in order. `/splay` raises a
+/// sound-type event chosen by extension, and mIRC pairs each of those with the
+/// generic `on SONGEND`; `on PLAYEND` comes from `/play` (a text file) and has
+/// no SONGEND counterpart. An unrecognised kind fires nothing.
+fn audio_end_event_chain(kind: &str) -> &'static [&'static str] {
+    match kind.to_ascii_uppercase().as_str() {
+        "WAVEEND" => &["WAVEEND", "SONGEND"],
+        "MIDIEND" => &["MIDIEND", "SONGEND"],
+        "MP3END" => &["MP3END", "SONGEND"],
+        "SONGEND" => &["SONGEND"],
+        "PLAYEND" => &["PLAYEND"],
+        _ => &[],
+    }
+}
+
 #[tauri::command]
 pub fn script_dispatch_audio_end(app: AppHandle, server_id: String, kind: String, path: String) {
-    if !matches!(kind.to_ascii_uppercase().as_str(), "WAVEEND" | "PLAYEND") {
+    let kinds = audio_end_event_chain(&kind);
+    if kinds.is_empty() {
         return;
     }
     let engine = app.state::<ScriptEngine>();
@@ -3889,17 +3905,19 @@ pub fn script_dispatch_audio_end(app: AppHandle, server_id: String, kind: String
         .and_then(|name| name.to_str())
         .unwrap_or(&path)
         .to_string();
-    let actions = engine.dispatch_event(
-        &ctx,
-        &kind,
-        EventVars {
-            filename: filename.clone(),
-            text: filename.clone(),
-            params: vec![filename],
-            ..Default::default()
-        },
-    );
-    apply_actions(&app, &server_id, &my_nick, &network, &server, actions);
+    for kind in kinds {
+        let actions = engine.dispatch_event(
+            &ctx,
+            kind,
+            EventVars {
+                filename: filename.clone(),
+                text: filename.clone(),
+                params: vec![filename.clone()],
+                ..Default::default()
+            },
+        );
+        apply_actions(&app, &server_id, &my_nick, &network, &server, actions);
+    }
 }
 
 #[tauri::command]
@@ -5613,6 +5631,96 @@ mod tests {
     }
 
     #[test]
+    fn splay_sound_end_events_follow_the_file_type() {
+        use crate::script::eval::sound_end_event;
+        // /splay picks the end event from the file extension.
+        assert_eq!(sound_end_event("tune.mid"), "MIDIEND");
+        assert_eq!(sound_end_event("tune.MIDI"), "MIDIEND");
+        assert_eq!(sound_end_event("tune.rmi"), "MIDIEND");
+        assert_eq!(sound_end_event("song.Mp3"), "MP3END");
+        assert_eq!(sound_end_event("alert.wav"), "WAVEEND");
+        // A control operation (`/splay -p`) has no file and no end event.
+        assert_eq!(sound_end_event(""), "WAVEEND");
+
+        // Each sound event is paired with the generic `on SONGEND`; PLAYEND
+        // (from /play, a text file) is not, and unknown kinds fire nothing.
+        assert_eq!(audio_end_event_chain("MP3END"), ["MP3END", "SONGEND"]);
+        assert_eq!(audio_end_event_chain("midiend"), ["MIDIEND", "SONGEND"]);
+        assert_eq!(audio_end_event_chain("WAVEEND"), ["WAVEEND", "SONGEND"]);
+        assert_eq!(audio_end_event_chain("SONGEND"), ["SONGEND"]);
+        assert_eq!(audio_end_event_chain("PLAYEND"), ["PLAYEND"]);
+        assert!(audio_end_event_chain("NOPE").is_empty());
+
+        // /splay routes a real file to the matching event.
+        let engine = ScriptEngine::new();
+        assert!(matches!(
+            engine.run_command(&ctx(), "#c", "/splay song.mp3", &[]).as_slice(),
+            [Action::Audio { operation, end_event, .. }]
+                if operation == "play" && end_event == "MP3END"
+        ));
+        assert!(matches!(
+            engine.run_command(&ctx(), "#c", "/splay tune.midi", &[]).as_slice(),
+            [Action::Audio { end_event, .. }] if end_event == "MIDIEND"
+        ));
+
+        // The handlers themselves fire and fill $filename.
+        engine.load(
+            "on *:MIDIEND:/echo -a midi $filename\n\
+             on *:MP3END:/echo -a mp3 $filename\n\
+             on *:SONGEND:/echo -a song $nopath($filename)",
+        );
+        for (kind, filename, expected) in [
+            ("MIDIEND", "tune.mid", "midi tune.mid"),
+            ("MP3END", "song.mp3", "mp3 song.mp3"),
+            ("SONGEND", "a/b/song.mp3", "song song.mp3"),
+        ] {
+            assert_eq!(
+                engine.dispatch_event(
+                    &ctx(),
+                    kind,
+                    EventVars {
+                        filename: filename.into(),
+                        ..Default::default()
+                    }
+                ),
+                vec![Action::Echo {
+                    target: "(status)".into(),
+                    text: expected.into()
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_udpwrite_handler_does_not_disturb_sockwrite() {
+        // mIRC removed `on UDPWRITE` in 7.33; UDP write completion — success or
+        // error — reports through `on SOCKWRITE` instead, which is what
+        // `socket.rs` fires for both socket kinds. Nothing in jIRC dispatches
+        // UDPWRITE, so all a legacy handler has to do is load harmlessly and
+        // leave the handlers around it intact.
+        let engine = ScriptEngine::new();
+        engine.load(
+            "on *:UDPWRITE:sock:/echo -a udpwrite fired\n\
+             on *:SOCKWRITE:sock:/echo -a sockwrite $sockname",
+        );
+        assert_eq!(
+            engine.dispatch_event(
+                &ctx(),
+                "SOCKWRITE",
+                EventVars {
+                    chan: "sock".into(),
+                    target: "sock".into(),
+                    ..Default::default()
+                }
+            ),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "sockwrite sock".into()
+            }]
+        );
+    }
+
+    #[test]
     fn portable_client_commands_route_with_mirc_arguments() {
         let engine = ScriptEngine::new();
         assert_eq!(
@@ -7101,7 +7209,8 @@ mod tests {
             stateful.run_alias(&state_ctx, "#compat", "compat_state", "alice"),
             vec![
                 Action::Send("MODE #compat +v alice".into()),
-                Action::Send("PRIVMSG #compat :voiced alice from *!*@*.test".into()),
+                // $address(nick,5) is mIRC's nick!user@host mask type.
+                Action::Send("PRIVMSG #compat :voiced alice from alice!u@example.test".into()),
             ]
         );
 
@@ -9432,7 +9541,7 @@ mod tests {
             actions,
             vec![Action::Echo {
                 target: "#c".into(),
-                text: "a=~bob@host.example.com m2=*!*bob@host.example.com m3=*!*@host.example.com c=1 n=bob!~bob@host.example.com".into(),
+                text: "a=~bob@host.example.com m2=*!*@host.example.com m3=*!*bob@*.example.com c=1 n=bob!~bob@host.example.com".into(),
             }]
         );
     }
@@ -10915,10 +11024,10 @@ mod tests {
                 Action::Send("PRIVMSG #b :hi all".into()),
             ]
         );
-        // /ban masks a known nick via the IAL (default type 2) and sets +b
+        // /ban masks a known nick via the IAL (default type 2 = *!*@host) and sets +b
         assert_eq!(
             engine.run_alias(&rctx, "#a", "b", ""),
-            vec![Action::Send("MODE #a +b *!*user@host.example.com".into())]
+            vec![Action::Send("MODE #a +b *!*@host.example.com".into())]
         );
     }
 
