@@ -301,6 +301,9 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     const modifiers = [e.ctrlKey && "ctrl", e.altKey && "alt", e.shiftKey && "shift", e.metaKey && "meta"].filter(Boolean).join("+");
     void api.scriptRunKey(buffer.serverId, buffer.name, "KEYDOWN", e.key, e.keyCode, e.repeat, modifiers, value);
+    if (buffer.name.startsWith("@") && Array.from(e.key).length === 1) {
+      void api.scriptRunKey(buffer.serverId, buffer.name, "CHAR", e.key, e.key.codePointAt(0) ?? 0, e.repeat, modifiers, value);
+    }
     if (e.key === "Enter") {
       e.preventDefault();
       submit();

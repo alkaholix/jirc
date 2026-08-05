@@ -754,6 +754,7 @@ export const useStore = create<State>((set, get) => {
         sys(`→ ${who} invited you to ${ircxDisplay(ev.channel)}`);
         if (settings.notifications) notify("Invite", `${who} invited you to ${ircxDisplay(ev.channel)}`);
         playAlertSound("invite");
+        if (settings.autoJoinInvites) api.join(ev.serverId, ev.channel).catch(() => {});
         break;
       }
       case "ircxState":

@@ -13,6 +13,7 @@ vi.mock("./api", () => ({
     openHelp: vi.fn(() => Promise.resolve()),
     sendRaw: vi.fn(() => Promise.resolve()),
     sendMessage: vi.fn(() => Promise.resolve()),
+    configureFlood: vi.fn(() => Promise.resolve()),
   },
 }));
 
@@ -22,6 +23,11 @@ describe("script client commands", () => {
     useSettings.getState().set("layout", "tree");
     useSettings.getState().set("timestampMode", "inline");
     useSettings.getState().set("stripCodes", "");
+    useSettings.getState().set("autoJoinInvites", false);
+    useSettings.getState().set("quietHoursEnabled", false);
+    useSettings.getState().set("dccIgnore", false);
+    useSettings.getState().set("dccChatRequest", "ask");
+    useSettings.getState().set("dccSendRequest", "ask");
     useToolbar.getState().setVisible(true);
     useChannelCentral.getState().close();
     useAddressBook.setState({ entries: [], loaded: true, error: "", open: false, requestedNick: "", requestedNetwork: "" });
@@ -48,6 +54,28 @@ describe("script client commands", () => {
       open: true,
       requestedNick: "Alice",
       requestedNetwork: "IRC7",
+    });
+  });
+
+  it("applies compatibility settings commands", () => {
+    const base = { type: "clientCommand", serverId: "s1", currentTarget: "#chat" } as const;
+    routeClientCommand({ ...base, command: "ajinvite", args: "on" }, vi.fn());
+    routeClientCommand({ ...base, command: "donotdisturb", args: "on" }, vi.fn());
+    routeClientCommand({ ...base, command: "dccignore", args: "on" }, vi.fn());
+    routeClientCommand({ ...base, command: "creq", args: "auto" }, vi.fn());
+    routeClientCommand({ ...base, command: "sreq", args: "ignore" }, vi.fn());
+    routeClientCommand({ ...base, command: "vol", args: "75" }, vi.fn());
+    routeClientCommand({ ...base, command: "flood", args: "on 6 3" }, vi.fn());
+    expect(useSettings.getState()).toMatchObject({
+      autoJoinInvites: true,
+      quietHoursEnabled: true,
+      dccIgnore: true,
+      dccChatRequest: "auto",
+      dccSendRequest: "ignore",
+      soundVolume: 0.75,
+      floodEnabled: true,
+      floodMessages: 6,
+      floodSeconds: 3,
     });
   });
 

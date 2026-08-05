@@ -116,8 +116,20 @@ export interface PluginDispatch {
   errors: string[];
 }
 
+export interface UrlPreview {
+  url: string;
+  finalUrl: string;
+  domain: string;
+  title: string;
+  description: string;
+  /** Safe backend-fetched data URL; never a tracker-controlled remote request. */
+  image: string;
+}
+
 export const api = {
   coreVersion: () => invoke<string>("core_version"),
+  urlPreview: (url: string, includeImage: boolean) =>
+    invoke<UrlPreview>("url_preview", { url, includeImage }),
   pluginsList: () => invoke<PluginInfo[]>("plugins_list"),
   pluginsPath: () => invoke<string>("plugins_path"),
   pluginAddExample: () => invoke<string>("plugin_add_example"),
@@ -289,8 +301,10 @@ export const api = {
     invoke("script_set_active", { name, serverId }),
   scriptRunTabcomp: (serverId: string, target: string, text: string) =>
     invoke<boolean>("script_run_tabcomp", { serverId, target, text }),
-  scriptRunKey: (serverId: string, target: string, kind: "KEYDOWN" | "KEYUP", key: string, keyVal: number, keyRepeat: boolean, modifiers: string, text: string) =>
+  scriptRunKey: (serverId: string, target: string, kind: "KEYDOWN" | "KEYUP" | "CHAR", key: string, keyVal: number, keyRepeat: boolean, modifiers: string, text: string) =>
     invoke<boolean>("script_run_key", { serverId, target, kind, key, keyVal, keyRepeat, modifiers, text }),
+  scriptRunHotlink: (serverId: string, target: string, word: string, lineText: string, action: "mouse" | "sclick" | "dclick" | "rclick" | "uclick", line: number, position: number) =>
+    invoke<boolean>("script_run_hotlink", { serverId, target, word, lineText, action, line, position }),
   scriptDispatchAudioEnd: (serverId: string, kind: string, path: string) =>
     invoke<void>("script_dispatch_audio_end", { serverId, kind, path }),
   scriptSetClientWindowState: (label: string, focused: boolean, appState: string) =>
@@ -309,6 +323,8 @@ export const api = {
     invoke("script_set_client_unread_windows", { windows }),
   scriptSetClientUiState: (toolbar: boolean, treebar: boolean, switchbar: boolean, menubar: boolean, tips: boolean) =>
     invoke("script_set_client_ui_state", { toolbar, treebar, switchbar, menubar, tips }),
+  scriptSetClientCompatState: (desktopWidth: number, desktopHeight: number, soundEnabled: boolean, soundVolume: number, doNotDisturb: boolean, selfColor: string) =>
+    invoke("script_set_client_compat_state", { desktopWidth, desktopHeight, soundEnabled, soundVolume, doNotDisturb, selfColor }),
   /** Register/unregister a window with the engine so it gets a `$wid`. */
   scriptWindowOpen: (serverId: string, name: string) =>
     invoke("script_window_open", { serverId, name }),

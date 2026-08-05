@@ -48,7 +48,7 @@ import { routeClientCommand } from "./lib/clientCommands";
 import { dispatchPluginEvent } from "./lib/plugins";
 import { handleInput } from "./lib/slash";
 import { ScriptPanels } from "./components/ScriptPanels";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
 import { useAddressBook } from "./state/addressBook";
 import { notify as desktopNotify } from "./lib/notify";
 import { checkForUpdateOnStartup, updateNotificationBody } from "./lib/updater";
@@ -139,6 +139,10 @@ function MainApp() {
   const panels = usePanels((s) => s.panels);
   const chatFont = useSettings((s) => s.chatFont);
   const chatFontSize = useSettings((s) => s.chatFontSize);
+  const soundEnabled = useSettings((s) => s.soundEnabled);
+  const soundVolume = useSettings((s) => s.soundVolume);
+  const quietHoursEnabled = useSettings((s) => s.quietHoursEnabled);
+  const selfNickColor = useSettings((s) => s.selfNickColor);
   const dccIp = useSettings((s) => s.dccIp);
   const dccBindIp = useSettings((s) => s.dccBindIp);
   const dccPortFrom = useSettings((s) => s.dccPortFrom);
@@ -212,13 +216,31 @@ function MainApp() {
         });
       }
       if (e.payload.type === "clientCommand") {
-        routeClientCommand(e.payload, () => setSettingsOpen(true));
+        routeClientCommand(e.payload, () => setSettingsOpen(true), {
+          openConnect: () => setDialogOpen(true),
+          minimize: () => { if ("__TAURI_INTERNALS__" in window) void getCurrentWindow().minimize(); },
+          restore: () => {
+            if ("__TAURI_INTERNALS__" in window) {
+              const appWindow = getCurrentWindow();
+              void appWindow.unminimize().then(() => appWindow.show()).then(() => appWindow.setFocus());
+            }
+          },
+          requestAttention: () => {
+            if ("__TAURI_INTERNALS__" in window) void getCurrentWindow().requestUserAttention(UserAttentionType.Critical);
+          },
+        });
       }
       routeToolbarEvent(e.payload);
       routePanelEvent(e.payload);
       // Approve/decline an incoming DCC chat — prompt once, in the main window.
       if (e.payload.type === "dccChatOffer" && detachedKey === null) {
         const o = e.payload;
+        const dccSettings = useSettings.getState();
+        if (dccSettings.dccIgnore || dccSettings.dccChatRequest === "ignore") return;
+        if (dccSettings.dccChatRequest === "auto") {
+          api.dccAccept(o.serverId, o.nick, o.ip, o.port, o.token).catch(() => {});
+          return;
+        }
         confirmDialog(
           `${o.nick} wants to start a DCC chat with you (from ${o.ip}). Accept?`,
           { title: "DCC chat request", confirmLabel: "Accept" }
@@ -228,6 +250,12 @@ function MainApp() {
       }
       if (e.payload.type === "dccFileOffer" && detachedKey === null) {
         const o = e.payload;
+        const dccSettings = useSettings.getState();
+        if (dccSettings.dccIgnore || dccSettings.dccSendRequest === "ignore") return;
+        if (dccSettings.dccSendRequest === "auto") {
+          api.dccRecv(o.serverId, o.nick, o.filename, o.ip, o.port, o.size, o.token).catch(() => {});
+          return;
+        }
         confirmDialog(
           `${o.nick} wants to send you "${o.filename}" (${o.size} bytes). Download it? Existing files are kept under a new name; cancel and use /dcc resume ${o.nick} to continue a partial copy.`,
           { title: "DCC file offer", confirmLabel: "Download" }
@@ -358,6 +386,15 @@ function MainApp() {
       .scriptSetClientUiState(scriptToolbarVisible, layout === "tree", layout === "switchbar", menubarVisible, tipsEnabled)
       .catch(() => {});
   }, [scriptToolbarVisible, layout, menubarVisible, tipsEnabled]);
+
+  useEffect(() => {
+    const sync = () => api
+      .scriptSetClientCompatState(window.screen.availWidth, window.screen.availHeight, soundEnabled, soundVolume, quietHoursEnabled, selfNickColor)
+      .catch(() => {});
+    void sync();
+    window.addEventListener("resize", sync);
+    return () => window.removeEventListener("resize", sync);
+  }, [soundEnabled, soundVolume, quietHoursEnabled, selfNickColor]);
 
   useEffect(() => {
     api.scriptSetClientUnreadWindows(unreadWindows ? unreadWindows.split("\u001f") : []).catch(() => {});

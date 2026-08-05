@@ -339,6 +339,16 @@ pub struct ChannelState {
     pub member_activity: BTreeMap<String, u64>,
     /// Active `+b` ban masks (from live MODE and RPL_BANLIST), for `isban`.
     pub bans: std::collections::BTreeSet<String>,
+    pub ban_entries: BTreeMap<String, ListEntry>,
+    pub except_entries: BTreeMap<String, ListEntry>,
+    pub invite_entries: BTreeMap<String, ListEntry>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ListEntry {
+    pub mask: String,
+    pub by: String,
+    pub ctime: u64,
 }
 
 impl ChannelState {
@@ -413,6 +423,15 @@ pub struct SessionState {
     pub ial_info: BTreeMap<String, IalInfo>,
     /// `/ial off` is per-session and defaults to false (IAL enabled).
     pub ial_disabled: bool,
+    pub links: Vec<LinkView>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct LinkView {
+    pub addr: String,
+    pub ip: String,
+    pub level: u32,
+    pub info: String,
 }
 
 impl SessionState {
@@ -760,15 +779,43 @@ impl SessionState {
     }
 
     /// Adds (`adding`) or removes a `+b` ban mask for a channel.
-    pub fn set_ban(&mut self, channel: &str, mask: &str, adding: bool) {
+    pub fn set_channel_list(
+        &mut self,
+        channel: &str,
+        mode: char,
+        mask: &str,
+        by: &str,
+        ctime: u64,
+        adding: bool,
+    ) {
         let channel_key = self
             .matching_channel_key(channel)
             .unwrap_or_else(|| channel.to_string());
         let ch = self.channels.entry(channel_key).or_default();
+        let entries = match mode {
+            'b' => {
+                if adding {
+                    ch.bans.insert(mask.to_string());
+                } else {
+                    ch.bans.remove(mask);
+                }
+                &mut ch.ban_entries
+            }
+            'e' => &mut ch.except_entries,
+            'I' => &mut ch.invite_entries,
+            _ => return,
+        };
         if adding {
-            ch.bans.insert(mask.to_string());
+            entries.insert(
+                mask.to_string(),
+                ListEntry {
+                    mask: mask.to_string(),
+                    by: by.to_string(),
+                    ctime,
+                },
+            );
         } else {
-            ch.bans.remove(mask);
+            entries.remove(mask);
         }
     }
 
@@ -837,6 +884,9 @@ pub struct ChannelView {
     pub member_activity: Vec<(String, u64)>,
     /// Active `+b` ban masks, for the `isban` operator.
     pub bans: Vec<String>,
+    pub ban_entries: Vec<ListEntry>,
+    pub except_entries: Vec<ListEntry>,
+    pub invite_entries: Vec<ListEntry>,
 }
 
 /// A snapshot of a connection's channel/member state, shared with the script
@@ -878,6 +928,7 @@ pub struct StateSnapshot {
     /// nicklist/IAL until `/updatenl` is called. The updated snapshot and one
     /// shared activation flag preserve that behaviour across handlers.
     pub pending_nicklist_update: Option<Arc<PendingNicklistUpdate>>,
+    pub links: Vec<LinkView>,
 }
 
 #[derive(Debug)]
@@ -932,6 +983,7 @@ impl Default for StateSnapshot {
             away_time: 0,
             away_msg: String::new(),
             pending_nicklist_update: None,
+            links: Vec::new(),
         }
     }
 }
@@ -963,6 +1015,9 @@ impl SessionState {
                         .map(|(nick, last)| (nick.clone(), *last))
                         .collect(),
                     bans: ch.bans.iter().cloned().collect(),
+                    ban_entries: ch.ban_entries.values().cloned().collect(),
+                    except_entries: ch.except_entries.values().cloned().collect(),
+                    invite_entries: ch.invite_entries.values().cloned().collect(),
                 })
                 .collect(),
             ial: self
@@ -1004,6 +1059,7 @@ impl SessionState {
             away_time: self.away_time,
             away_msg: self.away_msg.clone(),
             pending_nicklist_update: None,
+            links: self.links.clone(),
         }
     }
 }

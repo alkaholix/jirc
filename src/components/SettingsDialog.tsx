@@ -5,6 +5,7 @@ import {
   Theme,
   useSettings,
   type TimestampMode,
+  type UrlPreviewStyle,
 } from "../state/settings";
 import { api, DataLocation, type PluginInfo } from "../lib/api";
 import { dccDetect } from "../state/dcc";
@@ -337,6 +338,28 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                 </select>
               </label>
               {toggle("showJoinPart", "Show join / part / quit messages")}
+              <div className="settings-group">
+                <div className="settings-label">URL previews</div>
+                {toggle("urlPreviews", "Show previews for links in messages")}
+                <label className="inline">
+                  Preview layout
+                  <select
+                    value={settings.urlPreviewStyle}
+                    disabled={!settings.urlPreviews}
+                    onChange={(event) =>
+                      settings.set("urlPreviewStyle", event.target.value as UrlPreviewStyle)
+                    }
+                  >
+                    <option value="compact">Compact — title and domain</option>
+                    <option value="rich">Rich card — thumbnail and description</option>
+                    <option value="image">Image-first — large preview image</option>
+                  </select>
+                </label>
+                <p className="cheat-tip">
+                  Previews are fetched without cookies or scripts. Local/private addresses,
+                  large downloads, and unsafe redirects are blocked.
+                </p>
+              </div>
               <div className="emoji-editor">
                 <div className="settings-label">
                   Custom emoji — <code>:code:</code> → unicode/text, or an image URL

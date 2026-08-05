@@ -16,6 +16,13 @@ use crate::config::ServerProfile;
 use crate::irc::auth::{self, AuthState};
 use crate::irc::event::{Direction, MessageKind, UiEvent, IRC_EVENT};
 use crate::irc::state::{SessionState, StateSnapshot};
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
 use crate::irc::stream;
 use std::collections::{HashMap, VecDeque};
 
@@ -588,6 +595,18 @@ async fn run_once(
         engine.set_connection_context(server_id, &profile.name, &profile.host);
     }
 
+    // `on ^LOGON` runs before registration and may suppress the standard
+    // PASS/NICK/USER sequence for scripts that provide a custom login flow.
+    let registration_halted = crate::script::fire_logon(
+        app,
+        server_id,
+        &state.nick,
+        &profile.name,
+        &profile.host,
+        std::sync::Arc::new(state.snapshot()),
+        true,
+    );
+
     // Registration. IRCX AUTH packages run before NICK/USER; standard servers
     // use CAP/SASL instead.
     let ircx_anon = profile.ircx
@@ -595,7 +614,10 @@ async fn run_once(
             .ircx_auth_package
             .as_deref()
             .is_some_and(|package| package.eq_ignore_ascii_case("ANON"));
-    if profile.ntlm || ircx_anon {
+    if registration_halted {
+        // The early handler owns registration; its actions are already queued
+        // on this connection's outgoing channel.
+    } else if profile.ntlm || ircx_anon {
         let auth_result = if profile.ntlm {
             crate::irc::ntlm::handshake(&mut reader, &mut write_half, profile, app, server_id).await
         } else {
@@ -703,6 +725,16 @@ async fn run_once(
         )
         .await;
     }
+
+    crate::script::fire_logon(
+        app,
+        server_id,
+        &state.nick,
+        &profile.name,
+        &profile.host,
+        std::sync::Arc::new(state.snapshot()),
+        false,
+    );
 
     let mut names_accum: HashMap<String, Vec<String>> = HashMap::new();
     let mut whois_accum: HashMap<String, Vec<String>> = HashMap::new();
@@ -1726,6 +1758,7 @@ fn handle_mode(
     // enabled IRCX. Script-managed `/server` bridges must see the MODE normally
     // without jIRC competing with the script's own owner/key management.
     let owned_before = member_has_prefix_mode(ctx.state, &target, &ctx.state.nick, 'q');
+    let list_setter = by.clone().unwrap_or_default();
     let mut tokens: Vec<String> = Vec::new();
     let mut adding = true;
     let mut prefix_changed = false;
@@ -1745,10 +1778,15 @@ fn handle_mode(
                         prefix_changed = true;
                     }
                 } else if ctx.state.isupport.chanmodes_a.contains(letter) {
-                    if letter == 'b' {
-                        if let Some(mask) = &arg {
-                            ctx.state.set_ban(&target, mask, adding);
-                        }
+                    if let Some(mask) = &arg {
+                        ctx.state.set_channel_list(
+                            &target,
+                            letter,
+                            mask,
+                            &list_setter,
+                            unix_now(),
+                            adding,
+                        );
                     }
                 } else {
                     ctx.state
@@ -1975,8 +2013,66 @@ fn handle_numeric(ctx: &mut Context, fx: &mut Effects, resp: Response, args: &[S
         Response::RPL_BANLIST => {
             // [nick, channel, banmask, ...] — populate the channel ban list.
             if let (Some(channel), Some(mask)) = (args.get(1), args.get(2)) {
-                ctx.state.set_ban(channel, mask, true);
+                ctx.state.set_channel_list(
+                    channel,
+                    'b',
+                    mask,
+                    args.get(3).map(String::as_str).unwrap_or(""),
+                    args.get(4)
+                        .and_then(|value| value.parse().ok())
+                        .unwrap_or(0),
+                    true,
+                );
                 fx.bans_changed = true;
+            }
+        }
+        Response::RPL_LINKS => {
+            if let (Some(addr), Some(detail)) = (args.get(1), args.get(2)) {
+                let (level, info) = detail
+                    .split_once(' ')
+                    .map(|(level, info)| (level.parse::<u32>().unwrap_or(0), info.to_string()))
+                    .unwrap_or((0, detail.clone()));
+                let entry = crate::irc::state::LinkView {
+                    addr: addr.clone(),
+                    ip: addr
+                        .parse::<std::net::IpAddr>()
+                        .ok()
+                        .map(|ip| ip.to_string())
+                        .unwrap_or_default(),
+                    level,
+                    info,
+                };
+                if let Some(existing) = ctx
+                    .state
+                    .links
+                    .iter_mut()
+                    .find(|item| item.addr.eq_ignore_ascii_case(addr))
+                {
+                    *existing = entry;
+                } else {
+                    ctx.state.links.push(entry);
+                }
+                fx.channel_state_changed = true;
+            }
+        }
+        Response::RPL_EXCEPTLIST | Response::RPL_INVITELIST => {
+            if let (Some(channel), Some(mask)) = (args.get(1), args.get(2)) {
+                let mode = if resp == Response::RPL_EXCEPTLIST {
+                    'e'
+                } else {
+                    'I'
+                };
+                ctx.state.set_channel_list(
+                    channel,
+                    mode,
+                    mask,
+                    args.get(3).map(String::as_str).unwrap_or(""),
+                    args.get(4)
+                        .and_then(|value| value.parse().ok())
+                        .unwrap_or(0),
+                    true,
+                );
+                fx.channel_state_changed = true;
             }
         }
         Response::RPL_WHOREPLY => {

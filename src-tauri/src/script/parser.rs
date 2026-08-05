@@ -28,6 +28,8 @@ const MATCHTEXT_EVENTS: &[&str] = &[
     "FILERCVD",
     "GETFAIL",
     "SENDFAIL",
+    "HOTLINK",
+    "SERV",
 ];
 
 /// Matchtext events with NO `*#?` target field — `on EVENT:<matchtext>:<cmd>`.
@@ -42,6 +44,7 @@ const NO_TARGET_MATCHTEXT: &[&str] = &[
     "FILERCVD",
     "GETFAIL",
     "SENDFAIL",
+    "SERV",
 ];
 
 /// Events with neither a matchtext nor a target — `on EVENT:<cmd>`.
@@ -53,6 +56,8 @@ const PLAIN_EVENTS: &[&str] = &[
     "PONG",
     "NOTIFY",
     "UNOTIFY",
+    "APPACTIVE",
+    "NOSOUND",
 ];
 
 struct Cursor {
@@ -572,6 +577,14 @@ fn parse_event_header(header: &str, body: Vec<Stmt>) -> Option<Event> {
     } else if kind == "RAW" {
         let selector = rest.split_once(':').map_or(rest, |(value, _)| value);
         ("*".to_string(), selector.trim().to_string(), String::new())
+    } else if kind == "CHAR" {
+        // on *:CHAR:<@window>:<codepoint[,codepoint...]>:{ ... }
+        let (target, selector) = rest.split_once(':').unwrap_or((rest, "*"));
+        (
+            String::new(),
+            selector.trim().to_string(),
+            target.trim().to_string(),
+        )
     } else if kind == "PARSELINE" {
         // on *:PARSELINE:<in|out|*>:<matchtext>:{ ... }
         // Keep the direction in `target` and the line matcher in `pattern`.
@@ -638,6 +651,12 @@ fn parse_braceless_event(header: &str, source_line: usize) -> Option<Event> {
         let selector = p.next().unwrap_or("").trim().to_ascii_lowercase();
         let command = p.next().unwrap_or("").trim().to_string();
         (String::new(), selector, String::new(), command)
+    } else if kind == "CHAR" {
+        let mut p = rest.splitn(3, ':');
+        let target = p.next().unwrap_or("").trim().to_string();
+        let selector = p.next().unwrap_or("*").trim().to_string();
+        let command = p.next().unwrap_or("").trim().to_string();
+        (String::new(), selector, target, command)
     } else if kind == "RAW" {
         // Existing jIRC compatibility form: `on *:RAW:001:<command>`.
         let mut p = rest.splitn(2, ':');
@@ -1765,5 +1784,34 @@ mod tests {
             engine.run_alias(&ctx, "#c", "t", ""),
             vec![Action::Send("PRIVMSG #c :hello continued".to_string())]
         );
+    }
+
+    #[test]
+    fn portable_tail_event_headers_keep_their_mirc_fields() {
+        let script = parse(
+            "on *:APPACTIVE:echo active\n\
+             on *:CHAR:@keys:65,97:echo char\n\
+             on *:HOTLINK:*help*:@:echo hot\n\
+             on *:SERV:dir*:echo serv\n\
+             on *:NOSOUND:echo missing",
+        );
+        assert_eq!(script.events.len(), 5);
+        assert_eq!(
+            (
+                script.events[1].target.as_str(),
+                script.events[1].selector.as_str()
+            ),
+            ("@keys", "65,97")
+        );
+        assert_eq!(
+            (
+                script.events[2].pattern.as_str(),
+                script.events[2].target.as_str()
+            ),
+            ("*help*", "@")
+        );
+        assert_eq!(script.events[3].pattern, "dir*");
+        assert!(script.events[0].target.is_empty());
+        assert!(script.events[4].target.is_empty());
     }
 }

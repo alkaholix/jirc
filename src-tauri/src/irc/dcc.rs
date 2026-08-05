@@ -578,6 +578,16 @@ pub struct DccManager {
 }
 
 impl DccManager {
+    fn fserve_snapshots(&self, server_id: &str) -> Vec<String> {
+        let prefix = format!("{server_id}\0fserve:");
+        self.fserves
+            .lock()
+            .unwrap()
+            .keys()
+            .filter_map(|key| key.strip_prefix(&prefix).map(str::to_owned))
+            .collect()
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -2040,6 +2050,17 @@ impl crate::script::eval::ScriptDcc for EngineDcc {
                 },
             )
         }));
+        items.extend(manager.fserve_snapshots(server_id).into_iter().map(|nick| {
+            (
+                Instant::now(),
+                crate::script::eval::DccInfo {
+                    kind: "fserve".into(),
+                    nick,
+                    status: "waiting".into(),
+                    ..Default::default()
+                },
+            )
+        }));
         items.sort_by_key(|(opened, _)| *opened);
         items.into_iter().map(|(_, info)| info).collect()
     }
@@ -2467,6 +2488,7 @@ async fn run_fserve(
         }
         let input = String::from_utf8_lossy(&buf).trim().to_string();
         buf.clear();
+        fire_fserve_event(&app, &server_id, &nick, &input, &cwd);
         let (command, argument) = input
             .split_once(char::is_whitespace)
             .map(|(a, b)| (a, b.trim()))
@@ -3102,6 +3124,28 @@ fn fire_chat_event(app: &AppHandle, server_id: &str, kind: &str, nick: &str, tex
             target,
             text: text.to_string(),
             params: text.split_whitespace().map(String::from).collect(),
+            ..Default::default()
+        },
+    );
+}
+
+fn fire_fserve_event(
+    app: &AppHandle,
+    server_id: &str,
+    nick: &str,
+    text: &str,
+    current_dir: &std::path::Path,
+) {
+    fire_dcc_script(
+        app,
+        server_id,
+        "SERV",
+        crate::script::eval::EventVars {
+            nick: nick.to_string(),
+            target: format!("!{nick}"),
+            text: text.to_string(),
+            params: text.split_whitespace().map(String::from).collect(),
+            current_dir: format!("{}{}", current_dir.display(), std::path::MAIN_SEPARATOR),
             ..Default::default()
         },
     );

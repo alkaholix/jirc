@@ -1,8 +1,12 @@
 //! Built-in mSL identifiers ($me, $nick, $rand, string functions, …).
 
+use std::io::{Read, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::eval::{eval_bool_public, wildcard_match, wildcard_match_cs, Runtime, SOCK_BR_KEY};
+use super::eval::{
+    eval_bool_public, wildcard_match, wildcard_match_cs, Runtime, CLIENT_IDLE_SINCE_KEY,
+    SOCK_BR_KEY,
+};
 use sha2::Digest; // brings the Digest trait into scope for Md5/Sha1/Sha2 too
 
 /// Evaluates `$name(args...)` with an optional `.property` suffix (empty when
@@ -11,6 +15,41 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
     rt.purge_expired();
     let a = |i: usize| args.get(i).cloned().unwrap_or_default();
     match name.to_ascii_lowercase().as_str() {
+        "hotlink" => match a(0).to_ascii_lowercase().as_str() {
+            "word" | "match" => match prop.to_ascii_lowercase().as_str() {
+                "pos" => rt.event.hotlink_pos.to_string(),
+                "type" => {
+                    let word = rt
+                        .event
+                        .text
+                        .trim_matches(|c: char| !c.is_alphanumeric() && !"#&!+%@._-:/".contains(c));
+                    if word.starts_with(['#', '&', '!', '+', '%']) {
+                        "channel"
+                    } else if word.starts_with("http://") || word.starts_with("https://") {
+                        "url"
+                    } else if rt.state.ial.iter().any(|(nick, _)| {
+                        rt.state
+                            .isupport
+                            .names_equal(nick, word.trim_start_matches('@'))
+                    }) {
+                        "nick"
+                    } else {
+                        "other"
+                    }
+                    .to_string()
+                }
+                _ => rt.event.text.clone(),
+            },
+            "event" => rt.event.hotlink_event.clone(),
+            "line" => {
+                if prop.eq_ignore_ascii_case("pos") {
+                    rt.event.hotlink_line.to_string()
+                } else {
+                    rt.event.hotlink_line_text.clone()
+                }
+            }
+            _ => String::new(),
+        },
         // Full local path in on FILESENT/FILERCVD/GETFAIL/SENDFAIL.
         "filename" => rt.event.filename.clone(),
         "dccid" => rt.event.dcc_id.clone(),
@@ -38,6 +77,29 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "bindip" => rt.dcc.bind_ip(),
         "passivedcc" => if rt.dcc.passive() { "on" } else { "off" }.to_string(),
         "me" => rt.my_nick.to_string(),
+        "abook" => eval_address_book(rt, args, prop),
+        "ip" => rt
+            .vars
+            .get(super::eval::CLIENT_LOCAL_IP_KEY)
+            .cloned()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| local_ip(&rt.state.server_ip)),
+        "host" => rt
+            .vars
+            .get(super::eval::CLIENT_LOCAL_HOST_KEY)
+            .cloned()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(local_hostname),
+        "idle" => {
+            let now = now_secs();
+            let since = rt
+                .vars
+                .entry(CLIENT_IDLE_SINCE_KEY.into())
+                .or_insert_with(|| now.to_string())
+                .parse::<u64>()
+                .unwrap_or(now);
+            now.saturating_sub(since).to_string()
+        }
         "pnick" => rt.event.pnick.clone(),
         "mnick" => rt.state.main_nick.clone(),
         "nick" => {
@@ -141,6 +203,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 })
             }
         }
+        "ibl" | "iel" | "iil" => eval_channel_list(rt, name, args, prop),
         // $active -> the name of the frontend's currently-focused window (the
         // channel/query/status buffer). Empty ($null) if none reported yet, as in
         // mIRC. Set by the UI via `script_set_active` on every buffer switch.
@@ -158,6 +221,19 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             .get(super::eval::V2_KEY)
             .cloned()
             .unwrap_or_default(),
+        // `$ifmatch` is mIRC's legacy name for the left operand retained in
+        // `$v1` by the most recent comparison.
+        "ifmatch" => rt
+            .vars
+            .get(super::eval::V1_KEY)
+            .cloned()
+            .unwrap_or_default(),
+        "eventid" => rt.event.event_id.clone(),
+        "eventparms" => rt.event.params.join(" "),
+        "modefirst" => bool_str(rt.event.mode_index == 1 && rt.event.mode_count > 0),
+        "modelast" => {
+            bool_str(rt.event.mode_count > 0 && rt.event.mode_index == rt.event.mode_count)
+        }
         // Numeric connection ids. $cid = this run's connection; $activecid = the
         // connection owning the focused window; both $null when unknown.
         "cid" => match rt.conns.cid_of(&rt.state.server_id) {
@@ -328,7 +404,39 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 })
             }
         }
-        "chat" | "send" | "get" => eval_dcc_ident(rt, name, args, prop),
+        "nickmode" => {
+            let modes = rt
+                .state
+                .isupport
+                .prefix_modes
+                .iter()
+                .map(|(mode, _)| *mode)
+                .collect::<String>();
+            if modes.is_empty() {
+                "ohv".into()
+            } else {
+                modes
+            }
+        }
+        "link" => {
+            let n = a(0).parse::<usize>().unwrap_or(0);
+            if n == 0 {
+                rt.state.links.len().to_string()
+            } else {
+                rt.state.links.get(n - 1).map_or_else(String::new, |link| {
+                    match prop.to_ascii_lowercase().as_str() {
+                        "" | "addr" => link.addr.clone(),
+                        "ip" => link.ip.clone(),
+                        "level" => link.level.to_string(),
+                        "info" => link.info.clone(),
+                        _ => String::new(),
+                    }
+                })
+            }
+        }
+        "cb" => eval_clipboard(rt, args, prop),
+        "disk" => eval_disk(rt, args, prop),
+        "chat" | "send" | "get" | "fserve" => eval_dcc_ident(rt, name, args, prop),
         "onchan" => {
             // $onchan(#chan) -> are you in that channel?
             if rt
@@ -963,6 +1071,150 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "switchbar" => client_on_off(rt, super::eval::CLIENT_SWITCHBAR_KEY),
         "menubar" => client_on_off(rt, super::eval::CLIENT_MENUBAR_KEY),
         "tips" => client_on_off(rt, super::eval::CLIENT_TIPS_KEY),
+        "compact" | "cmdbox" | "ctrlenter" | "inpaste" => "$false".into(),
+        "ebeeps" => rt
+            .vars
+            .get(super::eval::CLIENT_EBEEPS_KEY)
+            .cloned()
+            .unwrap_or_else(|| "$false".into()),
+        "donotdisturb" => rt
+            .vars
+            .get(super::eval::CLIENT_DND_KEY)
+            .cloned()
+            .unwrap_or_else(|| "$false".into()),
+        "codepage" => "65001".into(),
+        "bigfloat" => rt
+            .vars
+            .get(super::eval::CLIENT_BIGFLOAT_KEY)
+            .cloned()
+            .unwrap_or_else(|| "$false".into()),
+        "dlevel" => rt
+            .vars
+            .get(super::eval::CLIENT_DLEVEL_KEY)
+            .cloned()
+            .unwrap_or_else(|| "1".into()),
+        "dccignore" => rt
+            .vars
+            .get(super::eval::CLIENT_DCCIGNORE_KEY)
+            .cloned()
+            .unwrap_or_else(|| "0".into()),
+        "debug" => rt
+            .vars
+            .get(super::eval::CLIENT_DEBUG_KEY)
+            .cloned()
+            .unwrap_or_else(|| "0".into()),
+        "error" => rt
+            .vars
+            .get(super::eval::CLIENT_ERROR_KEY)
+            .cloned()
+            .unwrap_or_default(),
+        "isadmin" => "$false".into(),
+        "lock" | "locked" => "$false".into(),
+        "agent" => {
+            if a(0) == "0" {
+                "0".into()
+            } else {
+                String::new()
+            }
+        }
+        "agentname" | "agentstat" | "agentver" | "vcmd" | "vcmdstat" | "vcmdver" => String::new(),
+        "inmidi" | "insong" | "inwave" => "$false".into(),
+        "ssldll" => "rustls".into(),
+        "ssllibdll" => "rustls-ring".into(),
+        "sslready" => "$true".into(),
+        "vol" => rt
+            .vars
+            .get(super::eval::CLIENT_SOUND_VOLUME_KEY)
+            .cloned()
+            .unwrap_or_else(|| "100".into()),
+        "creq" => rt
+            .vars
+            .get(super::eval::CLIENT_CREQ_KEY)
+            .cloned()
+            .unwrap_or_else(|| "ask".into()),
+        "sreq" => rt
+            .vars
+            .get(super::eval::CLIENT_SREQ_KEY)
+            .cloned()
+            .unwrap_or_else(|| "ask".into()),
+        "titlebar" => {
+            let window = a(0);
+            if window.starts_with('@') {
+                rt.windows
+                    .get(&window)
+                    .map(|item| item.title.clone())
+                    .unwrap_or_default()
+            } else {
+                "jIRC".into()
+            }
+        }
+        "leftwin" => rt
+            .wins
+            .last_closed
+            .as_ref()
+            .map(|(_, _, name)| name.clone())
+            .unwrap_or_default(),
+        "leftwincid" => rt
+            .wins
+            .last_closed
+            .as_ref()
+            .map(|(_, server_id, _)| rt.conns.cid_of(server_id))
+            .filter(|cid| *cid != 0)
+            .map(|cid| cid.to_string())
+            .unwrap_or_default(),
+        "leftwinwid" => rt
+            .wins
+            .last_closed
+            .as_ref()
+            .map(|(wid, _, _)| wid.to_string())
+            .unwrap_or_default(),
+        "hotline" => rt.event.hotlink_line_text.clone(),
+        "hotlinepos" => format!("{} {}", rt.event.hotlink_line, rt.event.hotlink_pos),
+        "snotify" => String::new(),
+        "dbuw" => rt
+            .vars
+            .get(super::eval::CLIENT_DESKTOP_WIDTH_KEY)
+            .cloned()
+            .unwrap_or_else(|| "0".into()),
+        "dbuh" => rt
+            .vars
+            .get(super::eval::CLIENT_DESKTOP_HEIGHT_KEY)
+            .cloned()
+            .unwrap_or_else(|| "0".into()),
+        "dqwindow" => "DCC Transfers".into(),
+        "emailaddr" => rt
+            .vars
+            .get(super::eval::CLIENT_EMAIL_KEY)
+            .cloned()
+            .unwrap_or_default(),
+        "speak" => "$false".into(),
+        "trust" => bool_str(rt.state.tls_cert_valid),
+        "url" => rt
+            .webviews
+            .snapshot(&rt.state.server_id)
+            .into_iter()
+            .find(|entry| entry.name.eq_ignore_ascii_case(&rt.active))
+            .map(|entry| entry.url)
+            .unwrap_or_default(),
+        "urlget" => {
+            if a(0) == "0" {
+                "0".into()
+            } else {
+                String::new()
+            }
+        }
+        "cnick" => {
+            if a(0).eq_ignore_ascii_case(rt.my_nick) {
+                rt.vars
+                    .get(super::eval::CLIENT_SELF_COLOR_KEY)
+                    .map(|value| css_hex_to_mirc_rgb(value))
+                    .unwrap_or(7971583)
+                    .to_string()
+            } else {
+                String::new()
+            }
+        }
+        "color" => eval_color(&a(0), prop),
         "tip" => eval_tip_ident(rt, args, prop),
         "menu" => rt.event.menu.clone(),
         "menutype" => {
@@ -1156,9 +1408,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 "server" if rt.state.connect_time != 0 => {
                     Some(now_secs().saturating_sub(rt.state.connect_time) * 1000)
                 }
-                // A portable system-boot clock is not available in std. Returning
-                // $null is safer than reporting the jIRC process as OS uptime.
-                "system" => None,
+                "system" => Some(sysinfo::System::uptime() * 1000),
                 _ => None,
             };
             milliseconds.map_or_else(String::new, |milliseconds| match a(1).as_str() {
@@ -1247,6 +1497,54 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 .insert(super::eval::LASTINPUT_KEY.to_string(), v.clone());
             v
         }
+        "sfile" => {
+            let files = rt.input.pick_files(&a(0), &a(1), false);
+            store_file_selection(rt, &files);
+            files.into_iter().next().unwrap_or_default()
+        }
+        "sdir" => {
+            let folder = rt.input.pick_folder(&a(0), &a(1));
+            rt.vars.insert(
+                super::eval::SFSTATE_KEY.into(),
+                if folder.is_some() {
+                    String::new()
+                } else {
+                    "cancel".into()
+                },
+            );
+            rt.vars
+                .insert(super::eval::MSFILE_KEY.into(), String::new());
+            folder.unwrap_or_default()
+        }
+        "msfile" => {
+            let selector = a(0);
+            if let Ok(n) = selector.parse::<usize>() {
+                let files = rt
+                    .vars
+                    .get(super::eval::MSFILE_KEY)
+                    .map(|value| {
+                        value
+                            .split('\u{1f}')
+                            .filter(|part| !part.is_empty())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                if n == 0 {
+                    files.len().to_string()
+                } else {
+                    files.get(n - 1).copied().unwrap_or("").to_string()
+                }
+            } else {
+                let files = rt.input.pick_files(&selector, &a(1), true);
+                store_file_selection(rt, &files);
+                files.len().to_string()
+            }
+        }
+        "sfstate" => rt
+            .vars
+            .get(super::eval::SFSTATE_KEY)
+            .cloned()
+            .unwrap_or_default(),
         "str" => {
             let n: usize = a(1).parse().unwrap_or(0);
             a(0).repeat(n)
@@ -1366,6 +1664,42 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "mircdir" => {
             format!("{}{}", rt.data_dir.display(), std::path::MAIN_SEPARATOR)
         }
+        "logdir" => data_subdir(rt, "logs"),
+        "getdir" => data_subdir(rt, "dcc"),
+        "mididir" => data_subdir(rt, "sounds"),
+        "sound" => {
+            let base = std::path::PathBuf::from(data_subdir(rt, "sounds"));
+            let name = a(0);
+            if name.is_empty() {
+                format!("{}{}", base.display(), std::path::MAIN_SEPARATOR)
+            } else {
+                base.join(std::path::Path::new(&name).file_name().unwrap_or_default())
+                    .to_string_lossy()
+                    .into_owned()
+            }
+        }
+        "cd" => {
+            if rt.event.current_dir.is_empty() {
+                format!("{}{}", rt.data_dir.display(), std::path::MAIN_SEPARATOR)
+            } else {
+                rt.event.current_dir.clone()
+            }
+        }
+        "mircini" => rt
+            .data_dir
+            .parent()
+            .unwrap_or(&rt.data_dir)
+            .join("profiles.json")
+            .to_string_lossy()
+            .into_owned(),
+        "mklogfn" => {
+            let mut name = mkfn(&a(0));
+            if !name.to_ascii_lowercase().ends_with(".log") {
+                name.push_str(".log");
+            }
+            name
+        }
+        "sysdir" => system_directory(),
         "iif" => {
             if eval_bool_public(&a(0)) {
                 a(1)
@@ -1443,6 +1777,11 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             let crc = CRC64.get_or_init(|| crc::Crc::<u64>::new(&crc::CRC_64_XZ));
             format!("{:016X}", crc.checksum(&hash_input(rt, &a(0), &a(1))))
         }
+        "hash" => mirc_legacy_hash(&a(0), &a(1)),
+        "compress" => compress_ident(rt, &a(0), &a(1), false),
+        "decompress" => compress_ident(rt, &a(0), &a(1), true),
+        "zip" => zip_ident(rt, args, prop),
+        "argon2" => argon2_ident(args),
         // $hmac(text, key, hash, N) — keyed hash; hash default sha1, N text/binvar/file.
         "hmac" => {
             let data = hash_input(rt, &a(0), &a(3));
@@ -1667,9 +2006,33 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             if n == 0 {
                 out.len().to_string()
             } else {
-                out.get(n - 1).cloned().unwrap_or_default()
+                let value = out.get(n - 1).cloned().unwrap_or_default();
+                rt.vars.insert(
+                    if name == "finddir" {
+                        super::eval::FINDDIRN_KEY
+                    } else {
+                        super::eval::FINDFILEN_KEY
+                    }
+                    .into(),
+                    if value.is_empty() {
+                        "0".into()
+                    } else {
+                        n.to_string()
+                    },
+                );
+                value
             }
         }
+        "finddirn" => rt
+            .vars
+            .get(super::eval::FINDDIRN_KEY)
+            .cloned()
+            .unwrap_or_else(|| "0".into()),
+        "findfilen" => rt
+            .vars
+            .get(super::eval::FINDFILEN_KEY)
+            .cloned()
+            .unwrap_or_else(|| "0".into()),
         // ISUPPORT-derived: $prefix "(modes)chars", $chanmodes "A,B,C,D".
         "prefix" => {
             let is = &rt.state.isupport;
@@ -1959,6 +2322,52 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 rt.windows.line(&a(0), n)
             }
         }
+        "fline" => {
+            let window = a(0);
+            let expression = a(1);
+            let nth = a(2).parse::<usize>().unwrap_or(1);
+            let flags = a(3).parse::<u32>().unwrap_or(0);
+            let start = a(4).parse::<usize>().unwrap_or(1).max(1);
+            let Some(lines) = rt.windows.get(&window).map(|window| window.lines.clone()) else {
+                rt.vars.insert(super::eval::FLINEN_KEY.into(), "0".into());
+                return if nth == 0 { "0".into() } else { String::new() };
+            };
+            let regex = flags & 2 != 0;
+            let matches = lines
+                .iter()
+                .enumerate()
+                .skip(start - 1)
+                .filter(|(_, line)| {
+                    let plain = strip_codes_opts(line, "");
+                    if regex {
+                        mirc_regex_is_match(&plain, &expression)
+                    } else {
+                        wildcard_match(&expression, &plain)
+                    }
+                })
+                .map(|(index, line)| (index + 1, line.clone()))
+                .collect::<Vec<_>>();
+            if nth == 0 {
+                rt.vars.insert(super::eval::FLINEN_KEY.into(), "0".into());
+                matches.len().to_string()
+            } else if let Some((line_number, text)) = matches.get(nth - 1) {
+                rt.vars
+                    .insert(super::eval::FLINEN_KEY.into(), line_number.to_string());
+                if prop.eq_ignore_ascii_case("text") {
+                    text.clone()
+                } else {
+                    line_number.to_string()
+                }
+            } else {
+                rt.vars.insert(super::eval::FLINEN_KEY.into(), "0".into());
+                String::new()
+            }
+        }
+        "flinen" => rt
+            .vars
+            .get(super::eval::FLINEN_KEY)
+            .cloned()
+            .unwrap_or_else(|| "0".into()),
         // `$sline(@name,N)` — selected text/count; `.ln` is its source line.
         "sline" => {
             let name = a(0);
@@ -2105,6 +2514,19 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "height" => {
             let size = a(2).parse::<f64>().unwrap_or(14.0).abs();
             (size * 1.2).ceil().to_string()
+        }
+        "wrap" => eval_wrap(args),
+        "pic" => {
+            let window = a(0);
+            let Some(item) = rt.windows.get(&window) else {
+                return String::new();
+            };
+            match prop.to_ascii_lowercase().as_str() {
+                "width" => item.bitmap_width.to_string(),
+                "height" => item.bitmap_height.to_string(),
+                "size" => format!("{} {}", item.bitmap_width, item.bitmap_height),
+                _ => window,
+            }
         }
         "width" => {
             let size = a(2).parse::<f64>().unwrap_or(14.0).abs();
@@ -3283,6 +3705,36 @@ fn channel_names_equal(state: &crate::irc::state::StateSnapshot, known: &str, qu
     state.isupport.names_equal(known, query)
 }
 
+fn eval_channel_list(rt: &Runtime, name: &str, args: &[String], prop: &str) -> String {
+    let channel_name = args.first().map(String::as_str).unwrap_or("");
+    let Some(channel) = find_channel(&rt.state, channel_name) else {
+        return String::new();
+    };
+    let entries = match name {
+        "ibl" => &channel.ban_entries,
+        "iel" => &channel.except_entries,
+        "iil" => &channel.invite_entries,
+        _ => return String::new(),
+    };
+    let n = args
+        .get(1)
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    if n == 0 {
+        return entries.len().to_string();
+    }
+    let Some(entry) = entries.get(n - 1) else {
+        return String::new();
+    };
+    match prop.to_ascii_lowercase().as_str() {
+        "" => entry.mask.clone(),
+        "by" => entry.by.clone(),
+        "ctime" => entry.ctime.to_string(),
+        "date" => asctime(entry.ctime as i64, "ddd mmm dd HH:nn:ss yyyy"),
+        _ => String::new(),
+    }
+}
+
 fn find_channel<'a>(
     state: &'a crate::irc::state::StateSnapshot,
     query: &str,
@@ -4353,6 +4805,612 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+fn local_hostname() -> String {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .ok()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| "localhost".into())
+}
+
+fn mirc_legacy_hash(text: &str, bits_arg: &str) -> String {
+    if bits_arg.is_empty() {
+        return text.to_string();
+    }
+    let Ok(bits) = bits_arg.parse::<u32>() else {
+        return String::new();
+    };
+    if !(2..=32).contains(&bits) || text.is_empty() {
+        return String::new();
+    }
+    let mut value = 0u32;
+    for byte in text.as_bytes() {
+        let carry = value >> 24;
+        value = value.wrapping_add(carry).wrapping_add(u32::from(*byte));
+        value = value.wrapping_mul(256);
+    }
+    let shift = 32 - bits;
+    let high = value >> shift;
+    let remainder_mask = if shift == 32 {
+        u32::MAX
+    } else {
+        (1u32 << shift).wrapping_sub(1)
+    };
+    let rounded = high.wrapping_add(u32::from(shift > 0 && value & remainder_mask != 0));
+    let modulus = if bits == 32 {
+        u64::from(u32::MAX) + 1
+    } else {
+        1u64 << bits
+    };
+    (u64::from(rounded) % modulus).to_string()
+}
+
+fn compress_ident(rt: &mut Runtime, target: &str, switches: &str, decompress: bool) -> String {
+    let binary = switches.to_ascii_lowercase().contains('b');
+    let method = switches
+        .to_ascii_lowercase()
+        .split('m')
+        .nth(1)
+        .and_then(|rest| rest.chars().next())
+        .and_then(|ch| ch.to_digit(10))
+        .unwrap_or(2);
+    let level = switches
+        .to_ascii_lowercase()
+        .split('l')
+        .nth(1)
+        .and_then(|rest| rest.chars().next())
+        .and_then(|ch| ch.to_digit(10))
+        .unwrap_or(6)
+        .min(9);
+    let input = if binary {
+        let Some(bytes) = rt.bins.get(target).cloned() else {
+            return "0".into();
+        };
+        bytes
+    } else {
+        let path = super::eval::sandbox_path(&rt.data_dir, target);
+        let Ok(bytes) = std::fs::read(path) else {
+            return "0".into();
+        };
+        bytes
+    };
+    let result = if decompress {
+        decompress_bytes(&input, method)
+    } else {
+        compress_bytes(&input, method, level)
+    };
+    let Ok(output) = result else {
+        return "0".into();
+    };
+    if binary {
+        rt.bins.set(target, 1, &output, true);
+        "1".into()
+    } else {
+        let path = super::eval::sandbox_path(&rt.data_dir, target);
+        if std::fs::write(path, output).is_ok() {
+            "1".into()
+        } else {
+            "0".into()
+        }
+    }
+}
+
+fn compress_bytes(input: &[u8], method: u32, level: u32) -> std::io::Result<Vec<u8>> {
+    let compression = flate2::Compression::new(level);
+    let mut output = Vec::new();
+    match method {
+        1 => {
+            let mut encoder = flate2::write::DeflateEncoder::new(output, compression);
+            encoder.write_all(input)?;
+            output = encoder.finish()?;
+        }
+        3.. => {
+            let mut encoder = flate2::write::GzEncoder::new(output, compression);
+            encoder.write_all(input)?;
+            output = encoder.finish()?;
+        }
+        _ => {
+            let mut encoder = flate2::write::ZlibEncoder::new(output, compression);
+            encoder.write_all(input)?;
+            output = encoder.finish()?;
+        }
+    }
+    Ok(output)
+}
+
+fn decompress_bytes(input: &[u8], method: u32) -> std::io::Result<Vec<u8>> {
+    let mut output = Vec::new();
+    match method {
+        1 => flate2::read::DeflateDecoder::new(input).read_to_end(&mut output)?,
+        3 => flate2::read::GzDecoder::new(input).read_to_end(&mut output)?,
+        _ => flate2::read::ZlibDecoder::new(input).read_to_end(&mut output)?,
+    };
+    Ok(output)
+}
+
+fn zip_ident(rt: &Runtime, args: &[String], prop: &str) -> String {
+    let archive_path =
+        super::eval::sandbox_path(&rt.data_dir, args.first().map(String::as_str).unwrap_or(""));
+    let operation = args
+        .get(1)
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_default();
+    let mode = operation.chars().next().unwrap_or('\0');
+    match mode {
+        'c' => {
+            let source = super::eval::sandbox_path(
+                &rt.data_dir,
+                args.get(2).map(String::as_str).unwrap_or(""),
+            );
+            if archive_path.exists() && !operation.contains('o') {
+                return "0".into();
+            }
+            bool_str(create_zip(&archive_path, &source).is_ok())
+        }
+        't' => bool_str(
+            std::fs::File::open(&archive_path)
+                .ok()
+                .and_then(|file| zip::ZipArchive::new(file).ok())
+                .is_some(),
+        ),
+        'l' => {
+            let n = args
+                .get(2)
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(0);
+            let Ok(file) = std::fs::File::open(&archive_path) else {
+                return String::new();
+            };
+            let Ok(mut archive) = zip::ZipArchive::new(file) else {
+                return String::new();
+            };
+            if n == 0 {
+                return archive.len().to_string();
+            }
+            let Ok(entry) = archive.by_index(n - 1) else {
+                return String::new();
+            };
+            if prop.eq_ignore_ascii_case("size") {
+                entry.size().to_string()
+            } else {
+                entry.name().to_string()
+            }
+        }
+        'e' => {
+            let destination = super::eval::sandbox_path(
+                &rt.data_dir,
+                args.get(2).map(String::as_str).unwrap_or(""),
+            );
+            if destination.exists() && !operation.contains('o') {
+                return "0".into();
+            }
+            bool_str(extract_zip(&archive_path, &destination, operation.contains('o')).is_ok())
+        }
+        _ => String::new(),
+    }
+}
+
+fn create_zip(archive_path: &std::path::Path, source: &std::path::Path) -> Result<(), String> {
+    let file = std::fs::File::create(archive_path).map_err(|error| error.to_string())?;
+    let mut archive = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    let root = source.parent().unwrap_or(source);
+    let mut entries = Vec::new();
+    collect_paths(source, &mut entries).map_err(|error| error.to_string())?;
+    for path in entries {
+        let name = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        if path.is_dir() {
+            archive
+                .add_directory(format!("{}/", name.trim_end_matches('/')), options)
+                .map_err(|error| error.to_string())?;
+        } else {
+            archive
+                .start_file(name, options)
+                .map_err(|error| error.to_string())?;
+            let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+            archive
+                .write_all(&bytes)
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    archive.finish().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn collect_paths(
+    path: &std::path::Path,
+    output: &mut Vec<std::path::PathBuf>,
+) -> std::io::Result<()> {
+    if !path.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "missing source",
+        ));
+    }
+    output.push(path.to_path_buf());
+    if path.is_dir() {
+        let mut children = std::fs::read_dir(path)?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>();
+        children.sort();
+        for child in children {
+            collect_paths(&child, output)?;
+        }
+    }
+    Ok(())
+}
+
+fn extract_zip(
+    archive_path: &std::path::Path,
+    destination: &std::path::Path,
+    overwrite: bool,
+) -> Result<(), String> {
+    let file = std::fs::File::open(archive_path).map_err(|error| error.to_string())?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(destination).map_err(|error| error.to_string())?;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
+        let Some(relative) = entry.enclosed_name() else {
+            return Err("unsafe zip entry".into());
+        };
+        let output = destination.join(relative);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&output).map_err(|error| error.to_string())?;
+        } else {
+            if output.exists() && !overwrite {
+                return Err("destination exists".into());
+            }
+            if let Some(parent) = output.parent() {
+                std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
+            let mut file = std::fs::File::create(output).map_err(|error| error.to_string())?;
+            std::io::copy(&mut entry, &mut file).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Determine the source address the OS would use to reach the current IRC
+/// server. UDP `connect` performs route selection without sending a packet.
+fn local_ip(server_ip: &str) -> String {
+    let remote = server_ip
+        .parse::<std::net::IpAddr>()
+        .ok()
+        .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::new(1, 1, 1, 1)));
+    let bind = if remote.is_ipv6() {
+        "[::]:0"
+    } else {
+        "0.0.0.0:0"
+    };
+    std::net::UdpSocket::bind(bind)
+        .and_then(|socket| {
+            socket.connect(std::net::SocketAddr::new(remote, 9))?;
+            socket.local_addr()
+        })
+        .map(|address| address.ip().to_string())
+        .unwrap_or_else(|_| {
+            if remote.is_ipv6() {
+                "::1".into()
+            } else {
+                "127.0.0.1".into()
+            }
+        })
+}
+
+fn data_subdir(rt: &Runtime, name: &str) -> String {
+    let path = rt.data_dir.parent().unwrap_or(&rt.data_dir).join(name);
+    format!("{}{}", path.display(), std::path::MAIN_SEPARATOR)
+}
+
+fn system_directory() -> String {
+    #[cfg(windows)]
+    let path = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
+    #[cfg(not(windows))]
+    let path = "/usr".to_string();
+    format!(
+        "{}{}",
+        path.trim_end_matches(['/', '\\']),
+        std::path::MAIN_SEPARATOR
+    )
+}
+
+fn eval_clipboard(rt: &mut Runtime, args: &[String], prop: &str) -> String {
+    let text = arboard::Clipboard::new()
+        .and_then(|mut clipboard| clipboard.get_text())
+        .unwrap_or_default()
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
+    let lines = text.split('\n').collect::<Vec<_>>();
+    let selector = args.first().map(String::as_str).unwrap_or("-1");
+    let value = match selector.parse::<i64>().unwrap_or(-1) {
+        -1 => text.replace('\n', "\r\n"),
+        0 => return lines.len().to_string(),
+        n if n > 0 => lines.get(n as usize - 1).copied().unwrap_or("").to_string(),
+        _ => String::new(),
+    };
+    if let Some(destination) = args.get(2) {
+        if destination.starts_with('&') {
+            rt.bins.set(destination, 1, value.as_bytes(), true);
+        } else if destination.starts_with('%') {
+            rt.vars
+                .insert(destination.to_ascii_lowercase(), value.clone());
+        }
+    }
+    match prop.to_ascii_lowercase().as_str() {
+        "len" | "utflen" => value.chars().count().to_string(),
+        _ => value,
+    }
+}
+
+fn store_file_selection(rt: &mut Runtime, files: &[String]) {
+    rt.vars
+        .insert(super::eval::MSFILE_KEY.into(), files.join("\u{1f}"));
+    rt.vars.insert(
+        super::eval::SFSTATE_KEY.into(),
+        if files.is_empty() {
+            "cancel".into()
+        } else {
+            String::new()
+        },
+    );
+}
+
+fn eval_disk(rt: &Runtime, args: &[String], prop: &str) -> String {
+    let base = rt.data_dir.parent().unwrap_or(&rt.data_dir);
+    let selector = args.first().map(String::as_str).unwrap_or("1");
+    if selector == "0" {
+        return "1".into();
+    }
+    let path = if selector.parse::<usize>().is_ok() {
+        base.to_path_buf()
+    } else {
+        std::path::PathBuf::from(selector)
+    };
+    match prop.to_ascii_lowercase().as_str() {
+        "" => bool_str(path.exists()),
+        "type" => {
+            if path.exists() {
+                "fixed".into()
+            } else {
+                "unknown".into()
+            }
+        }
+        "free" => fs2::available_space(&path)
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        "size" => fs2::total_space(&path)
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        "path" => format!("{}{}", path.display(), std::path::MAIN_SEPARATOR),
+        "label" | "unc" => String::new(),
+        _ => String::new(),
+    }
+}
+
+fn eval_address_book(rt: &Runtime, args: &[String], prop: &str) -> String {
+    let path = rt
+        .data_dir
+        .parent()
+        .unwrap_or(&rt.data_dir)
+        .join("addressbook.json");
+    let entries = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Vec<serde_json::Value>>(&text).ok())
+        .unwrap_or_default();
+    let selector = args.first().map(String::as_str).unwrap_or("*");
+    let mut matches = if let Ok(index) = selector.parse::<usize>() {
+        if index == 0 {
+            entries.clone()
+        } else {
+            entries.get(index - 1).cloned().into_iter().collect()
+        }
+    } else {
+        entries
+            .iter()
+            .filter(|entry| {
+                wildcard_match(
+                    selector,
+                    entry.get("nick").and_then(|v| v.as_str()).unwrap_or(""),
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    if args.get(1).is_some_and(|value| value == "0") {
+        return matches.len().to_string();
+    }
+    let selected = args
+        .get(1)
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(1);
+    let Some(entry) = selected
+        .checked_sub(1)
+        .and_then(|index| matches.get_mut(index))
+    else {
+        return String::new();
+    };
+    let property = prop.to_ascii_lowercase();
+    if let Some(note_number) = property
+        .strip_prefix("note")
+        .and_then(|value| value.parse::<usize>().ok())
+    {
+        return entry
+            .get("notes")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .lines()
+            .nth(note_number.saturating_sub(1))
+            .unwrap_or("")
+            .to_string();
+    }
+    let key = match property.as_str() {
+        "" | "nick" => "nick",
+        "info" => "name",
+        "email" => "email",
+        "website" => "website",
+        "picture" | "ipaddr" => return String::new(),
+        _ => return String::new(),
+    };
+    entry
+        .get(key)
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn eval_wrap(args: &[String]) -> String {
+    let text = args.first().cloned().unwrap_or_default();
+    let size = args
+        .get(2)
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or(14.0)
+        .abs()
+        .max(1.0);
+    let width = args
+        .get(3)
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or(1.0)
+        .max(1.0);
+    let options = args
+        .get(4)
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_else(|| "w1".into());
+    let word_wrap = options == "1" || !options.contains("w0");
+    let chars_per_line = (width / (size * 0.6)).floor().max(1.0) as usize;
+    let mut lines = Vec::new();
+    for physical in text.lines() {
+        let mut remaining = physical.trim_end().to_string();
+        while remaining.chars().count() > chars_per_line {
+            let chars = remaining.char_indices().collect::<Vec<_>>();
+            let byte_limit = chars
+                .get(chars_per_line)
+                .map(|(offset, _)| *offset)
+                .unwrap_or(remaining.len());
+            let split = if word_wrap {
+                remaining[..byte_limit]
+                    .rfind(char::is_whitespace)
+                    .filter(|offset| *offset > 0)
+                    .unwrap_or(byte_limit)
+            } else {
+                byte_limit
+            };
+            lines.push(remaining[..split].trim_end().to_string());
+            remaining = remaining[split..].trim_start().to_string();
+        }
+        lines.push(remaining);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    let n = args
+        .last()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(1);
+    if n == 0 {
+        lines.len().to_string()
+    } else {
+        lines.get(n - 1).cloned().unwrap_or_default()
+    }
+}
+
+fn argon2_ident(args: &[String]) -> String {
+    use argon2::{Algorithm, Argon2, Params, Version};
+    let Some(password) = args.first() else {
+        return String::new();
+    };
+    let Some(salt) = args.get(1) else {
+        return String::new();
+    };
+    let iterations = args
+        .get(2)
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(3)
+        .max(1);
+    let memory = args
+        .get(3)
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(19_456)
+        .max(8);
+    let lanes = args
+        .get(4)
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(1)
+        .max(1);
+    let length = args
+        .get(5)
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(32)
+        .clamp(4, 1024);
+    let Ok(params) = Params::new(memory, iterations, lanes, Some(length)) else {
+        return String::new();
+    };
+    let mut output = vec![0u8; length];
+    if Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
+        .hash_password_into(password.as_bytes(), salt.as_bytes(), &mut output)
+        .is_err()
+    {
+        return String::new();
+    }
+    hex_of(output)
+}
+
+fn eval_color(selector: &str, prop: &str) -> String {
+    const COLORS: [(&str, u32); 16] = [
+        ("white", 0xffffff),
+        ("black", 0x000000),
+        ("blue", 0x7f0000),
+        ("green", 0x009300),
+        ("red", 0x0000ff),
+        ("brown", 0x00007f),
+        ("purple", 0x9c009c),
+        ("orange", 0x007ffc),
+        ("yellow", 0x00ffff),
+        ("lightgreen", 0x00fc00),
+        ("cyan", 0x939300),
+        ("lightcyan", 0xffff00),
+        ("lightblue", 0xfc0000),
+        ("pink", 0xff00ff),
+        ("grey", 0x7f7f7f),
+        ("lightgrey", 0xd2d2d2),
+    ];
+    let selected = selector
+        .parse::<usize>()
+        .ok()
+        .and_then(|index| COLORS.get(index))
+        .or_else(|| {
+            COLORS
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(selector))
+        });
+    selected.map_or_else(String::new, |(name, rgb)| {
+        if prop.eq_ignore_ascii_case("name") {
+            (*name).into()
+        } else {
+            rgb.to_string()
+        }
+    })
+}
+
+fn css_hex_to_mirc_rgb(value: &str) -> u32 {
+    let hex = value.trim().trim_start_matches('#');
+    if hex.len() != 6 {
+        return 0;
+    }
+    let Ok(rgb) = u32::from_str_radix(hex, 16) else {
+        return 0;
+    };
+    let red = (rgb >> 16) & 0xff;
+    let green = (rgb >> 8) & 0xff;
+    let blue = rgb & 0xff;
+    red | (green << 8) | (blue << 16)
+}
+
 /// Formats an integer with thousands separators (for `$bytes`).
 fn comma_format(n: i64) -> String {
     let s = n.unsigned_abs().to_string();
@@ -4963,6 +6021,75 @@ pub fn eval_hfind(rt: &mut Runtime, raw: &[String], prop: &str) -> String {
     eval_hfind_expanded(rt, &args, prop, output.as_deref())
 }
 
+/// Raw `$findfile`/`$finddir` entry point. The fifth and later comma-separated
+/// fields form a callback command and must not be eagerly expanded.
+pub fn eval_find_entries(rt: &mut Runtime, name: &str, raw: &[String]) -> String {
+    let mut args = raw
+        .iter()
+        .take(4)
+        .map(|argument| rt.expand(argument))
+        .collect::<Vec<_>>();
+    while args.len() < 4 {
+        args.push(String::new());
+    }
+    let directory = args[0].clone();
+    let wildcard = args[1].clone();
+    let requested = args[2].parse::<usize>().unwrap_or(1);
+    let depth = args[3].parse::<usize>().ok().filter(|depth| *depth > 0);
+    let base = super::eval::sandbox_path(&rt.data_dir, &directory);
+    let directories = name.eq_ignore_ascii_case("finddir");
+    let mut entries = Vec::new();
+    find_entries(&base, &wildcard, directories, depth, 1, &mut entries);
+    entries.sort_by_key(|path| path.to_ascii_lowercase());
+
+    let key = if directories {
+        super::eval::FINDDIRN_KEY
+    } else {
+        super::eval::FINDFILEN_KEY
+    };
+    let callback = (raw.len() > 4).then(|| raw[4..].join(","));
+    if let Some(callback) = callback.filter(|value| !value.trim().is_empty()) {
+        let starts_with_destination =
+            callback.trim_start().starts_with('@') || callback.trim_start().starts_with('%');
+        let expanded_destination = starts_with_destination
+            .then(|| rt.expand(&callback))
+            .filter(|value| value.starts_with('@'));
+        let mut processed = 0usize;
+        for (index, path) in entries.iter().enumerate() {
+            rt.vars.insert(key.into(), (index + 1).to_string());
+            processed += 1;
+            if let Some(window) = &expanded_destination {
+                rt.actions.push(super::eval::Action::WindowLine {
+                    name: window.clone(),
+                    op: "add".into(),
+                    n: 0,
+                    text: path.clone(),
+                });
+            } else if rt.run_hfind_callback(&callback, path) {
+                break;
+            }
+        }
+        rt.vars.insert(key.into(), processed.to_string());
+        return processed.to_string();
+    }
+
+    if requested == 0 {
+        rt.vars.insert(key.into(), entries.len().to_string());
+        entries.len().to_string()
+    } else {
+        let value = entries.get(requested - 1).cloned().unwrap_or_default();
+        rt.vars.insert(
+            key.into(),
+            if value.is_empty() {
+                "0".into()
+            } else {
+                requested.to_string()
+            },
+        );
+        value
+    }
+}
+
 fn eval_hfind_expanded(
     rt: &mut Runtime,
     args: &[String],
@@ -5313,6 +6440,7 @@ fn eval_dcc_ident(rt: &Runtime, name: &str, args: &[String], prop: &str) -> Stri
     let kind = match name.to_ascii_lowercase().as_str() {
         "chat" => "chat",
         "send" => "send",
+        "fserve" => "fserve",
         _ => "recv",
     };
     let items: Vec<_> = rt
@@ -6292,7 +7420,7 @@ mod tests {
         assert!(e("timestamp", &[]).starts_with('['));
         assert!(e("ticksqpc", &[]).parse::<u64>().is_ok());
         assert!(e("uptime", &["mirc", "3"]).parse::<u64>().is_ok());
-        assert_eq!(e("uptime", &["system"]), "");
+        assert!(e("uptime", &["system"]).parse::<u64>().unwrap() > 0);
         assert_eq!(e("remote", &[]), "7");
         assert_eq!(e("starting", &[]), "0");
         assert_eq!(e("exiting", &[]), "0");
@@ -6337,6 +7465,62 @@ mod tests {
             cfg!(windows)
         );
 
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn completed_data_identifiers_match_documented_formats() {
+        assert_eq!(mirc_legacy_hash("abc", "32"), "1633837824");
+        assert_eq!(mirc_legacy_hash("test", "32"), "1702094848");
+        assert_eq!(mirc_legacy_hash("plain", ""), "plain");
+        assert!(mirc_legacy_hash("x", "1").is_empty());
+
+        let source = b"one two three one two three";
+        for method in [1, 2, 3] {
+            let packed = compress_bytes(source, method, 6).unwrap();
+            assert_ne!(packed, source);
+            assert_eq!(decompress_bytes(&packed, method).unwrap(), source);
+        }
+        assert_eq!(
+            eval_wrap(&[
+                "one two three".into(),
+                "Arial".into(),
+                "10".into(),
+                "35".into(),
+                "1".into(),
+                "0".into()
+            ]),
+            "3"
+        );
+        assert_eq!(eval_color("red", ""), "255");
+        assert_eq!(eval_color("4", "name"), "red");
+        assert_eq!(
+            argon2_ident(&["password".into(), "12345678".into()]).len(),
+            64
+        );
+    }
+
+    #[test]
+    fn zip_helpers_create_list_and_extract_inside_the_sandbox() {
+        let root = std::env::temp_dir().join(format!("jirc-zip-ident-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("source/nested")).unwrap();
+        std::fs::write(root.join("source/a.txt"), "alpha").unwrap();
+        std::fs::write(root.join("source/nested/b.txt"), "beta").unwrap();
+        let archive = root.join("test.zip");
+        create_zip(&archive, &root.join("source")).unwrap();
+        let file = std::fs::File::open(&archive).unwrap();
+        let zip = zip::ZipArchive::new(file).unwrap();
+        assert_eq!(zip.len(), 4);
+        extract_zip(&archive, &root.join("out"), true).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("out/source/a.txt")).unwrap(),
+            "alpha"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("out/source/nested/b.txt")).unwrap(),
+            "beta"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }

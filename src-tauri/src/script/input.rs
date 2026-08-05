@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
+use tauri_plugin_dialog::DialogExt;
 
 use super::eval::ScriptInput;
 
@@ -92,6 +93,41 @@ impl ScriptInput for EngineInput {
                 None
             }
         }
+    }
+
+    fn pick_files(&self, directory: &str, title: &str, multiple: bool) -> Vec<String> {
+        let mut builder = self.app.dialog().file();
+        if !directory.trim().is_empty() {
+            builder = builder.set_directory(directory);
+        }
+        if !title.trim().is_empty() {
+            builder = builder.set_title(title);
+        }
+        let selected = if multiple {
+            builder.blocking_pick_files().unwrap_or_default()
+        } else {
+            builder.blocking_pick_file().into_iter().collect()
+        };
+        selected
+            .into_iter()
+            .filter_map(|path| path.into_path().ok())
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn pick_folder(&self, directory: &str, title: &str) -> Option<String> {
+        let mut builder = self.app.dialog().file();
+        if !directory.trim().is_empty() {
+            builder = builder.set_directory(directory);
+        }
+        if !title.trim().is_empty() {
+            builder = builder.set_title(title);
+        }
+        builder
+            .blocking_pick_folder()?
+            .into_path()
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned())
     }
 }
 

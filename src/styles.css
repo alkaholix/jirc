@@ -16,6 +16,115 @@
   color-scheme: dark;
 }
 
+.url-previews {
+  display: grid;
+  gap: 6px;
+  max-width: 680px;
+  margin: 5px 8px 7px 72px;
+}
+
+.url-preview {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  color: var(--fg);
+  text-align: left;
+  background: color-mix(in srgb, var(--panel) 92%, var(--accent) 8%);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.url-preview:hover {
+  border-color: color-mix(in srgb, var(--accent) 65%, var(--border));
+  background: color-mix(in srgb, var(--panel) 86%, var(--accent) 14%);
+}
+
+.url-preview-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  gap: 3px;
+  padding: 10px 12px;
+}
+
+.url-preview-copy strong,
+.url-preview-copy span,
+.url-preview-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.url-preview-copy strong {
+  color: var(--fg);
+  white-space: nowrap;
+}
+
+.url-preview-copy span {
+  display: -webkit-box;
+  color: var(--muted);
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.url-preview-copy small {
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.url-preview.compact {
+  align-items: center;
+  width: min(520px, 100%);
+}
+
+.url-preview.compact .url-preview-copy {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 10px 7px 4px;
+}
+
+.url-preview.compact .url-preview-copy strong {
+  flex: 1;
+}
+
+.url-preview-mark {
+  padding-left: 10px;
+  color: var(--accent);
+}
+
+.url-preview.rich {
+  min-height: 108px;
+}
+
+.url-preview.rich img {
+  width: 170px;
+  min-width: 170px;
+  object-fit: cover;
+  background: var(--bg);
+}
+
+.url-preview.image-first {
+  display: block;
+  width: min(620px, 100%);
+}
+
+.url-preview.image-first img {
+  display: block;
+  width: 100%;
+  max-height: 260px;
+  object-fit: cover;
+  background: var(--bg);
+}
+
+@media (max-width: 760px) {
+  .url-previews { margin-left: 8px; }
+  .url-preview.rich img { width: 120px; min-width: 120px; }
+}
+
 /* Light theme overrides. */
 :root[data-theme="light"] {
   --bg: #f5f6fa;

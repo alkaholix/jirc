@@ -56,6 +56,9 @@ export function controlAudio(operation: string, path = "", ended?: () => void): 
     player?.play().catch(() => {});
   } else if (operation === "play") {
     playFile(path, undefined, ended).catch(() => {});
+  } else if (operation === "beep") {
+    tone(useSettings.getState().soundVolume);
+    ended?.();
   }
 }
 

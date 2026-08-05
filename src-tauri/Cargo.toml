@@ -1,6 +1,6 @@
 [package]
 name = "jirc"
-version = "26.8.8"
+version = "26.8.12"
 description = "jIRC — a modern, open-source mIRC-style IRC client (standard IRC + IRCX)"
 authors = ["jIRC contributors"]
 edition = "2021"
@@ -44,6 +44,12 @@ pcre2 = "0.2.11"
 # Sandboxed cross-platform plugins use Luau: no OS/process/network/file APIs are
 # present unless jIRC explicitly exposes them.
 mlua = { version = "0.11.6", features = ["luau", "vendored", "serialize"] }
+flate2 = "1.1.9"
+zip = { version = "4.6.1", default-features = false, features = ["deflate"] }
+argon2 = "0.5.3"
+arboard = { version = "3.6.1", default-features = false }
+fs2 = "0.4.3"
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 # Local time + date formatting for mSL $time/$date/$asctime ($asctime needs a
 # timezone db; chrono's clock feature is already in the tree transitively).
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
@@ -62,6 +68,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-process = "2.3.1"
 tauri-plugin-updater = "2.10.1"
 fontdb = "0.23"
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls-no-provider", "gzip", "brotli", "deflate"] }
 
 [profile.release]
 codegen-units = 1

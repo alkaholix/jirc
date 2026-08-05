@@ -9,6 +9,7 @@ import { nickColor } from "../lib/nickColor";
 import { ircxDisplay } from "../lib/ircx";
 import { FINDTEXT_COMMAND_EVENT, type FindTextCommand } from "../lib/clientCommands";
 import { showNativePopup } from "../lib/nativePopup";
+import { UrlPreviews } from "./UrlPreviews";
 
 const isJoinPart = (l: Line) => l.kind === "event" && /^[→←]/.test(l.text);
 
@@ -21,6 +22,32 @@ function ts(line: Line): string {
 /** Text of a line, used for search matching (nick + body, formatting stripped). */
 function lineText(l: Line): string {
   return stripFormatting(`${l.from ?? ""} ${l.text}`).toLowerCase();
+}
+
+export function hotlinkAtPoint(x: number, y: number) {
+  const doc = document as Document & {
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+  };
+  const caret = document.caretPositionFromPoint?.(x, y);
+  const range = caret
+    ? { node: caret.offsetNode, offset: caret.offset }
+    : (() => {
+        const fallback = doc.caretRangeFromPoint?.(x, y);
+        return fallback ? { node: fallback.startContainer, offset: fallback.startOffset } : null;
+      })();
+  if (!range || range.node.nodeType !== Node.TEXT_NODE) return null;
+  const row = (range.node.parentElement?.closest(".msg-row") ?? null) as HTMLElement | null;
+  const value = range.node.textContent ?? "";
+  let start = Math.min(range.offset, value.length);
+  let end = start;
+  while (start > 0 && !/\s/.test(value[start - 1])) start--;
+  while (end < value.length && !/\s/.test(value[end])) end++;
+  const word = value.slice(start, end);
+  if (!row || !word) return null;
+  const fullLine = row.textContent ?? "";
+  const before = fullLine.slice(0, Math.max(0, fullLine.indexOf(word)));
+  const position = before.trim() ? before.trim().split(/\s+/).length + 1 : 1;
+  return { word, fullLine, line: Number(row.dataset.index ?? 0) + 1, position };
 }
 
 export function startsTimestampMinute(line: Line, previous?: Line): boolean {
@@ -225,6 +252,7 @@ export function MessageList({ buffer }: { buffer: Buffer }) {
   // are evaluated by the engine (empty ones dropped); the command runs through it.
   const server = useStore((s) => s.servers[buffer.serverId]);
   const nativePopupMenus = useSettings((s) => s.nativePopupMenus);
+  const lastHotlinkRef = useRef(0);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [popups, setPopups] = useState<PopupItem[]>([]);
   const popupContext =
@@ -237,6 +265,7 @@ export function MessageList({ buffer }: { buffer: Buffer }) {
           : "status";
   const popupTarget = buffer.kind === "status" ? "" : buffer.name;
   const openMenu = (e: ReactMouseEvent) => {
+    dispatchHotlink(e, "rclick");
     e.preventDefault();
     api
       .scriptPopups(buffer.serverId, popupTarget, server?.nick ?? "", server?.name ?? "", popupContext, "")
@@ -250,6 +279,22 @@ export function MessageList({ buffer }: { buffer: Buffer }) {
         setMenu({ x: e.clientX, y: e.clientY });
       })
       .catch(() => {});
+  };
+  const dispatchHotlink = (
+    event: ReactMouseEvent,
+    action: "mouse" | "sclick" | "dclick" | "rclick" | "uclick"
+  ) => {
+    const hit = hotlinkAtPoint(event.clientX, event.clientY);
+    if (!hit) return;
+    api.scriptRunHotlink(
+      buffer.serverId,
+      popupTarget,
+      hit.word,
+      hit.fullLine,
+      action,
+      hit.line,
+      hit.position
+    ).catch(() => {});
   };
   const runPopup = (item: PopupItem) => {
     api.scriptRunPopup(buffer.serverId, popupTarget, server?.nick ?? "", server?.name ?? "", item.command, [], undefined, item.source, popupContext).catch(() => {});
@@ -304,7 +349,20 @@ export function MessageList({ buffer }: { buffer: Buffer }) {
           <button onClick={() => { setSearchOpen(false); setSearch(""); }} title="Close">×</button>
         </div>
       )}
-      <div className="messages" ref={parentRef} onScroll={onScroll} onContextMenu={openMenu}>
+      <div
+        className="messages"
+        ref={parentRef}
+        onScroll={onScroll}
+        onContextMenu={openMenu}
+        onMouseMove={(event) => {
+          if (event.timeStamp - lastHotlinkRef.current < 75) return;
+          lastHotlinkRef.current = event.timeStamp;
+          dispatchHotlink(event, "mouse");
+        }}
+        onClick={(event) => dispatchHotlink(event, "sclick")}
+        onDoubleClick={(event) => dispatchHotlink(event, "dclick")}
+        onMouseUp={(event) => dispatchHotlink(event, "uclick")}
+      >
         <div style={{ height: virtualizer.getTotalSize(), position: "relative", width: "100%" }}>
           {virtualizer.getVirtualItems().map((vi) => {
             const lineNumber = vi.index + 1;
@@ -335,6 +393,9 @@ export function MessageList({ buffer }: { buffer: Buffer }) {
                   showDivider={startsTimestampMinute(lines[vi.index], lines[vi.index - 1])}
                   stripCodes={stripCodes}
                 />
+                {!["event", "system", "error", "separator"].includes(lines[vi.index].kind) && (
+                  <UrlPreviews text={stripFormatting(lines[vi.index].text)} />
+                )}
               </div>
             );
           })}

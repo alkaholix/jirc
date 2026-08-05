@@ -22,6 +22,7 @@ pub mod webview;
 pub mod window;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use ast::{PopupItem, Script};
@@ -29,6 +30,8 @@ use eval::{
     wildcard_match, Action, EventVars, NoDcc, NoInput, NoPlay, NoSockets, NoTimers, NoWebviews,
     Runtime, ScriptDcc, ScriptInput, ScriptPlay, ScriptSockets, ScriptTimers, ScriptWebviews,
 };
+
+static NEXT_EVENT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Connection context supplied by the caller for each run.
 pub struct RunCtx<'a> {
@@ -189,6 +192,7 @@ struct WinReg {
     entries: Vec<(u32, String, String)>,
     active_wid: u32,
     last_active_wid: u32,
+    last_closed: Option<(u32, String, String)>,
 }
 
 impl WinReg {
@@ -207,11 +211,15 @@ impl WinReg {
     }
 
     fn close(&mut self, server_id: &str, name: &str) {
-        let removed_wid = self
+        let removed = self
             .entries
             .iter()
             .find(|(_, s, n)| s == server_id && n.eq_ignore_ascii_case(name))
-            .map(|(wid, _, _)| *wid);
+            .cloned();
+        let removed_wid = removed.as_ref().map(|(wid, _, _)| *wid);
+        if removed.is_some() {
+            self.last_closed = removed;
+        }
         self.entries
             .retain(|(_, s, n)| !(s == server_id && n.eq_ignore_ascii_case(name)));
         if removed_wid == Some(self.active_wid) {
@@ -242,6 +250,7 @@ impl WinReg {
             entries: self.entries.clone(),
             active_wid: self.active_wid,
             last_active_wid: self.last_active_wid,
+            last_closed: self.last_closed.clone(),
         }
     }
 }
@@ -258,6 +267,19 @@ impl Default for ScriptEngine {
 }
 
 impl ScriptEngine {
+    /// Records editbox activity for `$idle` and `/resetidle`.
+    pub fn reset_idle(&self) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0);
+        self.inner
+            .lock()
+            .unwrap()
+            .vars
+            .insert(eval::CLIENT_IDLE_SINCE_KEY.into(), now.to_string());
+    }
+
     pub fn new() -> Self {
         ScriptEngine {
             inner: Mutex::new(Inner::empty()),
@@ -374,8 +396,9 @@ impl ScriptEngine {
         self.inner.lock().unwrap().wins.set_active(server_id, name);
     }
 
-    pub fn set_client_window_state(&self, label: &str, focused: bool, app_state: &str) {
+    pub fn set_client_window_state(&self, label: &str, focused: bool, app_state: &str) -> bool {
         let mut inner = self.inner.lock().unwrap();
+        let was_active = !inner.focused_windows.is_empty();
         if focused {
             inner.focused_windows.insert(label.to_string());
         } else {
@@ -391,6 +414,7 @@ impl ScriptEngine {
                 .vars
                 .insert(eval::CLIENT_APP_STATE_KEY.into(), app_state.to_string());
         }
+        was_active != app_active
     }
 
     pub fn set_client_preferences(
@@ -461,6 +485,45 @@ impl ScriptEngine {
             inner
                 .vars
                 .insert(key.into(), if enabled { "on" } else { "off" }.into());
+        }
+    }
+
+    pub fn set_client_compat_state(
+        &self,
+        desktop_width: u32,
+        desktop_height: u32,
+        sound_enabled: bool,
+        sound_volume: f64,
+        do_not_disturb: bool,
+        self_color: &str,
+    ) {
+        let mut vars = self.inner.lock().unwrap();
+        for (key, value) in [
+            (eval::CLIENT_DESKTOP_WIDTH_KEY, desktop_width.to_string()),
+            (eval::CLIENT_DESKTOP_HEIGHT_KEY, desktop_height.to_string()),
+            (
+                eval::CLIENT_SOUND_ENABLED_KEY,
+                if sound_enabled {
+                    "$true".into()
+                } else {
+                    "$false".into()
+                },
+            ),
+            (
+                eval::CLIENT_SOUND_VOLUME_KEY,
+                (sound_volume.clamp(0.0, 1.0) * 100.0).round().to_string(),
+            ),
+            (
+                eval::CLIENT_DND_KEY,
+                if do_not_disturb {
+                    "$true".into()
+                } else {
+                    "$false".into()
+                },
+            ),
+            (eval::CLIENT_SELF_COLOR_KEY, self_color.to_string()),
+        ] {
+            vars.vars.insert(key.into(), value);
         }
     }
 
@@ -1010,7 +1073,7 @@ impl ScriptEngine {
 
     /// Dispatches an event to all matching handlers. Returns the actions.
     pub fn dispatch_event(&self, ctx: &RunCtx, kind: &str, event: EventVars) -> Vec<Action> {
-        self.dispatch_event_status(ctx, kind, event, None).0
+        self.dispatch_event_status(ctx, kind, event, None, None).0
     }
 
     /// Like [`dispatch_event`], but also reports whether any handler called
@@ -1021,7 +1084,7 @@ impl ScriptEngine {
         kind: &str,
         event: EventVars,
     ) -> (Vec<Action>, bool) {
-        let (actions, halted, _) = self.dispatch_event_status(ctx, kind, event, None);
+        let (actions, halted, _) = self.dispatch_event_status(ctx, kind, event, None, None);
         (actions, halted)
     }
 
@@ -1032,7 +1095,7 @@ impl ScriptEngine {
         event: EventVars,
         raw: Option<&RawEventContext>,
     ) -> (Vec<Action>, bool) {
-        let (actions, _, default_halted) = self.dispatch_event_status(ctx, kind, event, raw);
+        let (actions, _, default_halted) = self.dispatch_event_status(ctx, kind, event, raw, None);
         (actions, default_halted)
     }
 
@@ -1042,10 +1105,14 @@ impl ScriptEngine {
         kind: &str,
         event: EventVars,
         raw: Option<&RawEventContext>,
+        phase: Option<bool>,
     ) -> (Vec<Action>, bool, bool) {
         // $event reflects the dispatch kind for every handler (text, raw, op, …).
         let mut event = event;
         event.event = kind.to_ascii_lowercase();
+        if event.event_id.is_empty() {
+            event.event_id = NEXT_EVENT_ID.fetch_add(1, Ordering::Relaxed).to_string();
+        }
         if let Some(raw) = raw {
             event.raw_msg = raw.raw_msg.clone();
             event.raw_bytes = raw.raw_bytes.clone();
@@ -1099,6 +1166,9 @@ impl ScriptEngine {
         // `^` handlers are the early/default-text pass. mIRC processes them
         // independently from normal handlers, in script-file load order.
         for early_pass in [true, false] {
+            if phase.is_some_and(|wanted| wanted != early_pass) {
+                continue;
+            }
             for source in &event_sources {
                 let mut candidates = Vec::new();
                 let mut highest_numeric: Option<i64> = None;
@@ -1653,6 +1723,12 @@ fn words(s: &str) -> Vec<String> {
     s.split_whitespace().map(String::from).collect()
 }
 
+fn raw_source_is_server(raw: Option<&RawEventContext>) -> bool {
+    raw.and_then(|context| context.raw_msg.strip_prefix(':'))
+        .and_then(|line| line.split_whitespace().next())
+        .is_some_and(|prefix| !prefix.contains('!') && !prefix.contains('@'))
+}
+
 /// Maps a prefix/ban mode letter + direction to its specific event name.
 fn mode_event_name(letter: char, adding: bool) -> Option<&'static str> {
     Some(match (letter, adding) {
@@ -1759,6 +1835,18 @@ fn matches(
     }
     if kind == "DCCSERVER" {
         return selector.is_empty() || selector == "*" || selector.eq_ignore_ascii_case(&ev.text);
+    }
+    if kind == "CHAR" {
+        let target_ok =
+            target_spec.is_empty() || target_spec == "@" || wildcard_match(target_spec, &ev.target);
+        let key = ev
+            .key_val
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        let key_ok = selector.is_empty()
+            || selector == "*"
+            || selector.split(',').any(|value| value.trim() == key);
+        return target_ok && key_ok;
     }
     if kind == "RAW" {
         let selector_ok =
@@ -2425,6 +2513,41 @@ pub fn apply_actions(
     actions: Vec<Action>,
 ) {
     apply_actions_depth(app, server_id, my_nick, network, server, actions, 0);
+}
+
+/// Fires `on LOGON` after the client has sent its registration lines but before
+/// it receives the welcome numeric (`on CONNECT`).
+pub fn fire_logon(
+    app: &AppHandle,
+    server_id: &str,
+    my_nick: &str,
+    network: &str,
+    server: &str,
+    state: std::sync::Arc<crate::irc::state::StateSnapshot>,
+    early: bool,
+) -> bool {
+    let Some(engine) = app.try_state::<ScriptEngine>() else {
+        return false;
+    };
+    let ctx = RunCtx {
+        my_nick,
+        network,
+        server,
+        data_dir: script_data_dir(app),
+        state,
+    };
+    let match_name = if network.is_empty() { server } else { network };
+    let vars = EventVars {
+        chan: match_name.to_string(),
+        target: match_name.to_string(),
+        text: match_name.to_string(),
+        params: vec![match_name.to_string()],
+        ..Default::default()
+    };
+    let (actions, _, default_halted) =
+        engine.dispatch_event_status(&ctx, "LOGON", vars, None, Some(early));
+    apply_actions(app, server_id, my_nick, network, server, actions);
+    default_halted
 }
 
 /// `apply_actions` with a recursion `depth`, so `/signal` (which dispatches more
@@ -3643,7 +3766,10 @@ pub async fn script_run_key(
     text: String,
 ) -> bool {
     tauri::async_runtime::spawn_blocking(move || {
-        if !matches!(kind.to_ascii_uppercase().as_str(), "KEYDOWN" | "KEYUP") {
+        if !matches!(
+            kind.to_ascii_uppercase().as_str(),
+            "KEYDOWN" | "KEYUP" | "CHAR"
+        ) {
             return false;
         }
         let engine = app.state::<ScriptEngine>();
@@ -3676,6 +3802,62 @@ pub async fn script_run_key(
             ..Default::default()
         };
         let (actions, halted) = engine.dispatch_event_halt(&ctx, &kind, vars);
+        apply_actions(&app, &server_id, &my_nick, &network, &server, actions);
+        halted
+    })
+    .await
+    .unwrap_or(false)
+}
+
+/// Dispatches `on HOTLINK` for a word under the pointer in a rendered buffer.
+#[tauri::command]
+pub async fn script_run_hotlink(
+    app: AppHandle,
+    server_id: String,
+    target: String,
+    word: String,
+    line_text: String,
+    action: String,
+    line: usize,
+    position: usize,
+) -> bool {
+    tauri::async_runtime::spawn_blocking(move || {
+        if word.is_empty()
+            || !matches!(
+                action.as_str(),
+                "mouse" | "sclick" | "dclick" | "rclick" | "uclick"
+            )
+        {
+            return false;
+        }
+        let engine = app.state::<ScriptEngine>();
+        let state = app
+            .try_state::<crate::irc::state::StateStore>()
+            .map(|store| store.get(&server_id))
+            .unwrap_or_default();
+        let my_nick = state.nick.clone();
+        let (network, server) = engine.connection_context(&server_id).unwrap_or_default();
+        let ctx = RunCtx {
+            my_nick: &my_nick,
+            network: &network,
+            server: &server,
+            data_dir: script_data_dir(&app),
+            state,
+        };
+        let vars = EventVars {
+            chan: is_channel(&target)
+                .then_some(target.clone())
+                .unwrap_or_default(),
+            target: target.clone(),
+            text: word.clone(),
+            params: vec![word],
+            hotlink_event: action,
+            hotlink_line_text: line_text,
+            hotlink_line: line,
+            hotlink_pos: position,
+            ..Default::default()
+        };
+        let (actions, halted) = engine.dispatch_event_halt(&ctx, "HOTLINK", vars);
         apply_actions(&app, &server_id, &my_nick, &network, &server, actions);
         halted
     })
@@ -3749,8 +3931,8 @@ pub fn script_dispatch_dns(app: AppHandle, server_id: String, host: String, ips:
 
 /// Records native-window and UI preference state used by client identifiers.
 #[tauri::command]
-pub fn script_set_client_window_state(
-    engine: State<'_, ScriptEngine>,
+pub async fn script_set_client_window_state(
+    app: AppHandle,
     label: String,
     focused: bool,
     app_state: String,
@@ -3759,7 +3941,29 @@ pub fn script_set_client_window_state(
         "minimized" | "maximized" | "full" | "normal" | "hidden" | "tray" => app_state,
         _ => "normal".into(),
     };
-    engine.set_client_window_state(&label, focused, &app_state);
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        let engine = app.state::<ScriptEngine>();
+        if !engine.set_client_window_state(&label, focused, &app_state) {
+            return;
+        }
+        let server_id = engine.active_connection().unwrap_or_default();
+        let state = app
+            .try_state::<crate::irc::state::StateStore>()
+            .map(|store| store.get(&server_id))
+            .unwrap_or_default();
+        let my_nick = state.nick.clone();
+        let (network, server) = engine.connection_context(&server_id).unwrap_or_default();
+        let ctx = RunCtx {
+            my_nick: &my_nick,
+            network: &network,
+            server: &server,
+            data_dir: script_data_dir(&app),
+            state,
+        };
+        let actions = engine.dispatch_event(&ctx, "APPACTIVE", EventVars::default());
+        apply_actions(&app, &server_id, &my_nick, &network, &server, actions);
+    })
+    .await;
 }
 
 #[tauri::command]
@@ -3808,6 +4012,26 @@ pub fn script_set_client_ui_state(
     tips: bool,
 ) {
     engine.set_client_ui_state(toolbar, treebar, switchbar, menubar, tips);
+}
+
+#[tauri::command]
+pub fn script_set_client_compat_state(
+    engine: State<'_, ScriptEngine>,
+    desktop_width: u32,
+    desktop_height: u32,
+    sound_enabled: bool,
+    sound_volume: f64,
+    do_not_disturb: bool,
+    self_color: String,
+) {
+    engine.set_client_compat_state(
+        desktop_width,
+        desktop_height,
+        sound_enabled,
+        sound_volume,
+        do_not_disturb,
+        &self_color,
+    );
 }
 
 /// The UI opened a window/buffer — assign its `$wid` and fire `on OPEN`.
@@ -3930,6 +4154,7 @@ pub async fn script_run_input(
     // `halted` to the caller, which awaits it before sending the line.
     tauri::async_runtime::spawn_blocking(move || {
         let engine = app.state::<ScriptEngine>();
+        engine.reset_idle();
         let ctx = RunCtx {
             my_nick: &my_nick,
             network: &network,
@@ -4114,7 +4339,32 @@ pub fn drive_event_halt_raw(
                     text: body.to_string(),
                     ..Default::default()
                 };
-                return engine.dispatch_event_default_halt_raw(ctx, ckind, vars, raw);
+                let sound = (ckind == "CTCP")
+                    .then(|| body.strip_prefix("SOUND "))
+                    .flatten()
+                    .and_then(|value| value.split_whitespace().next())
+                    .map(str::to_string);
+                let sound_context = vars.clone();
+                let (mut actions, mut halted) =
+                    engine.dispatch_event_default_halt_raw(ctx, ckind, vars, raw);
+                if let Some(filename) =
+                    sound.filter(|filename| !eval::sandbox_path(&ctx.data_dir, filename).is_file())
+                {
+                    let vars = EventVars {
+                        nick: sound_context.nick,
+                        chan: sound_context.chan,
+                        target: sound_context.target,
+                        text: filename.clone(),
+                        params: vec![filename.clone()],
+                        filename,
+                        ..Default::default()
+                    };
+                    let (more, event_halted) =
+                        engine.dispatch_event_default_halt_raw(ctx, "NOSOUND", vars, raw);
+                    actions.extend(more);
+                    halted |= event_halted;
+                }
+                return (actions, halted);
             }
             let kind = match kind {
                 // A NOTICE with no nick prefix is a server notice → `on SNOTICE`.
@@ -4232,6 +4482,7 @@ pub fn drive_event_halt_raw(
             target, modes, by, ..
         } => {
             let setter = by.clone().unwrap_or_default();
+            let server_source = raw_source_is_server(raw);
             let Some(bare_target) = ctx.state.isupport.channel_target(target) else {
                 // A user-mode change (only ever your own) fires `on USERMODE`.
                 let vars = EventVars {
@@ -4265,22 +4516,57 @@ pub fn drive_event_halt_raw(
                 engine.dispatch_event_default_halt_raw(ctx, "RAWMODE", generic, raw);
             actions.extend(more);
             halted |= raw_halted;
+            if server_source {
+                let vars = EventVars {
+                    nick: setter.clone(),
+                    chan: chan.clone(),
+                    target: chan.clone(),
+                    params: words(modes),
+                    text: modes.clone(),
+                    ..Default::default()
+                };
+                let (more, event_halted) =
+                    engine.dispatch_event_default_halt_raw(ctx, "SERVERMODE", vars, raw);
+                actions.extend(more);
+                halted |= event_halted;
+            }
             // Plus a specific event per prefix/ban change (on OP/DEOP/BAN/…),
             // with the affected nick/mask as $1 and $knick/$opnick/$bnick/…
-            for (kind, affected) in split_mode_events(modes, &ctx.state.isupport) {
+            let mode_events = split_mode_events(modes, &ctx.state.isupport);
+            let mode_count = mode_events.len();
+            for (mode_offset, (kind, affected)) in mode_events.into_iter().enumerate() {
                 let vars = EventVars {
                     nick: setter.clone(),
                     knick: affected.clone(),
                     chan: chan.clone(),
                     target: chan.clone(),
                     params: vec![affected.clone()],
-                    text: affected,
+                    text: affected.clone(),
+                    mode_index: mode_offset + 1,
+                    mode_count,
                     ..Default::default()
                 };
                 let (more, event_halted) =
                     engine.dispatch_event_default_halt_raw(ctx, kind, vars, raw);
                 actions.extend(more);
                 halted |= event_halted;
+                if server_source && kind == "OP" {
+                    let vars = EventVars {
+                        nick: setter.clone(),
+                        knick: affected.clone(),
+                        chan: chan.clone(),
+                        target: chan.clone(),
+                        params: vec![affected.clone()],
+                        text: affected,
+                        mode_index: mode_offset + 1,
+                        mode_count,
+                        ..Default::default()
+                    };
+                    let (more, event_halted) =
+                        engine.dispatch_event_default_halt_raw(ctx, "SERVEROP", vars, raw);
+                    actions.extend(more);
+                    halted |= event_halted;
+                }
             }
             return (actions, halted);
         }
@@ -4345,7 +4631,7 @@ pub fn dispatch_parseline(
         parse_em,
         ..Default::default()
     };
-    let (emitted, _, _) = engine.dispatch_event_status(ctx, "PARSELINE", event, None);
+    let (emitted, _, _) = engine.dispatch_event_status(ctx, "PARSELINE", event, None, None);
     let mut outcome = ParseLineOutcome::default();
     for action in emitted {
         match action {
@@ -4401,7 +4687,8 @@ pub fn dispatch_raw_with_context(
         numeric,
         ..Default::default()
     };
-    let (actions, halted, default_halted) = engine.dispatch_event_status(ctx, "RAW", vars, raw);
+    let (actions, halted, default_halted) =
+        engine.dispatch_event_status(ctx, "RAW", vars, raw, None);
     (actions, halted || default_halted)
 }
 
@@ -4433,7 +4720,7 @@ pub fn dispatch_named_with_context(
         text: text.to_string(),
         ..Default::default()
     };
-    engine.dispatch_event_status(ctx, kind, vars, raw).0
+    engine.dispatch_event_status(ctx, kind, vars, raw, None).0
 }
 
 #[cfg(test)]
@@ -4453,7 +4740,7 @@ mod tests {
     #[test]
     fn client_state_and_notify_identifiers_follow_frontend_state() {
         let engine = ScriptEngine::new();
-        engine.set_client_window_state("main", true, "maximized");
+        assert!(engine.set_client_window_state("main", true, "maximized"));
         engine.set_client_preferences(
             true,
             vec!["Alice".into(), "Bob".into()],
@@ -4478,8 +4765,8 @@ mod tests {
             }]
         );
 
-        engine.set_client_window_state("detached-one", true, "normal");
-        engine.set_client_window_state("main", false, "normal");
+        assert!(!engine.set_client_window_state("detached-one", true, "normal"));
+        assert!(!engine.set_client_window_state("main", false, "normal"));
         engine.load("alias active { echo -a $appactive $appstate }");
         assert_eq!(
             engine.run_alias(&ctx(), "", "active", ""),
@@ -4488,7 +4775,7 @@ mod tests {
                 text: "$true normal".into(),
             }]
         );
-        engine.set_client_window_state("detached-one", false, "hidden");
+        assert!(engine.set_client_window_state("detached-one", false, "hidden"));
         assert_eq!(
             engine.run_alias(&ctx(), "", "active", ""),
             vec![Action::Echo {
@@ -6208,7 +6495,124 @@ mod tests {
             actions,
             vec![Action::Send("PRIVMSG #c :files=3 dirs=1".into())]
         );
+        engine.load("alias n { /noop $findfile(data, *.txt, 0, 0, /msg #c $findfilen $1-) }");
+        let callback_actions = engine.run_alias(&rctx, "#c", "n", "");
+        assert_eq!(callback_actions.len(), 3);
+        for (index, action) in callback_actions.iter().enumerate() {
+            let Action::Send(line) = action else {
+                panic!("findfile callback must send each match");
+            };
+            assert!(line.starts_with(&format!("PRIVMSG #c :{} ", index + 1)));
+            assert!(line.ends_with(".txt"));
+        }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn completed_compatibility_commands_update_runtime_and_user_state() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias n { /bigfloat on | /dlevel 7 | /debug 1 | /dccignore on | /emailaddr user@example.test | /creq auto | /sreq ignore | /localinfo workstation 192.0.2.4 | /ebeeps on | /msg #c $bigfloat $dlevel $debug $dccignore $emailaddr $creq $sreq $host $ip $ebeeps }",
+        );
+        let actions = engine.run_alias(&ctx(), "#c", "n", "");
+        assert!(actions.iter().any(|action| matches!(action, Action::Send(line) if line == "PRIVMSG #c :$true 7 1 on user@example.test auto ignore workstation 192.0.2.4 $true")));
+        assert!(actions.iter().any(|action| matches!(action, Action::ClientCommand { command, args, .. } if command == "debug" && args == "1")));
+        assert!(actions.iter().any(|action| matches!(action, Action::ClientCommand { command, args, .. } if command == "dccignore" && args == "on")));
+
+        engine.load("alias n { /auser 5,7 *!*@example.test note | /rlevel 5 | /ulist } ");
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "n", ""),
+            vec![Action::Echo {
+                target: "#c".into(),
+                text: "7:*!*@example.test note".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn audited_compatibility_commands_are_all_client_local() {
+        let commands = [
+            "ajinvite",
+            "background",
+            "beep",
+            "bigfloat",
+            "bindip",
+            "cline",
+            "clipboard",
+            "cnick",
+            "color",
+            "creq",
+            "debug",
+            "dlevel",
+            "donotdisturb",
+            "dqwindow",
+            "ebeeps",
+            "emailaddr",
+            "firewall",
+            "flash",
+            "flist",
+            "flood",
+            "flush",
+            "ghide",
+            "gload",
+            "gmove",
+            "gopts",
+            "gplay",
+            "gpoint",
+            "gqreq",
+            "gshow",
+            "gsize",
+            "gstop",
+            "gtalk",
+            "gunload",
+            "identd",
+            "localinfo",
+            "mdi",
+            "perform",
+            "playctrl",
+            "proxy",
+            "reseterror",
+            "resetidle",
+            "rlevel",
+            "save",
+            "setlayer",
+            "showmirc",
+            "speak",
+            "sreq",
+            "tray",
+            "ulist",
+            "vcadd",
+            "vcmd",
+            "vcrem",
+            "vol",
+            "winhelp",
+        ];
+        for command in commands {
+            let engine = ScriptEngine::new();
+            let actions = engine.run_command(&ctx(), "#c", &format!("/{command}"), &[]);
+            assert!(
+                !actions.iter().any(|action| matches!(action, Action::Send(line) if line.split_whitespace().next().is_some_and(|word| word.eq_ignore_ascii_case(command)))),
+                "/{command} leaked to the IRC server: {actions:?}"
+            );
+        }
+        assert_eq!(
+            ScriptEngine::new().run_command(&ctx(), "#c", "/links -n", &[]),
+            vec![Action::Send("LINKS".into())]
+        );
+        assert_eq!(
+            ScriptEngine::new().run_command(&ctx(), "#c", "/uwho Alice", &[]),
+            vec![Action::Send("WHOIS Alice".into())]
+        );
+    }
+
+    #[test]
+    fn cline_recolors_an_existing_custom_window_line() {
+        let engine = ScriptEngine::new();
+        engine.load("alias n { /window -l @list | /aline @list hello | /cline @list 1 4 | /msg #c $line(@list,1) }");
+        let actions = engine.run_alias(&ctx(), "#c", "n", "");
+        assert!(actions.iter().any(
+            |action| matches!(action, Action::Send(line) if line == "PRIVMSG #c :\u{3}04hello")
+        ));
     }
 
     #[test]
@@ -6936,7 +7340,8 @@ mod tests {
             )]
         );
 
-        // Closing #a also clears the previous-active identifiers.
+        // Closing #a clears previous-active state and retains the closed-window
+        // identity independently for `$leftwin*`.
         engine.window_close("s1", "#a");
         assert_eq!(
             engine.run_command(
@@ -6946,6 +7351,15 @@ mod tests {
                 &[]
             ),
             vec![Action::Send("PRIVMSG #c :last=//".into())]
+        );
+        assert_eq!(
+            engine.run_command(
+                &ctx2,
+                "#c",
+                "/msg #c left=$leftwin/$leftwinwid/$leftwincid",
+                &[]
+            ),
+            vec![Action::Send("PRIVMSG #c :left=#a/1/1".into())]
         );
         assert_eq!(engine.window_open("s1", "#c"), 3); // new window, not reusing 1
     }
@@ -9205,6 +9619,7 @@ mod tests {
                 members: vec![("User^".into(), "@".into()), ("Plain".into(), "".into())],
                 member_activity: vec![("User^".into(), last_activity)],
                 bans: vec![],
+                ..Default::default()
             }],
             ial: vec![("user~".into(), "User^!ident@host.test".into())],
             ial_info: vec![IalView {
@@ -10508,14 +10923,21 @@ mod tests {
     }
 
     #[test]
-    fn unknown_client_command_does_not_leak_to_server() {
+    fn client_commands_do_not_leak_to_server() {
         // /clear etc. are client-side: they must NOT become a raw IRC line.
         // (`/window` is now a real command — covered by custom_window_lines.)
         let engine = ScriptEngine::new();
         engine.load("alias t { clear | beep 1 100 | /msg #c done }");
         assert_eq!(
             engine.run_alias(&ctx(), "#c", "t", ""),
-            vec![Action::Send("PRIVMSG #c :done".into())]
+            vec![
+                Action::ClientCommand {
+                    command: "beep".into(),
+                    args: "1 100".into(),
+                    current_target: "#c".into(),
+                },
+                Action::Send("PRIVMSG #c :done".into()),
+            ]
         );
         // A genuine IRC command still falls through to raw.
         engine.load("alias t { whois someone }");
@@ -10653,9 +11075,9 @@ mod tests {
     fn batched_per_mode_events_fire_in_argument_order() {
         let engine = ScriptEngine::new();
         engine.load(
-            "on *:OP:#:{ /msg $chan op $opnick }\n\
-             on *:VOICE:#:{ /msg $chan voice $vnick }\n\
-             on *:DEHELP:#:{ /msg $chan dehelp $hnick }",
+            "on *:OP:#:{ /msg $chan op $opnick $modefirst $modelast }\n\
+             on *:VOICE:#:{ /msg $chan voice $vnick $modefirst $modelast }\n\
+             on *:DEHELP:#:{ /msg $chan dehelp $hnick $modefirst $modelast }",
         );
         let ev = UiEvent::Mode {
             server_id: "s".into(),
@@ -10666,9 +11088,9 @@ mod tests {
         assert_eq!(
             drive_event(&engine, &ctx(), &ev),
             vec![
-                Action::Send("PRIVMSG #c :op bob".into()),
-                Action::Send("PRIVMSG #c :voice alice".into()),
-                Action::Send("PRIVMSG #c :dehelp carol".into()),
+                Action::Send("PRIVMSG #c :op bob $true $false".into()),
+                Action::Send("PRIVMSG #c :voice alice $false $false".into()),
+                Action::Send("PRIVMSG #c :dehelp carol $false $true".into()),
             ]
         );
     }
@@ -11307,6 +11729,175 @@ menu nicklist {
                 ("Guest", true, "noop"),
                 ("Carol", true, "noop"),
             ]
+        );
+    }
+
+    #[test]
+    fn portable_event_tail_exposes_application_char_hotlink_logon_and_serv_context() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "on *:APPACTIVE:echo -a app-$appactive\n\
+             on *:CHAR:@keys:65:echo -a char-$keyval-$keychar-$keyrpt\n\
+             on *:HOTLINK:*foo*:@:echo -a hot $1 $hotlink(event) $hotlink(word).pos $hotlink(line).pos\n\
+             on *:LOGON:Net:echo -a logon-$network-$server\n\
+             on *:SERV:dir*:echo -a serv-$nick-$cd-$1-",
+        );
+
+        assert_eq!(
+            engine.dispatch_event(&ctx(), "APPACTIVE", EventVars::default()),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "app-$false".into()
+            }]
+        );
+        assert_eq!(
+            engine.dispatch_event(
+                &ctx(),
+                "CHAR",
+                EventVars {
+                    target: "@keys".into(),
+                    key_char: "A".into(),
+                    key_val: Some(65),
+                    key_repeat: true,
+                    ..Default::default()
+                },
+            ),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "char-65-A-$true".into()
+            }]
+        );
+        assert_eq!(
+            engine.dispatch_event(
+                &ctx(),
+                "HOTLINK",
+                EventVars {
+                    target: "@links".into(),
+                    text: "food".into(),
+                    params: vec!["food".into()],
+                    hotlink_event: "dclick".into(),
+                    hotlink_line: 7,
+                    hotlink_pos: 3,
+                    hotlink_line_text: "one two food".into(),
+                    ..Default::default()
+                },
+            ),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "hot food dclick 3 7".into()
+            }]
+        );
+        assert_eq!(
+            engine.dispatch_event(
+                &ctx(),
+                "LOGON",
+                EventVars {
+                    chan: "Net".into(),
+                    target: "Net".into(),
+                    text: "Net".into(),
+                    ..Default::default()
+                },
+            ),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "logon-Net-irc.example.org".into()
+            }]
+        );
+        assert_eq!(
+            engine.dispatch_event(
+                &ctx(),
+                "SERV",
+                EventVars {
+                    nick: "guest".into(),
+                    target: "!guest".into(),
+                    text: "dir files".into(),
+                    params: vec!["dir".into(), "files".into()],
+                    current_dir: "root/".into(),
+                    ..Default::default()
+                },
+            ),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "serv-guest-root/-dir files".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn logon_early_and_normal_handlers_run_in_their_registration_phases() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "on ^*:LOGON:*:{ echo -a early | haltdef }\n\
+             on *:LOGON:*:echo -a normal",
+        );
+        let vars = EventVars {
+            chan: "Net".into(),
+            target: "Net".into(),
+            text: "Net".into(),
+            ..Default::default()
+        };
+        let (early, _, halted) =
+            engine.dispatch_event_status(&ctx(), "LOGON", vars.clone(), None, Some(true));
+        assert_eq!(
+            early,
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "early".into()
+            }]
+        );
+        assert!(halted);
+        assert_eq!(
+            engine
+                .dispatch_event_status(&ctx(), "LOGON", vars, None, Some(false))
+                .0,
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "normal".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn server_modes_and_missing_remote_sounds_fire_specific_events() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "on *:SERVERMODE:#:echo -a servermode-$nick-$chan-$1-\n\
+             on *:SERVEROP:#:echo -a serverop-$nick-$opnick\n\
+             on *:NOSOUND:echo -a nosound-$nick-$filename",
+        );
+        let mode = UiEvent::Mode {
+            server_id: "s".into(),
+            target: "#c".into(),
+            modes: "+o bob".into(),
+            by: Some("irc.example.org".into()),
+        };
+        let raw = raw_event_context(
+            ":irc.example.org MODE #c +o bob",
+            b":irc.example.org MODE #c +o bob",
+        );
+        let actions = drive_event_halt_raw(&engine, &ctx(), &mode, Some(&raw)).0;
+        assert!(actions.contains(&Action::Echo {
+            target: "(status)".into(),
+            text: "servermode-irc.example.org-#c-+o bob".into()
+        }));
+        assert!(actions.contains(&Action::Echo {
+            target: "(status)".into(),
+            text: "serverop-irc.example.org-bob".into()
+        }));
+
+        let sound = UiEvent::Message {
+            server_id: "s".into(),
+            kind: MessageKind::Privmsg,
+            from: Some("alice".into()),
+            target: "me".into(),
+            text: "\u{1}SOUND missing-event-test.wav\u{1}".into(),
+            time: None,
+        };
+        assert!(
+            drive_event(&engine, &ctx(), &sound).contains(&Action::Echo {
+                target: "(status)".into(),
+                text: "nosound-alice-missing-event-test.wav".into(),
+            })
         );
     }
 }

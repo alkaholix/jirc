@@ -6,6 +6,7 @@ export type TimestampMode = "inline" | "divider" | "off";
 export type Layout = "tree" | "switchbar";
 export type DockPaneId = "treebar" | "nicklist" | "panels";
 export type DockSide = "left" | "right";
+export type UrlPreviewStyle = "compact" | "rich" | "image";
 
 export interface Settings {
   theme: Theme;
@@ -26,6 +27,9 @@ export interface Settings {
   /** mIRC /strip flags currently enabled (b/u/r/i/e/c). */
   stripCodes: string;
   showJoinPart: boolean;
+  /** Show safe metadata cards beneath HTTP(S) links in chat messages. */
+  urlPreviews: boolean;
+  urlPreviewStyle: UrlPreviewStyle;
   notifications: boolean;
   soundEnabled: boolean;
   soundVolume: number;
@@ -63,6 +67,8 @@ export interface Settings {
 
   // Behaviour / server
   rejoinOnKick: boolean;
+  /** Automatically join channels when invited (`/ajinvite`). */
+  autoJoinInvites: boolean;
   rejoinOnReconnect: boolean;
   keepOpenOnKickQuit: boolean;
   showAway: boolean;
@@ -81,6 +87,9 @@ export interface Settings {
   dccPortTo: number;
   /** Use mIRC's passive/reverse DCC negotiation for outgoing offers. */
   dccPassive: boolean;
+  dccIgnore: boolean;
+  dccChatRequest: "ask" | "auto" | "ignore";
+  dccSendRequest: "ask" | "auto" | "ignore";
   dccServerEnabled: boolean;
   dccServerPort: number;
   dccServerChat: boolean;
@@ -104,6 +113,8 @@ const DEFAULTS: Settings = {
   timestampMode: "inline",
   stripCodes: "",
   showJoinPart: true,
+  urlPreviews: true,
+  urlPreviewStyle: "compact",
   notifications: true,
   soundEnabled: true,
   soundVolume: 0.5,
@@ -129,6 +140,7 @@ const DEFAULTS: Settings = {
   quitMessage: "",
 
   rejoinOnKick: false,
+  autoJoinInvites: false,
   rejoinOnReconnect: true,
   keepOpenOnKickQuit: true,
   showAway: true,
@@ -144,6 +156,9 @@ const DEFAULTS: Settings = {
   dccPortFrom: 0,
   dccPortTo: 0,
   dccPassive: false,
+  dccIgnore: false,
+  dccChatRequest: "ask",
+  dccSendRequest: "ask",
   dccServerEnabled: false,
   dccServerPort: 59,
   dccServerChat: true,
@@ -171,6 +186,9 @@ export function normalizeSavedSettings(
       (showTimestamps === false ? "off" : "inline"),
   } as Settings;
   settings.chatFontSize = normalizeAppFontSize(settings.chatFontSize);
+  if (!["compact", "rich", "image"].includes(settings.urlPreviewStyle)) {
+    settings.urlPreviewStyle = "compact";
+  }
   const validPanes: DockPaneId[] = ["treebar", "nicklist", "panels"];
   const savedOrder = Array.isArray(saved.dockPaneOrder)
     ? saved.dockPaneOrder.filter((pane): pane is DockPaneId => validPanes.includes(pane as DockPaneId))

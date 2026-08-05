@@ -6,6 +6,379 @@ use tauri_plugin_opener::OpenerExt;
 use crate::config::ServerProfile;
 use crate::irc::ConnectionManager;
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UrlPreview {
+    url: String,
+    final_url: String,
+    domain: String,
+    title: String,
+    description: String,
+    image: String,
+}
+
+const PREVIEW_HTML_LIMIT: usize = 512 * 1024;
+const PREVIEW_IMAGE_LIMIT: usize = 3 * 1024 * 1024;
+
+/// Fetches public HTTP(S) metadata without cookies, scripts, local-network
+/// access, unrestricted redirects, or unbounded downloads.
+#[tauri::command]
+pub async fn url_preview(url: String, include_image: bool) -> Result<UrlPreview, String> {
+    let original = reqwest::Url::parse(url.trim()).map_err(|_| "invalid URL".to_string())?;
+    let (final_url, response) = preview_request(original.clone(), "text/html,*/*;q=0.1").await?;
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let direct_image_mime = preview_image_mime(&content_type);
+    if let Some(mime) = direct_image_mime {
+        let title = final_url
+            .path_segments()
+            .and_then(|mut segments| segments.next_back())
+            .filter(|value| !value.is_empty())
+            .unwrap_or("Image")
+            .to_string();
+        let image = if include_image {
+            preview_image_data(response, mime).await?
+        } else {
+            String::new()
+        };
+        return Ok(UrlPreview {
+            url: original.to_string(),
+            final_url: final_url.to_string(),
+            domain: final_url.host_str().unwrap_or_default().to_string(),
+            title,
+            description: "Image".into(),
+            image,
+        });
+    }
+    if !content_type.contains("text/html") && !content_type.contains("application/xhtml") {
+        return Err("URL is not an HTML page".into());
+    }
+    let html =
+        String::from_utf8_lossy(&read_limited(response, PREVIEW_HTML_LIMIT).await?).into_owned();
+    let title = meta_value(&html, &["og:title", "twitter:title"])
+        .or_else(|| html_title(&html))
+        .unwrap_or_else(|| final_url.host_str().unwrap_or("Link").to_string());
+    let description = meta_value(
+        &html,
+        &["og:description", "twitter:description", "description"],
+    )
+    .unwrap_or_default();
+    let image_url = meta_value(&html, &["og:image:secure_url", "og:image", "twitter:image"])
+        .and_then(|value| final_url.join(&value).ok());
+    let image = if include_image {
+        match image_url {
+            Some(image_url) => fetch_preview_image(image_url).await.unwrap_or_default(),
+            None => String::new(),
+        }
+    } else {
+        String::new()
+    };
+    Ok(UrlPreview {
+        url: original.to_string(),
+        final_url: final_url.to_string(),
+        domain: final_url.host_str().unwrap_or_default().to_string(),
+        title: truncate_preview_text(&decode_html(&title), 240),
+        description: truncate_preview_text(&decode_html(&description), 500),
+        image,
+    })
+}
+
+async fn preview_request(
+    mut url: reqwest::Url,
+    accept: &str,
+) -> Result<(reqwest::Url, reqwest::Response), String> {
+    for _ in 0..=3 {
+        let (host, address) = public_preview_address(&url).await?;
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(8))
+            .connect_timeout(std::time::Duration::from_secs(4))
+            .resolve(&host, address)
+            .build()
+            .map_err(|error| error.to_string())?;
+        let response = client
+            .get(url.clone())
+            .header(reqwest::header::ACCEPT, accept)
+            .header(reqwest::header::ACCEPT_LANGUAGE, "en,*;q=0.5")
+            .header(reqwest::header::USER_AGENT, "jIRC-LinkPreview/1.0")
+            .send()
+            .await
+            .map_err(|error| format!("preview request failed: {error}"))?;
+        if response.status().is_redirection() {
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or("redirect has no location")?;
+            url = url.join(location).map_err(|_| "invalid redirect URL")?;
+            continue;
+        }
+        if !response.status().is_success() {
+            return Err(format!("preview returned HTTP {}", response.status()));
+        }
+        return Ok((url, response));
+    }
+    Err("too many preview redirects".into())
+}
+
+async fn public_preview_address(
+    url: &reqwest::Url,
+) -> Result<(String, std::net::SocketAddr), String> {
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("only HTTP and HTTPS URLs can be previewed".into());
+    }
+    let host = url
+        .host_str()
+        .ok_or("URL has no host")?
+        .trim_end_matches('.')
+        .to_string();
+    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
+        return Err("local addresses cannot be previewed".into());
+    }
+    let port = url.port_or_known_default().ok_or("URL has no port")?;
+    let address = {
+        let mut addresses = tokio::net::lookup_host((host.as_str(), port))
+            .await
+            .map_err(|_| "could not resolve preview host")?;
+        addresses
+            .find(|address| is_public_ip(address.ip()))
+            .ok_or("preview host does not resolve to a public address")?
+    };
+    Ok((host, address))
+}
+
+fn is_public_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(ip) => {
+            let [a, b, ..] = ip.octets();
+            !(a == 0
+                || a == 10
+                || a == 127
+                || (a == 100 && (64..=127).contains(&b))
+                || (a == 169 && b == 254)
+                || (a == 172 && (16..=31).contains(&b))
+                || (a == 192 && b == 0)
+                || (a == 192 && b == 2)
+                || (a == 192 && b == 168)
+                || (a == 198 && (b == 18 || b == 19))
+                || (a == 198 && b == 51)
+                || (a == 203 && b == 0)
+                || a >= 224)
+        }
+        std::net::IpAddr::V6(ip) => {
+            if let Some(ipv4) = ip.to_ipv4_mapped() {
+                return is_public_ip(std::net::IpAddr::V4(ipv4));
+            }
+            let first = ip.segments()[0];
+            !(ip.is_loopback()
+                || ip.is_unspecified()
+                || (first & 0xfe00) == 0xfc00
+                || (first & 0xffc0) == 0xfe80
+                || (first & 0xffc0) == 0xfec0
+                || (first & 0xff00) == 0xff00)
+                && !(ip.segments()[0] == 0x2001 && ip.segments()[1] == 0x0db8)
+        }
+    }
+}
+
+async fn read_limited(response: reqwest::Response, limit: usize) -> Result<Vec<u8>, String> {
+    use futures_util::StreamExt;
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
+    {
+        return Err("preview response is too large".into());
+    }
+    let mut stream = response.bytes_stream();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| error.to_string())?;
+        if bytes.len() + chunk.len() > limit {
+            return Err("preview response is too large".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
+async fn fetch_preview_image(url: reqwest::Url) -> Result<String, String> {
+    let (_, response) = preview_request(url, "image/*").await?;
+    let mime = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let mime = preview_image_mime(&mime).ok_or("preview image format is unsupported")?;
+    preview_image_data(response, mime).await
+}
+
+fn preview_image_mime(content_type: &str) -> Option<&'static str> {
+    let mime = content_type.split(';').next()?.trim();
+    Some(match mime {
+        "image/jpeg" => "image/jpeg",
+        "image/png" => "image/png",
+        "image/gif" => "image/gif",
+        "image/webp" => "image/webp",
+        _ => return None,
+    })
+}
+
+async fn preview_image_data(response: reqwest::Response, mime: &str) -> Result<String, String> {
+    use base64::Engine as _;
+    let bytes = read_limited(response, PREVIEW_IMAGE_LIMIT).await?;
+    Ok(format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
+}
+
+fn meta_value(html: &str, names: &[&str]) -> Option<String> {
+    static META: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"(?is)<meta\s+[^>]*>").unwrap());
+    static ATTR: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r#"(?is)([a-z_:.-]+)\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))"#)
+            .unwrap()
+    });
+    for tag in META.find_iter(html) {
+        let mut key = String::new();
+        let mut content = String::new();
+        for capture in ATTR.captures_iter(tag.as_str()) {
+            let name = capture.get(1).map_or("", |value| value.as_str());
+            let value = capture
+                .get(2)
+                .or_else(|| capture.get(3))
+                .or_else(|| capture.get(4))
+                .map_or("", |value| value.as_str());
+            if name.eq_ignore_ascii_case("property") || name.eq_ignore_ascii_case("name") {
+                key = value.to_ascii_lowercase();
+            } else if name.eq_ignore_ascii_case("content") {
+                content = value.to_string();
+            }
+        }
+        if names.iter().any(|name| key.eq_ignore_ascii_case(name)) && !content.trim().is_empty() {
+            return Some(content.trim().to_string());
+        }
+    }
+    None
+}
+
+fn html_title(html: &str) -> Option<String> {
+    static TITLE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"(?is)<title[^>]*>(.*?)</title>").unwrap());
+    TITLE
+        .captures(html)
+        .and_then(|capture| capture.get(1))
+        .map(|value| value.as_str().trim().to_string())
+}
+
+fn decode_html(value: &str) -> String {
+    value
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn truncate_preview_text(value: &str, max: usize) -> String {
+    if value.chars().count() <= max {
+        return value.to_string();
+    }
+    format!(
+        "{}…",
+        value
+            .chars()
+            .take(max.saturating_sub(1))
+            .collect::<String>()
+    )
+}
+
+#[cfg(test)]
+mod url_preview_tests {
+    use super::*;
+
+    #[test]
+    fn preview_network_guard_rejects_private_and_special_addresses() {
+        for address in [
+            "127.0.0.1",
+            "10.2.3.4",
+            "172.20.1.1",
+            "192.168.1.2",
+            "169.254.2.3",
+            "100.64.0.1",
+            "224.0.0.1",
+            "::1",
+            "fc00::1",
+            "fe80::1",
+            "::ffff:127.0.0.1",
+            "192.0.2.1",
+            "198.51.100.2",
+            "203.0.113.3",
+            "2001:db8::1",
+        ] {
+            assert!(
+                !is_public_ip(address.parse().unwrap()),
+                "accepted {address}"
+            );
+        }
+        assert!(is_public_ip("1.1.1.1".parse().unwrap()));
+        assert!(is_public_ip("2606:4700:4700::1111".parse().unwrap()));
+    }
+
+    #[test]
+    fn open_graph_parser_handles_attribute_order_quotes_and_fallback_title() {
+        let html = r#"
+          <html><head>
+          <meta content="A &amp; B" property="og:title">
+          <meta name='description' content='A useful page'>
+          <meta property=og:image content=/card.png>
+          <title>Fallback</title>
+          </head></html>
+        "#;
+        assert_eq!(meta_value(html, &["og:title"]), Some("A &amp; B".into()));
+        assert_eq!(
+            meta_value(html, &["description"]),
+            Some("A useful page".into())
+        );
+        assert_eq!(meta_value(html, &["og:image"]), Some("/card.png".into()));
+        assert_eq!(
+            html_title("<TITLE> Plain title </TITLE>"),
+            Some("Plain title".into())
+        );
+        assert_eq!(decode_html(" A &amp;  B "), "A & B");
+    }
+
+    #[test]
+    fn preview_text_limits_are_unicode_safe() {
+        assert_eq!(truncate_preview_text("hello", 10), "hello");
+        assert_eq!(truncate_preview_text("😀😀😀😀", 3), "😀😀…");
+    }
+
+    #[tokio::test]
+    #[ignore = "live internet preview smoke test"]
+    async fn live_example_dot_com_preview() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let preview = url_preview("https://example.com/".into(), false)
+            .await
+            .expect("example.com preview");
+        assert_eq!(preview.domain, "example.com");
+        assert!(preview.title.to_ascii_lowercase().contains("example"));
+        assert!(preview.image.is_empty());
+    }
+}
+
 /// Returns a human-readable version string for the backend core.
 #[tauri::command]
 pub fn core_version() -> String {

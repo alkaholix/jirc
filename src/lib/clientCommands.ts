@@ -6,6 +6,14 @@ import { useToolbar } from "../state/toolbar";
 import { useChannelCentral } from "../state/channelModes";
 import { useAddressBook } from "../state/addressBook";
 import { clearTips, routeTipCommand } from "../state/tips";
+import { playAlertSound } from "./sound";
+
+export interface ClientCommandActions {
+  openConnect?: () => void;
+  minimize?: () => void;
+  restore?: () => void;
+  requestAttention?: () => void;
+}
 
 export interface EditboxCommand {
   serverId: string;
@@ -205,9 +213,121 @@ function routeDelayedPrivilege(serverId: string, currentTarget: string, args: st
 
 export function routeClientCommand(
   event: Extract<IrcEvent, { type: "clientCommand" }>,
-  openSettings: () => void
+  openSettings: () => void,
+  actions: ClientCommandActions = {}
 ) {
   switch (event.command) {
+    case "ajinvite": {
+      const mode = words(event.args)[0]?.toLowerCase();
+      if (mode === "on" || mode === "off") useSettings.getState().set("autoJoinInvites", mode === "on");
+      break;
+    }
+    case "beep":
+      playAlertSound("mention", true);
+      break;
+    case "bindip":
+      useSettings.getState().set("dccBindIp", words(event.args)[0] ?? "");
+      break;
+    case "clipboard": {
+      const text = event.args.replace(/^-[asn]\s+/i, "");
+      if (text && navigator.clipboard?.writeText) void navigator.clipboard.writeText(text).catch(() => {});
+      break;
+    }
+    case "cnick": {
+      const parts = words(event.args).filter((part) => !part.startsWith("-"));
+      const nick = parts[0] ?? "";
+      const serverNick = useStore.getState().servers[event.serverId]?.nick ?? "";
+      const numeric = Number(parts[1]);
+      if (nick.toLowerCase() === serverNick.toLowerCase() && Number.isFinite(numeric)) {
+        const value = Math.max(0, Math.min(0xffffff, numeric >>> 0));
+        const red = value & 0xff;
+        const green = (value >>> 8) & 0xff;
+        const blue = (value >>> 16) & 0xff;
+        useSettings.getState().set("selfNickColor", `#${red.toString(16).padStart(2, "0")}${green.toString(16).padStart(2, "0")}${blue.toString(16).padStart(2, "0")}`);
+      }
+      break;
+    }
+    case "color":
+      openSettings();
+      break;
+    case "background": {
+      const value = event.args.replace(/^-[a-z]+\s+/i, "").trim();
+      if (!value || value === "none") document.documentElement.style.removeProperty("background-image");
+      else if (/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(value)) document.documentElement.style.backgroundColor = value;
+      else document.documentElement.style.backgroundImage = `url(${JSON.stringify(value)})`;
+      break;
+    }
+    case "donotdisturb": {
+      const mode = words(event.args)[0]?.toLowerCase();
+      useSettings.getState().set("quietHoursEnabled", mode !== "off");
+      break;
+    }
+    case "dccignore": {
+      const mode = words(event.args)[0]?.toLowerCase();
+      useSettings.getState().set("dccIgnore", mode === "on" || mode === "1" || mode === "+");
+      break;
+    }
+    case "creq": {
+      const mode = words(event.args)[0]?.toLowerCase();
+      if (mode === "ask" || mode === "auto" || mode === "ignore") useSettings.getState().set("dccChatRequest", mode);
+      break;
+    }
+    case "sreq": {
+      const mode = words(event.args)[0]?.toLowerCase();
+      if (mode === "ask" || mode === "auto" || mode === "ignore") useSettings.getState().set("dccSendRequest", mode);
+      break;
+    }
+    case "debug": {
+      const mode = words(event.args)[0]?.toLowerCase();
+      useSettings.getState().set("trace", mode === "on" || mode === "1");
+      break;
+    }
+    case "dqwindow":
+    case "flist":
+      useStore.getState().setActive(useStore.getState().ensureBuffer(event.serverId, "DCC Transfers", "window"));
+      break;
+    case "firewall":
+    case "proxy":
+    case "perform":
+      actions.openConnect?.();
+      break;
+    case "flood": {
+      const parts = words(event.args);
+      const mode = parts.shift()?.toLowerCase();
+      const enabled = mode !== "off";
+      const messages = Math.max(1, Number(parts[0]) || useSettings.getState().floodMessages);
+      const seconds = Math.max(1, Number(parts[1]) || useSettings.getState().floodSeconds);
+      useSettings.getState().set("floodEnabled", enabled);
+      useSettings.getState().set("floodMessages", messages);
+      useSettings.getState().set("floodSeconds", seconds);
+      void api.configureFlood(enabled, messages, seconds).catch(() => {});
+      break;
+    }
+    case "flash":
+      actions.requestAttention?.();
+      break;
+    case "setlayer": {
+      const opacity = Math.max(0, Math.min(255, Number(words(event.args).at(-1)) || 255));
+      document.documentElement.style.opacity = String(opacity / 255);
+      break;
+    }
+    case "mdi": {
+      const mode = words(event.args)[0]?.toLowerCase();
+      if (mode === "tree" || mode === "-t") useSettings.getState().set("layout", "tree");
+      else if (mode === "switchbar" || mode === "-s") useSettings.getState().set("layout", "switchbar");
+      break;
+    }
+    case "tray":
+      actions.minimize?.();
+      break;
+    case "showmirc":
+      actions.restore?.();
+      break;
+    case "vol": {
+      const value = Math.max(0, Math.min(100, Number(words(event.args).at(-1)) || 0));
+      useSettings.getState().set("soundVolume", value / 100);
+      break;
+    }
     case "abook": {
       const nick = words(event.args).find((part) => !part.startsWith("-")) ?? "";
       const network = useStore.getState().servers[event.serverId]?.name ?? "";

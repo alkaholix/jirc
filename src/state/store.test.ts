@@ -21,9 +21,19 @@ import { useSettings } from "./settings";
 const SID = "s1";
 
 beforeEach(() => {
+  vi.clearAllMocks();
+  useSettings.getState().set("autoJoinInvites", false);
   useStore.setState({ servers: {}, buffers: {}, order: [], active: null });
   const s = useStore.getState();
   s.ensureServer(SID, "TestNet");
+});
+
+describe("invite compatibility", () => {
+  it("auto-joins invited channels only when /ajinvite enabled it", () => {
+    useSettings.getState().set("autoJoinInvites", true);
+    useStore.getState().handleEvent({ type: "invite", serverId: SID, from: "Alice", channel: "#welcome" });
+    expect(api.join).toHaveBeenCalledWith(SID, "#welcome");
+  });
 });
 
 describe("connection lifecycle", () => {

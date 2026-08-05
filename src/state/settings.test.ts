@@ -36,6 +36,15 @@ describe("timestamp settings migration", () => {
     });
   });
 
+  it("enables compact URL previews by default and validates the selected layout", () => {
+    expect(normalizeSavedSettings({})).toMatchObject({
+      urlPreviews: true,
+      urlPreviewStyle: "compact",
+    });
+    expect(normalizeSavedSettings({ urlPreviewStyle: "rich" }).urlPreviewStyle).toBe("rich");
+    expect(normalizeSavedSettings({ urlPreviewStyle: "invalid" }).urlPreviewStyle).toBe("compact");
+  });
+
   it("enforces an 8px minimum for custom application font sizes", () => {
     expect(normalizeAppFontSize(7)).toBe(8);
     expect(normalizeAppFontSize(-6)).toBe(8);

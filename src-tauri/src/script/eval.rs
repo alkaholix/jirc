@@ -407,6 +407,33 @@ impl TimedExpiry {
 /// follows is mIRC's style: 1 = checked, 2 = disabled, 3 = both.
 pub const STYLE_MARK: char = '\u{E000}';
 
+/// Unix timestamp of the most recent editbox activity. `$idle` reads it and
+/// `/resetidle` updates it. Keeping this in the engine's shared variable store
+/// makes the value application-wide, as it is in mIRC.
+pub const CLIENT_IDLE_SINCE_KEY: &str = "\0client-idle-since";
+pub const FLINEN_KEY: &str = "\0flinen";
+pub const FINDFILEN_KEY: &str = "\0findfilen";
+pub const FINDDIRN_KEY: &str = "\0finddirn";
+pub const MSFILE_KEY: &str = "\0msfile";
+pub const SFSTATE_KEY: &str = "\0sfstate";
+pub const CLIENT_DESKTOP_WIDTH_KEY: &str = "\0client-desktop-width";
+pub const CLIENT_DESKTOP_HEIGHT_KEY: &str = "\0client-desktop-height";
+pub const CLIENT_SOUND_ENABLED_KEY: &str = "\0client-sound-enabled";
+pub const CLIENT_SOUND_VOLUME_KEY: &str = "\0client-sound-volume";
+pub const CLIENT_DND_KEY: &str = "\0client-dnd";
+pub const CLIENT_SELF_COLOR_KEY: &str = "\0client-self-color";
+pub const CLIENT_BIGFLOAT_KEY: &str = "\0client-bigfloat";
+pub const CLIENT_DLEVEL_KEY: &str = "\0client-dlevel";
+pub const CLIENT_DEBUG_KEY: &str = "\0client-debug";
+pub const CLIENT_DCCIGNORE_KEY: &str = "\0client-dccignore";
+pub const CLIENT_EMAIL_KEY: &str = "\0client-email";
+pub const CLIENT_CREQ_KEY: &str = "\0client-creq";
+pub const CLIENT_SREQ_KEY: &str = "\0client-sreq";
+pub const CLIENT_LOCAL_IP_KEY: &str = "\0client-local-ip";
+pub const CLIENT_LOCAL_HOST_KEY: &str = "\0client-local-host";
+pub const CLIENT_ERROR_KEY: &str = "\0client-error";
+pub const CLIENT_EBEEPS_KEY: &str = "\0client-ebeeps";
+
 /// Per-invocation variables ($nick, $chan, params, …).
 #[derive(Debug, Clone, Default)]
 pub struct EventVars {
@@ -432,6 +459,14 @@ pub struct EventVars {
     pub key_char: String,
     pub key_val: Option<u32>,
     pub key_repeat: bool,
+    /// Fserve working directory for `on SERV`, exposed by `$cd`.
+    pub current_dir: String,
+    /// Hotlink mouse action and source position, exposed by `$hotlink` and the
+    /// legacy `$hotline`/`$hotlinepos` identifiers.
+    pub hotlink_event: String,
+    pub hotlink_line_text: String,
+    pub hotlink_line: usize,
+    pub hotlink_pos: usize,
     /// Secondary nick for events that involve two people (e.g. `on KICK`'s
     /// kicked user, exposed as `$knick`).
     pub knick: String,
@@ -442,6 +477,11 @@ pub struct EventVars {
     pub dialog_control: String,
     /// The event type name, e.g. "text"/"raw"/"op" — exposed as `$event`.
     pub event: String,
+    /// Stable id shared by an event handler and aliases it invokes.
+    pub event_id: String,
+    /// One-based position/count within a multi-change MODE event.
+    pub mode_index: usize,
+    pub mode_count: usize,
     /// Name of the `/timer` currently invoking the command (`$ctimer`).
     pub timer: String,
     /// Destination of the active `/play` item (`$pnick`).
@@ -676,6 +716,14 @@ pub trait ScriptInput: Send + Sync {
     /// Shows a prompt pre-filled with `default`; returns the entered text, or
     /// `None` if cancelled.
     fn prompt(&self, message: &str, title: &str, default: &str) -> Option<String>;
+
+    fn pick_files(&self, _directory: &str, _title: &str, _multiple: bool) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn pick_folder(&self, _directory: &str, _title: &str) -> Option<String> {
+        None
+    }
 }
 
 /// A no-op input backend (tests / before a real one is installed): returns the
@@ -846,6 +894,8 @@ pub struct WinView {
     pub active_wid: u32,
     /// The previously active window's wid (0 = none reported).
     pub last_active_wid: u32,
+    /// Most recently closed window, retained after its registry entry is gone.
+    pub last_closed: Option<(u32, String, String)>,
 }
 
 impl WinView {
@@ -1685,6 +1735,7 @@ impl<'a> Runtime<'a> {
             "iline" => self.cmd_window_line(raw_args, "insert"),
             "dline" => self.cmd_window_line(raw_args, "delete"),
             "sline" => self.cmd_window_select(raw_args),
+            "cline" => self.cmd_window_color(raw_args),
             "drawdot" | "drawline" | "drawrect" | "drawtext" | "drawsize" | "drawfill"
             | "drawreplace" | "drawcopy" | "drawpic" | "drawrot" | "drawscroll" | "drawsave" => {
                 self.cmd_window_draw(lname, raw_args)
@@ -1847,6 +1898,10 @@ impl<'a> Runtime<'a> {
             "auser" => self.cmd_auser(raw_args),
             "guser" => self.cmd_guser(raw_args),
             "ruser" => self.cmd_ruser(raw_args),
+            "rlevel" => {
+                let levels = self.expand(raw_args);
+                self.users.remove_levels(levels.trim());
+            }
             "iuser" => self.cmd_iuser(raw_args),
             "aop" => self.cmd_autolist(crate::script::users::AutoKind::Aop, raw_args),
             "avoice" => self.cmd_autolist(crate::script::users::AutoKind::Avoice, raw_args),
@@ -2132,11 +2187,167 @@ impl<'a> Runtime<'a> {
                     format!("LINKS {args}")
                 }));
             }
+            "resetidle" => {
+                self.vars.insert(
+                    CLIENT_IDLE_SINCE_KEY.into(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|duration| duration.as_secs())
+                        .unwrap_or(0)
+                        .to_string(),
+                );
+            }
+            "reseterror" => {
+                self.vars.remove(CLIENT_ERROR_KEY);
+            }
+            "ebeeps" => {
+                let value = self.expand(raw_args);
+                self.vars.insert(
+                    CLIENT_EBEEPS_KEY.into(),
+                    if value.trim().eq_ignore_ascii_case("on") {
+                        "$true"
+                    } else {
+                        "$false"
+                    }
+                    .into(),
+                );
+            }
+            "bigfloat" | "dlevel" | "debug" | "dccignore" | "emailaddr" | "creq" | "sreq"
+            | "localinfo" => {
+                let args = self.expand(raw_args);
+                let mut parts = args.split_whitespace();
+                match lname {
+                    "bigfloat" => {
+                        let value = parts.next().unwrap_or("on");
+                        self.vars.insert(
+                            CLIENT_BIGFLOAT_KEY.into(),
+                            if value.eq_ignore_ascii_case("off") {
+                                "$false"
+                            } else {
+                                "$true"
+                            }
+                            .into(),
+                        );
+                    }
+                    "dlevel" => {
+                        if let Some(value) = parts.next() {
+                            self.vars
+                                .insert(CLIENT_DLEVEL_KEY.into(), value.to_string());
+                        }
+                    }
+                    "debug" => {
+                        let value = parts.next().unwrap_or("0");
+                        self.vars.insert(CLIENT_DEBUG_KEY.into(), value.to_string());
+                    }
+                    "dccignore" => {
+                        let value = parts.next().unwrap_or("0");
+                        self.vars
+                            .insert(CLIENT_DCCIGNORE_KEY.into(), value.to_string());
+                    }
+                    "emailaddr" => {
+                        self.vars
+                            .insert(CLIENT_EMAIL_KEY.into(), args.trim().to_string());
+                    }
+                    "creq" => {
+                        self.vars.insert(
+                            CLIENT_CREQ_KEY.into(),
+                            parts.next().unwrap_or("ask").to_ascii_lowercase(),
+                        );
+                    }
+                    "sreq" => {
+                        self.vars.insert(
+                            CLIENT_SREQ_KEY.into(),
+                            parts.next().unwrap_or("ask").to_ascii_lowercase(),
+                        );
+                    }
+                    "localinfo" => {
+                        let host = parts.next().unwrap_or("");
+                        let ip = parts.next().unwrap_or("");
+                        self.vars
+                            .insert(CLIENT_LOCAL_HOST_KEY.into(), host.to_string());
+                        self.vars.insert(CLIENT_LOCAL_IP_KEY.into(), ip.to_string());
+                    }
+                    _ => {}
+                }
+                if matches!(lname, "debug" | "dccignore" | "creq" | "sreq") {
+                    let current_target = self.reply_target();
+                    self.actions.push(Action::ClientCommand {
+                        command: lname.into(),
+                        args,
+                        current_target,
+                    });
+                }
+            }
+            "playctrl" => {
+                let args = self.expand(raw_args);
+                let operation = match args
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_ascii_lowercase()
+                    .as_str()
+                {
+                    "pause" | "-p" => "pause",
+                    "resume" | "-r" => "resume",
+                    _ => "stop",
+                };
+                self.actions.push(Action::Audio {
+                    operation: operation.into(),
+                    path: String::new(),
+                    end_event: "PLAYEND".into(),
+                });
+            }
+            "winhelp" => {
+                let args = self.expand(raw_args);
+                let current_target = self.reply_target();
+                self.actions.push(Action::ClientCommand {
+                    command: "help".into(),
+                    args,
+                    current_target,
+                });
+            }
+            "ajinvite" | "bindip" | "clipboard" | "cnick" | "color" | "donotdisturb"
+            | "dqwindow" | "firewall" | "flist" | "flood" | "flush" | "localinfo-ui"
+            | "perform" | "proxy" | "setlayer" | "showmirc" | "tray" | "vol" | "background"
+            | "flash" | "beep" | "save" | "mdi" => {
+                let args = self.expand(raw_args);
+                self.actions.push(Action::ClientCommand {
+                    command: lname.into(),
+                    args,
+                    current_target: self.reply_target(),
+                });
+            }
+            "ulist" => {
+                let filter = self.expand(raw_args).to_ascii_lowercase();
+                for entry in self.users.formatted_entries() {
+                    if filter.trim().is_empty()
+                        || wildcard_match(filter.trim(), &entry.to_ascii_lowercase())
+                    {
+                        self.actions.push(Action::Echo {
+                            target: self.reply_target(),
+                            text: entry,
+                        });
+                    }
+                }
+            }
+            "uwho" => {
+                let nick = self.expand(raw_args);
+                let nick = nick.split_whitespace().next().unwrap_or("");
+                if !nick.is_empty() {
+                    self.actions.push(Action::Send(format!("WHOIS {nick}")));
+                }
+            }
+            // Microsoft Agent and voice-command APIs have no cross-platform
+            // subsystem. Accepting them as stable inactive commands lets old
+            // scripts feature-detect safely without leaking them to IRC.
+            "ghide" | "gload" | "gmove" | "gopts" | "gplay" | "gpoint" | "gqreq" | "gshow"
+            | "gsize" | "gstop" | "gtalk" | "gunload" | "vcadd" | "vcmd" | "vcrem" | "speak"
+            | "identd" => {
+                let _ = self.expand(raw_args);
+            }
             // We evaluate any parameters (for identifier side effects) and stop.
             // `/run` is deliberately a no-op — jIRC never launches programs.
-            "cline" | "fline" | "renwin" | "background" | "color" | "flash" | "beep" | "ebeeps"
-            | "speak" | "run" | "url" | "debug" | "donotdisturb" | "mdi" | "save" | "showmirc"
-            | "maximize" | "minimize" | "creq" | "sreq" | "clipboard" | "resetidle" => {
+            "fline" | "renwin" | "run" | "url" | "maximize" | "minimize" => {
                 let _ = self.expand(raw_args);
             }
             _ => {
@@ -3792,6 +4003,42 @@ impl<'a> Runtime<'a> {
             .to_string(),
             n,
             text: String::new(),
+        });
+    }
+
+    /// `/cline @window N colour` applies a mIRC foreground colour to an
+    /// existing custom-window line without changing its text.
+    fn cmd_window_color(&mut self, raw: &str) {
+        let expanded = self.expand(raw);
+        let mut parts = expanded.split_whitespace();
+        let name = parts.next().unwrap_or("");
+        let line = parts
+            .next()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(0);
+        let color = parts
+            .next()
+            .and_then(|value| value.parse::<u8>().ok())
+            .unwrap_or(0)
+            .min(99);
+        let Some(text) = self
+            .windows
+            .get(name)
+            .and_then(|window| {
+                line.checked_sub(1)
+                    .and_then(|index| window.lines.get(index))
+            })
+            .cloned()
+        else {
+            return;
+        };
+        let colored = format!("\u{3}{color:02}{text}");
+        self.windows.rline(name, line, &colored);
+        self.actions.push(Action::WindowLine {
+            name: name.into(),
+            op: "replace".into(),
+            n: line as u32,
+            text: colored,
         });
     }
 
@@ -5671,6 +5918,15 @@ impl<'a> Runtime<'a> {
                 String::new()
             };
             return ident::eval_hfind(self, &split_args(&inner), &prop);
+        }
+        // `$findfile/$finddir(..., command)` use `$findfilen/$finddirn` and
+        // `$1-` inside the callback, so preserve the callback argument until
+        // each matching path is selected.
+        if matches!(name.to_ascii_lowercase().as_str(), "findfile" | "finddir")
+            && chars.get(*i) == Some(&'(')
+        {
+            let inner = read_balanced(chars, i);
+            return ident::eval_find_entries(self, &name, &split_args(&inner));
         }
         // $iif must evaluate lazily: expand the condition, set $v1/$v2, then expand
         // only the taken branch — so `$iif(x,$v1,y)` sees $v1 (and skips the other

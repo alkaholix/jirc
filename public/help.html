@@ -277,12 +277,16 @@ installs, custom data locations, and normal folder backups include them.</p>
   <li><strong>Timestamps:</strong> Settings → Appearance offers inline
       <code>timestamp nickname message</code>, a centered timestamp divider
       when the minute changes, or timestamps off.</li>
+  <li><strong>URL previews:</strong> Settings → Appearance enables link cards and
+      offers Compact, Rich card, or Image-first layouts. Metadata and images are
+      fetched without cookies or scripts; local/private addresses, unsafe
+      redirects, oversized responses, and unsupported content are blocked.</li>
 </ul>
 
 <h2 id="settings">Settings overview</h2>
 <table>
   <tr><th>Page</th><th>What you can configure</th></tr>
-  <tr><td><strong>Appearance</strong></td><td>Dark/light/system theme, tree or switchbar layout, nick colour, installed-device font picker and size, input formatting toolbar, spell checking, optional common-typo auto-correction and language, quit message, timestamp mode, join/part visibility, custom emoji, and live custom CSS.</td></tr>
+  <tr><td><strong>Appearance</strong></td><td>Dark/light/system theme, tree or switchbar layout, nick colour, installed-device font picker and size, input formatting toolbar, spell checking, URL preview layout, optional common-typo auto-correction and language, quit message, timestamp mode, join/part visibility, custom emoji, and live custom CSS.</td></tr>
   <tr><td><strong>Alerts</strong></td><td>Desktop notifications, per-event sounds and volume, quiet hours, highlight words, watched nicks, and nick/hostmask ignores.</td></tr>
   <tr><td><strong>Behaviour</strong></td><td>Rejoin and window-retention behaviour, away changes, application updates, and data-folder location.</td></tr>
   <tr><td><strong>DCC</strong></td><td>Transfer IP and port range, passive/reverse mode, plus DCC Server listener and service controls.</td></tr>
@@ -571,9 +575,15 @@ matches exactly one word. So <code>on *:TEXT:!weather &amp;:#:</code> triggers o
   <tr><td><code>NOTICE</code></td><td>someone sends a notice</td><td><code>$nick $chan $1-</code></td></tr>
   <tr><td><code>INPUT</code></td><td><strong>you</strong> type a line</td><td><code>$chan $target $1-</code></td></tr>
   <tr><td><code>ACTIVE</code></td><td>the active buffer changes</td><td><code>$active $lactive $target</code></td></tr>
+  <tr><td><code>APPACTIVE</code></td><td>the application gains or loses operating-system focus</td><td><code>$appactive $appstate</code></td></tr>
   <tr><td><code>TABCOMP</code></td><td>Tab is pressed before nickname completion; <code>/halt</code> suppresses the default</td><td><code>$target $1-</code></td></tr>
   <tr><td><code>KEYDOWN</code> / <code>KEYUP</code></td><td>a key is pressed or released in the message input</td><td><code>$1</code> key, <code>$2</code> modifiers, <code>$3-</code> input text</td></tr>
+  <tr><td><code>CHAR</code></td><td>a Unicode character is entered in a custom <code>@window</code> editbox</td><td><code>$keychar $keyval $keyrpt</code></td></tr>
+  <tr><td><code>HOTLINK</code></td><td>the pointer moves over or clicks a matching rendered word</td><td><code>$1 $hotlink(...) $hotline $hotlinepos</code></td></tr>
+  <tr><td><code>LOGON</code></td><td>registration lines have been sent, before the welcome numeric</td><td><code>$network $server $servertarget</code></td></tr>
+  <tr><td><code>SERV</code></td><td>a user enters a command in a jIRC Fserve session</td><td><code>$nick $cd $1-</code></td></tr>
   <tr><td><code>WAVEEND</code> / <code>PLAYEND</code></td><td>script audio or a play queue item finishes</td><td><code>$filename</code></td></tr>
+  <tr><td><code>NOSOUND</code></td><td>a remote CTCP SOUND names a file absent from the script-data sandbox</td><td><code>$nick $filename</code></td></tr>
   <tr><td><code>DNS</code></td><td>a typed or scripted <code>/dns</code> lookup completes</td><td><code>$raddress $dns(0) $dns(N).ip</code></td></tr>
   <tr><td><code>JOIN</code></td><td>someone joins</td><td><code>$nick $chan</code></td></tr>
   <tr><td><code>PART</code></td><td>someone leaves</td><td><code>$nick $chan $1-</code> (part msg)</td></tr>
@@ -581,6 +591,7 @@ matches exactly one word. So <code>on *:TEXT:!weather &amp;:#:</code> triggers o
   <tr><td><code>NICK</code></td><td>someone changes nick</td><td><code>$nick</code> (old), <code>$newnick</code></td></tr>
   <tr><td><code>KICK</code></td><td>someone is kicked</td><td><code>$nick</code> (kicker), <code>$knick</code> (kicked), <code>$chan $1-</code> (reason)</td></tr>
   <tr><td><code>MODE</code></td><td>a mode changes</td><td><code>$nick</code> (setter), <code>$chan $1-</code> (modes)</td></tr>
+  <tr><td><code>SERVERMODE</code> / <code>SERVEROP</code></td><td>the IRC server changes channel modes or grants operator status</td><td><code>$nick $chan $1- $opnick</code></td></tr>
   <tr><td><code>OP DEOP VOICE DEVOICE BAN UNBAN OWNER ADMIN HELP</code> (+ DE‑ forms)</td><td>a specific mode change</td><td><code>$nick</code> (setter), <code>$opnick</code>/<code>$bnick</code>/<code>$vnick</code>/<code>$knick</code> = affected nick/mask, <code>$chan</code></td></tr>
   <tr><td><code>TOPIC</code></td><td>the topic changes</td><td><code>$nick</code> (setter), <code>$chan $1-</code> (topic)</td></tr>
   <tr><td><code>INVITE</code></td><td>you are invited</td><td><code>$nick</code> (inviter), <code>$chan</code></td></tr>
@@ -969,9 +980,18 @@ are intentionally not exposed.</p>
   <tr><td><code>/autojoin -n|-s|-dN</code></td><td>In <code>on CONNECT</code>: join now / skip / delay the autojoin.</td></tr>
   <tr><td><code>/reload</code> · <code>/unsetall</code></td><td>Recompile all scripts · clear all variables.</td></tr>
   <tr><td><code>/scon N cmd</code> · <code>/scid cid cmd</code></td><td>Run a command on another connection — by index / by <code>$cid</code> — in that connection's context.</td></tr>
+  <tr><td><code>/ajinvite on|off</code> · <code>/donotdisturb on|off</code></td><td>Automatically join invited channels · toggle notification quiet mode.</td></tr>
+  <tr><td><code>/flood on|off [messages seconds]</code></td><td>Configure the live outbound IRC rate limiter.</td></tr>
+  <tr><td><code>/bindip address</code> · <code>/localinfo host ip</code></td><td>Set the local listener binding and script-visible local host/address.</td></tr>
+  <tr><td><code>/creq ask|auto|ignore</code> · <code>/sreq ask|auto|ignore</code> · <code>/dccignore on|off</code></td><td>Control incoming DCC chat and file request handling.</td></tr>
+  <tr><td><code>/bigfloat</code> · <code>/dlevel</code> · <code>/debug</code> · <code>/emailaddr</code> · <code>/ebeeps</code></td><td>Set their corresponding compatibility state identifiers.</td></tr>
+  <tr><td><code>/rlevel levels</code> · <code>/ulist [mask]</code> · <code>/uwho nick</code></td><td>Remove user-list levels globally, list matching entries, or request WHOIS.</td></tr>
+  <tr><td><code>/beep</code> · <code>/vol N</code> · <code>/playctrl pause|resume|stop</code></td><td>Client alert, volume, and local playback control.</td></tr>
+  <tr><td><code>/tray</code> · <code>/showmirc</code> · <code>/flash</code> · <code>/setlayer N</code></td><td>Minimize, restore/focus, request attention, or set application opacity (0–255).</td></tr>
+  <tr><td><code>/perform</code> · <code>/proxy</code> · <code>/firewall</code></td><td>Open connection configuration for Perform and SOCKS settings.</td></tr>
 </table>
 <div class="note">Unrecognized <em>client-side</em> commands (unsupported display/launch
-commands such as <code>/beep</code> or <code>/run</code>) are quietly ignored
+commands such as <code>/run</code>) are quietly ignored
 so dropped-in scripts don't error. Anything else that isn't a built-in or one of your
 aliases is sent to the server as a raw IRC command — so real IRC commands like
 <code>/whois</code> or <code>/list</code> work, but a typo like <code>/joimn</code> still
@@ -1004,7 +1024,10 @@ goes to the server.</div>
   <tr><td><code>$time</code> · <code>$date</code> · <code>$ctime</code></td><td>current time / date / unix seconds</td></tr>
   <tr><td><code>$timestamp</code> · <code>$logstamp</code></td><td>the current local time in jIRC's timestamp form; <code>$timestampfmt</code> and <code>$logstampfmt</code> return the corresponding mSL format string</td></tr>
   <tr><td><code>$ticks</code> · <code>$ticksqpc</code></td><td>process-relative millisecond counter · high-resolution counter</td></tr>
-  <tr><td><code>$uptime(mirc|server,N)</code></td><td>jIRC or current-server uptime; <code>N=1</code> duration, <code>N=2</code> without seconds, <code>N=3</code> seconds, otherwise milliseconds. <code>system</code> returns <code>$null</code> because no reliable portable boot clock is available.</td></tr>
+  <tr><td><code>$uptime(mirc|server|system,N)</code></td><td>jIRC process, current-server, or operating-system uptime; <code>N=1</code> duration, <code>N=2</code> without seconds, <code>N=3</code> seconds, otherwise milliseconds.</td></tr>
+  <tr><td><code>$ip</code> · <code>$host</code> · <code>$idle</code></td><td>route-selected local IP, local hostname, and seconds since editbox activity.</td></tr>
+  <tr><td><code>$eventid</code> · <code>$eventparms</code></td><td>unique script-event id and its expanded parameter text.</td></tr>
+  <tr><td><code>$leftwin</code> · <code>$leftwinwid</code> · <code>$leftwincid</code></td><td>most recently closed window name, window id, and connection id.</td></tr>
   <tr><td><code>$online</code> · <code>$onlineserver</code> · <code>$onlinetotal</code></td><td>seconds connected to the current server</td></tr>
   <tr><td><code>$status</code></td><td>current server state: <code>disconnected</code>, <code>connecting</code>, or <code>connected</code></td></tr>
   <tr><td><code>$portfree(port[,ip])</code></td><td><code>$true</code> when the TCP port can be bound on all interfaces or the specified IPv4/IPv6 interface</td></tr>

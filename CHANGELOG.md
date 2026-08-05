@@ -12,6 +12,63 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🔗 26.8.12 — Safe URL previews
+
+- Added URL preview cards beneath channel, query, action, notice, and whisper
+  messages, with user-selectable Compact, Rich card, and Image-first layouts in
+  Settings → Appearance.
+- Added Open Graph, Twitter Card, HTML-title, description, direct-image, and
+  relative-image discovery with session caching and a three-link-per-message
+  limit.
+- Preview requests run through the Rust backend without cookies or scripts.
+  DNS-pinned public-address validation, redirect revalidation, timeouts,
+  download limits, content-type checks, and private/local network blocking
+  protect users; preview images are returned as local data URLs.
+
+---
+
+## 🎭 26.8.11 — Complete portable event compatibility
+
+- Added `on APPACTIVE`, `on CHAR`, `on HOTLINK`, `on LOGON`, `on SERV`,
+  `on SERVERMODE`, `on SERVEROP`, and `on NOSOUND` with their live application,
+  custom-window, rendered-message, registration, Fserve, IRC mode, and CTCP
+  dispatch paths.
+- Added `$hotlink(...)`, `$hotline`, `$hotlinepos`, character identifiers,
+  Fserve `$cd`, server-mode nick context, and missing-sound `$filename` state.
+- Added parser and runtime regression coverage for the complete portable event
+  tail. Obsolete Agent, voice-command, MIDI, and MP3 event families remain
+  stable inactive compatibility surfaces.
+
+---
+
+## 🧩 26.8.10 — Complete command compatibility pass
+
+- Completed the remaining actionable mSL command surface with runtime, user
+  list, custom-window, DCC policy, audio and client-layout behavior.
+- Added script control for auto-joining invites, outbound flood limits, local
+  bind information, tracing, quiet mode, request policies, volume, clipboard,
+  window attention, opacity and native minimize/restore behavior.
+- Added `/rlevel`, `/ulist`, `/uwho`, `/cline`, `/playctrl`, `/reseterror` and
+  compatibility-state commands with regression coverage.
+- Legacy Microsoft Agent, voice-command and speech commands are accepted as
+  stable inactive compatibility operations; identd remains demand-deferred for
+  older networks, and DLL/COM/DDE commands remain permanent cross-platform
+  non-goals.
+
+## 🧩 26.8.9 — Complete identifier compatibility pass
+
+- Completed the remaining cross-platform mSL identifier surface, including
+  live connection, event, channel-list, window-history, DCC, client UI and
+  local-system state.
+- Added file selection, clipboard, disk, path, archive, compression, Argon2,
+  hashing, wrapping, picture and address-book identifiers with sandboxed file
+  access where applicable.
+- Added real system uptime, local host/address discovery, mode-batch boundaries,
+  IRC LINKS and channel ban/exception/invite list tracking.
+- Preserved explicit inactive results for legacy speech/agent/voice-command
+  facilities that jIRC does not provide, and retained COM/DDE/DLL identifiers as
+  permanent cross-platform non-goals.
+
 ## 🧩 26.8.8 — Script UI state and compatibility
 
 - Added stateful mSL `$tip`/`$tips` and `/tip`/`/tips` support with named desktop

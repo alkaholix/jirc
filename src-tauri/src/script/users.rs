@@ -101,6 +101,37 @@ fn split_levels(levels: &str) -> Vec<String> {
 }
 
 impl UserList {
+    pub fn formatted_entries(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .map(|entry| {
+                let base = format!("{}:{}", entry.levels.join(","), entry.address);
+                if entry.info.is_empty() {
+                    base
+                } else {
+                    format!("{base} {}", entry.info)
+                }
+            })
+            .collect()
+    }
+
+    /// `/rlevel <levels>` removes those levels from every user-list entry.
+    pub fn remove_levels(&mut self, levels: &str) {
+        let remove = split_levels(levels);
+        if remove.is_empty() {
+            return;
+        }
+        self.dirty = true;
+        for entry in &mut self.entries {
+            entry.levels.retain(|level| {
+                !remove
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(level))
+            });
+        }
+        self.entries.retain(|entry| !entry.levels.is_empty());
+    }
+
     /// Load the user list (and auto-lists) from `dir/users.json`; empty if the
     /// file is absent or unreadable.
     pub fn load_from(dir: &Path) -> UserList {
