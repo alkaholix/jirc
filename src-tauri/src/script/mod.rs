@@ -2089,22 +2089,10 @@ const EXAMPLE_SCRIPTS: &[(&str, &str)] = &[
          on *:TEXT:!ping*:#:{ /msg $chan pong $nick }\n\
          on *:JOIN:#:{ /msg $chan welcome $nick }\n",
     ),
-    (
-        "popups",
-        "; Right-click menus. The nicklist menu uses $1 = the selected nick.\n\
-         ; Leading dots make submenus; a line with just - is a separator.\n\
-         menu nicklist {\n\
-         \x20 Whois:/whois $1\n\
-         \x20 -\n\
-         \x20 Control\n\
-         \x20 .Op:/mode $chan +o $1\n\
-         \x20 .Deop:/mode $chan -o $1\n\
-         \x20 .Voice:/mode $chan +v $1\n\
-         \x20 .Kick:/kick $chan $1\n\
-         \x20 -\n\
-         \x20 Slap:/me slaps $1 around a bit\n\
-         }\n",
-    ),
+    // Kept as a real .msl file rather than an escaped string literal: it is
+    // long enough that escaping would obscure it, and this way the shipped
+    // default is editable (and testable) as ordinary mSL.
+    ("popups", include_str!("examples/popups.msl")),
     (
         "dialog",
         "; A custom dialog. Type /qsay in a channel to open it.\n\
@@ -8628,47 +8616,9 @@ mod tests {
         assert!(kids[3].separator);
     }
 
-    /// The shipped example popup file (docs/examples/popups.mrc), inlined so
-    /// the test has no dependency on a path outside the crate. Keep in sync if
-    /// the example changes — this is what proves the example actually works.
-    const EXAMPLE_POPUPS: &str = r#"
-menu channel {
-  Topic:echo -a Topic for $chan is: $chan($chan).topic
-  Who is here:who $chan
-  $style($iif($me isop $chan,0,2)) Set moderated:mode $chan +m
-  $style($iif(m isincs $chan($chan).mode,1,0)) Moderated now:mode $chan -m
-  -
-  Channel modes
-  .No external messages:mode $chan +n
-  .Limits
-  ..Set limit 50:mode $chan +l 50
-  -
-  Jump to
-  .$submenu($pop_chans($1))
-}
-menu nicklist {
-  Whois $snick($active,1):whois $snick($active,1)
-  $style($iif($me isop $chan,0,2)) Give ops:mode $chan +o $snick($active,1)
-  $style($iif($snick($active,2),0,2)) Selected $numtok($snicks,32) nicks
-  .Whois each:pop_each whois $snicks
-}
-alias -l pop_chans {
-  if ($1 == begin) return -
-  if ($1 == end) return -
-  var %c = $chan($1)
-  if (%c == $null) return
-  return %c $+ : $+ join %c
-}
-alias -l pop_each {
-  var %cmd = $1
-  var %list = $2-
-  var %i = 1
-  while (%i <= $numtok(%list,32)) {
-    %cmd $gettok(%list,%i,32)
-    inc %i
-  }
-}
-"#;
+    /// The popup file jIRC seeds on first run. Testing the real shipped bytes
+    /// means the defaults users actually get are the ones verified here.
+    const EXAMPLE_POPUPS: &str = include_str!("examples/popups.msl");
 
     #[test]
     fn shipped_popup_examples_build_correctly() {
@@ -8703,28 +8653,30 @@ alias -l pop_each {
             items
                 .iter()
                 .find(|i| i.label == l)
-                .unwrap_or_else(|| panic!("missing {l}: {items:?}"))
+                .unwrap_or_else(|| panic!("missing {l}: {items:#?}"))
         };
         // Commands are stored unexpanded; they expand when the item is run.
         assert_eq!(by("Who is here").command, "who $chan");
+        // Labels ARE expanded, so this names the live channel.
+        assert!(items.iter().any(|i| i.label == "Part #one"));
+        // Nested submenu, with a separator inside it.
         let modes = by("Channel modes");
-        let limits = modes
-            .children
-            .iter()
-            .find(|i| i.label == "Limits")
-            .expect("Limits submenu");
-        assert_eq!(limits.children[0].command, "mode $chan +l 50");
-        // $style($iif(...)) — we are op, so this must NOT be greyed out.
-        assert!(!by("Set moderated").disabled, "op should enable moderate");
-        // The mode string contains no `m`, so this is unchecked.
-        assert!(!by("Moderated now").checked);
-        // $submenu built one entry per joined channel, with begin/end
-        // separators around them.
+        assert!(!modes.disabled, "we hold ops, so this must not be greyed");
+        assert!(modes.children.iter().any(|i| i.separator));
+        assert_eq!(
+            modes.children[0].command,
+            "mode $chan +n",
+            "got {:#?}",
+            modes.children
+        );
+        // $submenu built one entry per joined channel, wrapped in the
+        // begin/end separators the helper returns.
         let jump = by("Jump to");
-        assert_eq!(jump.children.len(), 4, "got {:?}", jump.children);
+        assert_eq!(jump.children.len(), 4, "got {:#?}", jump.children);
         assert!(jump.children[0].separator && jump.children[3].separator);
         assert_eq!(jump.children[1].label, "#one");
         assert_eq!(jump.children[1].command, "join #one");
+        assert_eq!(jump.children[2].label, "#two");
         // Running an item expands it against the live context.
         assert_eq!(
             engine.run_popup_command(
@@ -8733,12 +8685,11 @@ alias -l pop_each {
             ),
             vec![Action::Send("WHO #one".into())]
         );
-        assert_eq!(jump.children[2].label, "#two");
 
         // Nicklist: labels interpolate the selected nick, and the multi-select
         // group greys out with only one nick chosen.
         let nl = engine.popups_evaluated(&rctx, "nicklist", "bob", "#one");
-        assert!(nl.iter().any(|i| i.label == "Whois bob"));
+        assert!(nl.iter().any(|i| i.label == "Whois bob"), "got {nl:#?}");
         let sel = nl
             .iter()
             .find(|i| i.label.starts_with("Selected "))
