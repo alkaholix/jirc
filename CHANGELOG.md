@@ -12,6 +12,33 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🧠 26.8.17 — Advanced default popups, and a script editor fix
+
+- Fixed the script editor showing a stale cached draft instead of the file on
+  disk. A draft took priority unconditionally, so once one existed for a script
+  it hid that file permanently — including defaults rewritten by an upgrade —
+  and nothing in the interface could clear it.
+- A draft now records the text it was taken from, and is discarded when the file
+  changes underneath it. Drafts saved before this release cannot be checked that
+  way and are cleared once, on first run.
+- Added a **Discard changes** button, so unsaved edits can be thrown away and
+  the file reloaded. Previously a draft could only be cleared by saving over it
+  or deleting the script.
+- Rebuilt the default popup menus so they demonstrate what the scripting engine
+  can do rather than listing a few commands:
+  - Channel modes tick according to the channel's live mode string and toggle
+    the opposite way when already set.
+  - The channel menu lists the current ban list, built at open time, and
+    clicking an entry lifts that ban.
+  - The nick-list menu offers Give or Take ops depending on what the person
+    already holds, previews all ten `$mask` types against their real address
+    before you ban, and lists the channels you share with them.
+  - Channel lists show each channel's user count, the status menu reports
+    uptime and away duration, and the multi-selection group acts on every
+    selected nick.
+
+---
+
 ## 🖱️ 26.8.16 — Default popup menus, corrected
 
 Supersedes 26.8.15, which shipped the new popup menus to the wrong file. Update

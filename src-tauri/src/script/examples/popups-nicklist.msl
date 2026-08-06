@@ -1,25 +1,74 @@
 ; Nick-list right-click menu.
-;   $snick($active,1) is the first selected nick — using it in a label makes the
-;   menu name the person you clicked. $snicks is every selected nick.
+;
+; Techniques on show here:
+;   $snick($active,1)  the first selected nick   ·   $snicks = all of them
+;   $style(1|2|3)      tick / greyed / both — must be first, never displayed
+;   $submenu($x($1))   builds a whole run of items at runtime
+;   $iif(...)          labels and states that follow live channel state
+
 menu nicklist {
+  ; The tick appears when this person already holds the mode, so the menu
+  ; doubles as a status readout.
   Whois $snick($active,1):whois $snick($active,1)
   Query:query $snick($active,1)
-  Slap:me slaps $snick($active,1) around a bit with a large trout
   -
-  ; These grey out unless you hold ops.
-  $style($iif($me isop $chan,0,2)) Give ops:mode $chan +o $snick($active,1)
-  $style($iif($me isop $chan,0,2)) Take ops:mode $chan -o $snick($active,1)
-  $style($iif($me isop $chan,0,2)) Voice:mode $chan +v $snick($active,1)
+  $style($iif($me isop $chan,0,2)) $iif($snick($active,1) isop $chan,Take ops,Give ops):mode $chan $iif($snick($active,1) isop $chan,-o,+o) $snick($active,1)
+  $style($iif($me isop $chan,0,2)) $iif($snick($active,1) isvoice $chan,Take voice,Give voice):mode $chan $iif($snick($active,1) isvoice $chan,-v,+v) $snick($active,1)
   $style($iif($me isop $chan,0,2)) Kick
   .Quietly:kick $chan $snick($active,1)
   .With a reason:kick $chan $snick($active,1) Please read the topic
-  .Ban and kick:popn_bankick $chan $snick($active,1)
+  .Kick and ban the host:popn_bankick $chan $snick($active,1)
   -
-  ; Greys out until you select two or more nicks.
+  ; Every mIRC ban-mask type, built from this user's real address so you can
+  ; see exactly what each one would match before you use it.
+  $style($iif($me isop $chan,0,2)) Ban with mask
+  .$submenu($popn_masks($1))
+  ; Channels you share with them, discovered from the internal address list.
+  Also on
+  .$submenu($popn_common($1))
+  -
+  Send a CTCP
+  .Version:ctcp $snick($active,1) VERSION
+  .Ping:ctcp $snick($active,1) PING
+  .Time:ctcp $snick($active,1) TIME
+  .Client info:ctcp $snick($active,1) CLIENTINFO
+  -
+  Copy
+  .Nick:clipboard $snick($active,1)
+  .Address:clipboard $address($snick($active,1),5)
+  -
+  ; Greys out until two or more nicks are selected, then acts on all of them.
   $style($iif($snick($active,2),0,2)) Selected $numtok($snicks,32) nicks
   .Whois each:popn_each whois $snicks
   .Query each:popn_each query $snicks
-  .Copy to clipboard:clipboard $snicks
+  .Voice all:popn_mode $chan +v $snicks
+  .Devoice all:popn_mode $chan -v $snicks
+  .Copy nicks:clipboard $snicks
+}
+
+; --- helpers (alias -l keeps them private to this file) ---
+
+; $submenu calls this with "begin", then 1, 2, 3 ... then "end". Return one
+; "label:command" line each time, "-" for a separator, or nothing to stop.
+; Here each entry previews a different $mask type against the real address.
+alias -l popn_masks {
+  if ($1 == begin) return -
+  if ($1 == end) return
+  var %n = $calc($1 - 1)
+  if (%n > 9) return
+  var %addr = $address($snick($active,1),5)
+  if (%addr == $null) return
+  var %m = $mask(%addr,%n)
+  return %n $+ $chr(32) $+ %m $+ : $+ mode $chan +b %m
+}
+
+; Channels you and this user are both on.
+alias -l popn_common {
+  if ($1 == begin) return -
+  if ($1 == end) return
+  var %c = $comchan($snick($active,1),$1)
+  if (%c == $null) return
+  return %c $+ : $+ join %c
 }
 
 ; Runs a command once per nick in a space-separated list.
@@ -29,6 +78,18 @@ alias -l popn_each {
   var %i = 1
   while (%i <= $numtok(%list,32)) {
     %cmd $gettok(%list,%i,32)
+    inc %i
+  }
+}
+
+; Applies one mode to every selected nick, four at a time like a real client.
+alias -l popn_mode {
+  var %chan = $1
+  var %flag = $2
+  var %list = $3-
+  var %i = 1
+  while (%i <= $numtok(%list,32)) {
+    mode %chan %flag $gettok(%list,%i,32)
     inc %i
   }
 }

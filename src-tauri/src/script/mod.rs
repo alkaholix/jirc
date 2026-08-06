@@ -8658,6 +8658,7 @@ mod tests {
                     nicks: vec!["me".into(), "bob".into()],
                     members: vec![("me".into(), "@".into()), ("bob".into(), String::new())],
                     mode: "+nt".into(),
+                    bans: vec!["*!*@bad.example".into(), "spam!*@*".into()],
                     ..Default::default()
                 },
                 ChannelView {
@@ -8665,6 +8666,8 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            // $address / $mask read the internal address list.
+            ial: vec![("bob".into(), "bob!~user@host.example.com".into())],
             ..Default::default()
         };
         let rctx = RunCtx {
@@ -8681,28 +8684,77 @@ mod tests {
                 .find(|i| i.label == l)
                 .unwrap_or_else(|| panic!("missing {l}: {items:#?}"))
         };
-        // Commands are stored unexpanded; they expand when the item is run.
-        assert_eq!(by("Who is here").command, "who $chan");
-        // Labels ARE expanded, so this names the live channel.
-        assert!(items.iter().any(|i| i.label == "Part #one"));
-        // Nested submenu, with a separator inside it.
-        let modes = by("Channel modes");
+        // The greyed information line reads live channel state.
+        let info = by("#one has 2 users");
+        assert!(info.disabled && info.command.is_empty());
+
+        // Mode items tick from the channel's actual mode string (+nt here) and
+        // toggle the opposite way when already set.
+        let modes = by("Modes");
         assert!(!modes.disabled, "we hold ops, so this must not be greyed");
-        assert!(modes.children.iter().any(|i| i.separator));
+        let mode_item = |l: &str| {
+            modes
+                .children
+                .iter()
+                .find(|i| i.label == l)
+                .unwrap_or_else(|| panic!("missing mode {l}: {:#?}", modes.children))
+        };
+        assert!(mode_item("No external messages").checked, "+n is set");
+        assert!(mode_item("Topic ops only").checked, "+t is set");
+        assert!(!mode_item("Moderated").checked, "+m is not set");
+        // Commands stay unexpanded so the toggle re-evaluates on each click.
+        assert!(mode_item("Moderated").command.contains("$iif("));
+        // Running it resolves against live state: +n is set, so this removes it.
         assert_eq!(
-            modes.children[0].command,
-            "mode $chan +n",
-            "got {:#?}",
-            modes.children
+            engine.run_popup_command(
+                &rctx,
+                "#one",
+                &mode_item("No external messages").command.clone(),
+                &[],
+                &[],
+                "",
+                "channel",
+                "#one",
+            ),
+            vec![Action::Send("MODE #one -n".into())]
         );
-        // $submenu built one entry per joined channel, wrapped in the
-        // begin/end separators the helper returns.
+        // And +m is not set, so this one adds it.
+        assert_eq!(
+            engine.run_popup_command(
+                &rctx, "#one", &mode_item("Moderated").command.clone(),
+                &[], &[], "", "channel", "#one",
+            ),
+            vec![Action::Send("MODE #one +m".into())]
+        );
+
+        // The ban list is built from live state by $submenu.
+        let bans = by("Bans (2)");
+        let ban_labels: Vec<&str> = bans
+            .children
+            .iter()
+            .filter(|i| !i.separator)
+            .map(|i| i.label.as_str())
+            .collect();
+        assert_eq!(
+            ban_labels,
+            ["Unban *!*@bad.example", "Unban spam!*@*"],
+            "got {:#?}",
+            bans.children
+        );
+        // Unlike static items, $submenu-generated commands are already
+        // expanded — they come from running the alias that produced them.
+        assert_eq!(bans.children[1].command, "mode #one -b *!*@bad.example");
+
+        // Channel list carries each channel's user count.
         let jump = by("Jump to");
-        assert_eq!(jump.children.len(), 4, "got {:#?}", jump.children);
-        assert!(jump.children[0].separator && jump.children[3].separator);
-        assert_eq!(jump.children[1].label, "#one");
-        assert_eq!(jump.children[1].command, "join #one");
-        assert_eq!(jump.children[2].label, "#two");
+        let jump_labels: Vec<&str> = jump
+            .children
+            .iter()
+            .filter(|i| !i.separator)
+            .map(|i| i.label.as_str())
+            .collect();
+        assert_eq!(jump_labels, ["#one (2)", "#two (0)"]);
+
         // Running an item expands it against the live context.
         assert_eq!(
             engine.run_popup_command(
@@ -8712,10 +8764,28 @@ mod tests {
             vec![Action::Send("WHO #one".into())]
         );
 
-        // Nicklist: labels interpolate the selected nick, and the multi-select
-        // group greys out with only one nick chosen.
+        // Nick list: bob holds no prefix, so the toggle offers to GIVE ops.
         let nl = engine.popups_evaluated(&rctx, "nicklist", "bob", "#one");
         assert!(nl.iter().any(|i| i.label == "Whois bob"), "got {nl:#?}");
+        assert!(
+            nl.iter().any(|i| i.label == "Give ops"),
+            "expected the give-ops form for an unprefixed nick: {nl:#?}"
+        );
+        // The mask submenu previews every $mask type against the real address.
+        let masks = nl
+            .iter()
+            .find(|i| i.label == "Ban with mask")
+            .unwrap_or_else(|| panic!("mask submenu missing: {nl:#?}"));
+        let first = masks
+            .children
+            .iter()
+            .find(|i| !i.separator)
+            .expect("at least one mask");
+        assert!(
+            first.label.starts_with("0 ") && first.command.starts_with("mode #one +b "),
+            "got {first:#?}"
+        );
+        // Multi-select group greys out with a single nick chosen.
         let sel = nl
             .iter()
             .find(|i| i.label.starts_with("Selected "))

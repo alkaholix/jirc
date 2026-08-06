@@ -1,7 +1,39 @@
 ; Private-query right-click menu.
+;
+; $target is the person you are talking to. The address items come from the
+; internal address list, so they are populated once you have seen them speak.
+
 menu query {
+  $style(2) Talking to $target
   Whois $target:whois $target
-  Version check:ctcp $target VERSION
   -
+  Send a CTCP
+  .Version:ctcp $target VERSION
+  .Ping:ctcp $target PING
+  .Time:ctcp $target TIME
+  .Client info:ctcp $target CLIENTINFO
+  -
+  ; Channels you share with them.
+  Also on
+  .$submenu($popq_common($1))
+  -
+  Copy
+  .Nick:clipboard $target
+  .Address:clipboard $address($target,5)
+  .Host mask:clipboard $mask($address($target,5),2)
+  -
+  Clear this window:clear
   Close:close -m $target
+}
+
+; --- helpers (alias -l keeps them private to this file) ---
+
+; $submenu calls this with "begin", then 1, 2, 3 ... then "end". Return one
+; "label:command" line each time, or nothing to stop.
+alias -l popq_common {
+  if ($1 == begin) return -
+  if ($1 == end) return
+  var %c = $comchan($target,$1)
+  if (%c == $null) return
+  return %c $+ : $+ join %c
 }

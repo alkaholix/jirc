@@ -1,27 +1,43 @@
-; Server/status window right-click menu.
-;   $style(1) puts a check mark on an item, $style(2) greys it out, $style(0)
-;   leaves it plain — so $iif() can drive the state. It never shows in the menu.
+; Server / status window right-click menu.
+;
+; $style(1) puts a tick on an item, $style(2) greys it out, $style(0) leaves it
+; plain — so $iif() can drive the state from live values. It never displays.
+
 menu status {
-  Server info:echo -a Connected to $server ( $+ $network $+ ) as $me
-  ; The tick tracks your away state.
-  $style($iif($away,1,0)) Away:pops_away
+  ; Information lines, greyed so they read as status rather than actions.
+  $style(2) $me on $network
+  $style(2) Connected for $duration($uptime(server,3))
   -
-  ; One entry per channel you are on, built when the menu opens.
-  Channels
+  ; The tick tracks your away state, and the item toggles it.
+  $style($iif($away,1,0)) $iif($away,Back ( $+ $duration($awaytime) $+ ),Set away):pops_away
+  -
+  ; One entry per channel, each showing its user count.
+  Channels ( $+ $chan(0) $+ )
   .$submenu($pops_chans($1))
   -
-  Server links:links
+  Server
+  .Links:links
+  .Message of the day:motd
+  .Server time:time
+  .Admin:admin
+  -
+  Copy
+  .Server name:clipboard $server
+  .My address:clipboard $address($me,5)
+  -
   Reconnect:server
 }
 
-; jIRC calls this with "begin", then 1, 2, 3 ... then "end". Return one popup
-; line each time ("label:command"), or nothing to end the run. "-" is a separator.
+; --- helpers (alias -l keeps them private to this file) ---
+
+; $submenu calls this with "begin", then 1, 2, 3 ... then "end". Return one
+; "label:command" line each time, "-" for a separator, or nothing to stop.
 alias -l pops_chans {
   if ($1 == begin) return -
-  if ($1 == end) return -
+  if ($1 == end) return
   var %c = $chan($1)
   if (%c == $null) return
-  return %c $+ : $+ join %c
+  return %c ( $+ $nick(%c,0) $+ ) $+ : $+ join %c
 }
 
 alias -l pops_away {
