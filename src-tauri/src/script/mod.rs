@@ -11726,6 +11726,44 @@ mod tests {
     }
 
     #[test]
+    fn haltdef_suppresses_the_default_wherever_it_appears() {
+        // /haltdef sets a flag rather than stopping the routine, so it works
+        // first or last in the handler. mIRC's own examples put it first;
+        // scripts in the wild often put it last. Both must behave the same.
+        use crate::irc::event::{MessageKind, UiEvent};
+        let event = || UiEvent::Message {
+            server_id: "s".into(),
+            kind: MessageKind::Privmsg,
+            from: Some("bob".into()),
+            target: "#c".into(),
+            text: "hello".into(),
+            time: None,
+        };
+        for script in [
+            "on ^*:TEXT:*:#:{ haltdef | echo -a themed $1- }",
+            "on ^*:TEXT:*:#:{ echo -a themed $1- | haltdef }",
+        ] {
+            let engine = ScriptEngine::new();
+            engine.load(script);
+            let (actions, halted) = drive_event_halt(&engine, &ctx(), &event());
+            assert!(halted, "default not suppressed for: {script}");
+            assert!(
+                matches!(actions.as_slice(), [Action::Echo { text, .. }] if text == "themed hello"),
+                "handler did not run to completion for {script}: {actions:?}"
+            );
+        }
+        // jIRC also honours /haltdef from a handler with no `^` prefix. mIRC
+        // documents it as taking effect only inside a `^` handler, so this is
+        // deliberately more permissive; pinned here so the difference is a
+        // decision rather than a surprise.
+        let plain = ScriptEngine::new();
+        plain.load("on *:TEXT:*:#:{ haltdef | echo -a themed $1- }");
+        let (actions, halted) = drive_event_halt(&plain, &ctx(), &event());
+        assert!(!actions.is_empty(), "handler should still run");
+        assert!(halted, "jIRC suppresses without `^` too");
+    }
+
+    #[test]
     fn haltdef_does_not_halt_the_running_routine() {
         let engine = ScriptEngine::new();
         engine.load(

@@ -34,6 +34,11 @@ pub enum MessageKind {
     Notice,
 }
 
+/// Echo target meaning "the buffer the user is currently looking at". Only the
+/// frontend knows which that is, so it resolves this sentinel; it falls back to
+/// the server console when the active buffer belongs to another connection.
+pub const ACTIVE_TARGET: &str = "(active)";
+
 /// Events sent to the frontend. Serialized as `{ "type": "...", ... }`.
 #[derive(Debug, Clone, Serialize)]
 #[serde(

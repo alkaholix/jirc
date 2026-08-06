@@ -85,6 +85,10 @@ export interface ChannelListWindow {
 const MAX_LIST_ENTRIES = 20000;
 
 export const STATUS = "(status)";
+/// Echo target meaning "wherever the user is looking". The backend cannot know
+/// the focused buffer, so it emits this and the store resolves it. Falls back
+/// to the server console when the active buffer belongs to another connection.
+export const ACTIVE = "(active)";
 const MAX_LINES = 2000;
 
 /** Canonical IRC name key. RFC1459 additionally equates `[]\\^` with `{}|~`;
@@ -390,12 +394,27 @@ export const useStore = create<State>((set, get) => {
             },
             atMs
           );
-        } else {
-          // Direct message/notice: route to a query with the other party.
-          const who = self ? ev.target : ev.from ?? "(server)";
-          if (ev.kind === "notice" && !ev.from) {
-            sys(`-${ev.target}- ${ev.text}`, "notice");
+        } else if (ev.kind === "notice" && !self) {
+          // Notices never open a window, as in mIRC: NickServ and the other
+          // services belong in the server console, not a query tab of their
+          // own. An already-open conversation still gets them, so a notice
+          // mid-exchange stays with the rest of it.
+          const existing = ev.from ? get().buffers[keyFor(sid, ev.from)] : undefined;
+          if (existing) {
+            appendLine(
+              sid,
+              existing.name,
+              "query",
+              { kind: "notice", from: ev.from ?? undefined, text: ev.text, self },
+              atMs
+            );
           } else {
+            sys(`-${ev.from ?? ev.target}- ${ev.text}`, "notice");
+          }
+        } else {
+          // Direct message: route to a query with the other party.
+          const who = self ? ev.target : ev.from ?? "(server)";
+          {
             appendLine(
               sid,
               who,
@@ -717,9 +736,15 @@ export const useStore = create<State>((set, get) => {
         sys(ev.message, "error");
         break;
       case "echo": {
+        let target = ev.target;
+        if (target === ACTIVE) {
+          const activeKey = get().active;
+          const activeBuffer = activeKey ? get().buffers[activeKey] : undefined;
+          target = activeBuffer && activeBuffer.serverId === sid ? activeBuffer.name : STATUS;
+        }
         const k: BufferKind =
-          ev.target === STATUS ? "status" : isChannel(ev.target) ? "channel" : "query";
-        appendLine(sid, ev.target, k, { kind: "system", text: ev.text });
+          target === STATUS ? "status" : isChannel(target) ? "channel" : "query";
+        appendLine(sid, target, k, { kind: "system", text: ev.text });
         break;
       }
       case "isupport":

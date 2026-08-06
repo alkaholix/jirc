@@ -12,6 +12,20 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🪟 26.8.19 — Notices and CTCP replies go where mIRC puts them
+
+- Notices no longer open a window. A notice carrying a sender was routed into a
+  new query buffer named after them, so NickServ, ChanServ and every other
+  service opened a tab of its own; only senderless server notices reached the
+  console. Services now report to the server console, as in mIRC. A notice from
+  someone you already have a query open with still appears there, so one
+  arriving mid-conversation stays with the rest of it.
+- CTCP replies are echoed in the active window rather than the server console,
+  matching mIRC. This covers replies carried by an IRCX whisper, which 26.8.18
+  showed in the whisper's channel.
+
+---
+
 ## 💬 26.8.18 — CTCP over IRCX whispers
 
 - Fixed CTCP payloads carried by an IRCX `WHISPER` being shown as ordinary

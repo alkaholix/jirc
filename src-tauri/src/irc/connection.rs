@@ -14,7 +14,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::config::ServerProfile;
 use crate::irc::auth::{self, AuthState};
-use crate::irc::event::{Direction, MessageKind, UiEvent, IRC_EVENT};
+use crate::irc::event::{Direction, MessageKind, UiEvent, ACTIVE_TARGET, IRC_EVENT};
 use crate::irc::state::{SessionState, StateSnapshot};
 
 fn unix_now() -> u64 {
@@ -1346,9 +1346,12 @@ pub fn process_message(ctx: &mut Context, raw: &str, msg: Message) -> Effects {
                     text: text.clone(),
                     time: server_time.clone(),
                 });
+                // mIRC shows a CTCP reply where you are looking, not in the
+                // console. `(active)` is resolved by the frontend, which is the
+                // only side that knows the focused buffer.
                 fx.events.push(UiEvent::Echo {
                     server_id,
-                    target: "(status)".to_string(),
+                    target: ACTIVE_TARGET.to_string(),
                     text: format!(
                         "[CTCP reply from {}] {}",
                         source.as_deref().unwrap_or("?"),
@@ -1668,7 +1671,7 @@ pub fn process_message(ctx: &mut Context, raw: &str, msg: Message) -> Effects {
                         }),
                         (None, Some(ctcp)) => fx.events.push(UiEvent::Echo {
                             server_id,
-                            target: channel,
+                            target: ACTIVE_TARGET.to_string(),
                             text: format!(
                                 "[CTCP reply from {}] {}",
                                 from.as_deref().unwrap_or("?"),
@@ -3911,7 +3914,9 @@ mod tests {
                 assert!(text.contains("CTCP reply from Snue"), "got {text}");
                 assert!(text.contains("mIRC v7.84"), "got {text}");
                 assert!(!text.contains('\u{1}'), "control chars leaked: {text:?}");
-                assert_eq!(target, "%#lobby");
+                // Shown where the user is looking, as mIRC does, rather than
+                // in the whisper's channel or pinned to the console.
+                assert_eq!(target, ACTIVE_TARGET);
             }
             other => panic!("expected a CTCP reply echo, got {other:?}"),
         }
