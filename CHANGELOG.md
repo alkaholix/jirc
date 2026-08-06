@@ -12,6 +12,30 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🖱️ 26.8.16 — Default popup menus, corrected
+
+Supersedes 26.8.15, which shipped the new popup menus to the wrong file. Update
+to this release rather than 26.8.15.
+
+- Fixed the default popup menus being written to `popups.mrc` instead of the
+  per-context files the script editor uses. The editor's Popups section edits
+  one file per context — Server/status, Channel, Nick list, Query, and Custom
+  window — so the menus added in 26.8.15 never appeared on those tabs, and any
+  menu they defined was duplicated against the per-context file for the same
+  context.
+- The defaults are now seeded as `popups-status`, `popups-channel`,
+  `popups-nicklist`, and `popups-query`, matching the editor tabs exactly.
+  `popups.mrc` returns to being the empty combined file it is described as, for
+  imported or legacy menu blocks.
+- Added a test asserting the seeded files and the editor's fallback templates
+  stay identical, so the two copies cannot drift apart.
+
+If you installed 26.8.15, delete `popups.mrc` (or empty it) and delete the
+`popups-*.mrc` files you have not customised, then use Add examples in the
+script editor to write the corrected defaults.
+
+---
+
 ## 🖱️ 26.8.15 — Default popup menus
 
 - Replaced the seeded `popups.mrc` example, which defined a single nick-list
