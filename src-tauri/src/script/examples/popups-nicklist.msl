@@ -1,0 +1,40 @@
+; Nick-list right-click menu.
+;   $snick($active,1) is the first selected nick — using it in a label makes the
+;   menu name the person you clicked. $snicks is every selected nick.
+menu nicklist {
+  Whois $snick($active,1):whois $snick($active,1)
+  Query:query $snick($active,1)
+  Slap:me slaps $snick($active,1) around a bit with a large trout
+  -
+  ; These grey out unless you hold ops.
+  $style($iif($me isop $chan,0,2)) Give ops:mode $chan +o $snick($active,1)
+  $style($iif($me isop $chan,0,2)) Take ops:mode $chan -o $snick($active,1)
+  $style($iif($me isop $chan,0,2)) Voice:mode $chan +v $snick($active,1)
+  $style($iif($me isop $chan,0,2)) Kick
+  .Quietly:kick $chan $snick($active,1)
+  .With a reason:kick $chan $snick($active,1) Please read the topic
+  .Ban and kick:popn_bankick $chan $snick($active,1)
+  -
+  ; Greys out until you select two or more nicks.
+  $style($iif($snick($active,2),0,2)) Selected $numtok($snicks,32) nicks
+  .Whois each:popn_each whois $snicks
+  .Query each:popn_each query $snicks
+  .Copy to clipboard:clipboard $snicks
+}
+
+; Runs a command once per nick in a space-separated list.
+alias -l popn_each {
+  var %cmd = $1
+  var %list = $2-
+  var %i = 1
+  while (%i <= $numtok(%list,32)) {
+    %cmd $gettok(%list,%i,32)
+    inc %i
+  }
+}
+
+; Ban the host rather than the nick, so a rename does not dodge it.
+alias -l popn_bankick {
+  mode $1 +b $address($2,2)
+  kick $1 $2
+}

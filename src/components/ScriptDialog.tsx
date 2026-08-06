@@ -31,34 +31,117 @@ interface PopupSection {
   template: string;
 }
 
-const POPUP_SECTIONS: PopupSection[] = [
+export const POPUP_SECTIONS: PopupSection[] = [
   { id: "status", label: "Server / status", name: "popups-status", template: `; Server/status window right-click menu.
+;   $style(1) puts a check mark on an item, $style(2) greys it out, $style(0)
+;   leaves it plain — so $iif() can drive the state. It never shows in the menu.
 menu status {
-  Server links:/links
-  Reconnect:/server
+  Server info:echo -a Connected to $server ( $+ $network $+ ) as $me
+  ; The tick tracks your away state.
+  $style($iif($away,1,0)) Away:pops_away
+  -
+  ; One entry per channel you are on, built when the menu opens.
+  Channels
+  .$submenu($pops_chans($1))
+  -
+  Server links:links
+  Reconnect:server
+}
+
+; jIRC calls this with "begin", then 1, 2, 3 ... then "end". Return one popup
+; line each time ("label:command"), or nothing to end the run. "-" is a separator.
+alias -l pops_chans {
+  if ($1 == begin) return -
+  if ($1 == end) return -
+  var %c = $chan($1)
+  if (%c == $null) return
+  return %c $+ : $+ join %c
+}
+
+alias -l pops_away {
+  if ($away) { away }
+  else { away Back later }
 }
 ` },
   { id: "channel", label: "Channel", name: "popups-channel", template: `; Channel window right-click menu.
+;   Label:command  — everything after the FIRST colon is the command, so keep
+;                    colons out of labels.
+;   .  ..          — submenu depth, one dot per level.  -  is a separator.
 menu channel {
-  Channel modes:/channel $chan
+  Topic:echo -a Topic for $chan is $chan($chan).topic
+  Who is here:who $chan
   -
-  Part:/part $chan
+  ; Greys itself out unless you hold ops here.
+  $style($iif($me isop $chan,0,2)) Channel modes
+  .No external messages:mode $chan +n
+  .Topic ops only:mode $chan +t
+  .Invite only:mode $chan +i
+  .Moderated:mode $chan +m
+  .-
+  .Remove moderation:mode $chan -m
+  -
+  Jump to
+  .$submenu($popc_chans($1))
+  -
+  Clear this window:clear
+  Part $chan:part $chan
+}
+
+alias -l popc_chans {
+  if ($1 == begin) return -
+  if ($1 == end) return -
+  var %c = $chan($1)
+  if (%c == $null) return
+  return %c $+ : $+ join %c
 }
 ` },
-  { id: "nicklist", label: "Nick list", name: "popups-nicklist", template: `; Nick-list right-click menu. $1 is the selected nick.
+  { id: "nicklist", label: "Nick list", name: "popups-nicklist", template: `; Nick-list right-click menu.
+;   $snick($active,1) is the first selected nick — using it in a label makes the
+;   menu name the person you clicked. $snicks is every selected nick.
 menu nicklist {
-  Whois:/whois $1
-  Query:/query $1
+  Whois $snick($active,1):whois $snick($active,1)
+  Query:query $snick($active,1)
+  Slap:me slaps $snick($active,1) around a bit with a large trout
   -
-  Control
-  .Op:/mode $chan +o $1
-  .Voice:/mode $chan +v $1
-  .Kick:/kick $chan $1
+  ; These grey out unless you hold ops.
+  $style($iif($me isop $chan,0,2)) Give ops:mode $chan +o $snick($active,1)
+  $style($iif($me isop $chan,0,2)) Take ops:mode $chan -o $snick($active,1)
+  $style($iif($me isop $chan,0,2)) Voice:mode $chan +v $snick($active,1)
+  $style($iif($me isop $chan,0,2)) Kick
+  .Quietly:kick $chan $snick($active,1)
+  .With a reason:kick $chan $snick($active,1) Please read the topic
+  .Ban and kick:popn_bankick $chan $snick($active,1)
+  -
+  ; Greys out until you select two or more nicks.
+  $style($iif($snick($active,2),0,2)) Selected $numtok($snicks,32) nicks
+  .Whois each:popn_each whois $snicks
+  .Query each:popn_each query $snicks
+  .Copy to clipboard:clipboard $snicks
+}
+
+; Runs a command once per nick in a space-separated list.
+alias -l popn_each {
+  var %cmd = $1
+  var %list = $2-
+  var %i = 1
+  while (%i <= $numtok(%list,32)) {
+    %cmd $gettok(%list,%i,32)
+    inc %i
+  }
+}
+
+; Ban the host rather than the nick, so a rename does not dodge it.
+alias -l popn_bankick {
+  mode $1 +b $address($2,2)
+  kick $1 $2
 }
 ` },
   { id: "query", label: "Query", name: "popups-query", template: `; Private-query right-click menu.
 menu query {
-  Close:/close
+  Whois $target:whois $target
+  Version check:ctcp $target VERSION
+  -
+  Close:close -m $target
 }
 ` },
   { id: "custom", label: "Custom window", name: "popups-custom", template: `; Custom @window right-click menu.

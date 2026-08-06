@@ -2089,10 +2089,24 @@ const EXAMPLE_SCRIPTS: &[(&str, &str)] = &[
          on *:TEXT:!ping*:#:{ /msg $chan pong $nick }\n\
          on *:JOIN:#:{ /msg $chan welcome $nick }\n",
     ),
-    // Kept as a real .msl file rather than an escaped string literal: it is
-    // long enough that escaping would obscure it, and this way the shipped
-    // default is editable (and testable) as ordinary mSL.
-    ("popups", include_str!("examples/popups.msl")),
+    // Popup menus are seeded per context, matching the tabs in the script
+    // editor's Popups section — the editor edits one file per context, so
+    // seeding a single combined file would show up as duplicate menus.
+    // `popups.mrc` itself stays an empty combined file for imported menus.
+    //
+    // Kept as real .msl files rather than escaped string literals so the
+    // shipped defaults stay readable and can be tested as ordinary mSL. These
+    // must match the templates in `src/components/ScriptDialog.tsx`, which the
+    // editor falls back to when a file is missing.
+    ("popups-status", include_str!("examples/popups-status.msl")),
+    ("popups-channel", include_str!("examples/popups-channel.msl")),
+    ("popups-nicklist", include_str!("examples/popups-nicklist.msl")),
+    ("popups-query", include_str!("examples/popups-query.msl")),
+    (
+        "popups",
+        "; Optional combined popup file for imported or existing menu blocks.\n\
+         ; Dedicated context files are shown above entries from Remote scripts.\n",
+    ),
     (
         "dialog",
         "; A custom dialog. Type /qsay in a channel to open it.\n\
@@ -8616,9 +8630,21 @@ mod tests {
         assert!(kids[3].separator);
     }
 
-    /// The popup file jIRC seeds on first run. Testing the real shipped bytes
-    /// means the defaults users actually get are the ones verified here.
-    const EXAMPLE_POPUPS: &str = include_str!("examples/popups.msl");
+    /// The popup files jIRC seeds on first run, concatenated as the engine
+    /// compiles them. Testing the real shipped bytes means the defaults users
+    /// actually get are the ones verified here.
+    const EXAMPLE_POPUPS: &str = concat!(
+        include_str!("examples/popups-status.msl"),
+        "
+",
+        include_str!("examples/popups-channel.msl"),
+        "
+",
+        include_str!("examples/popups-nicklist.msl"),
+        "
+",
+        include_str!("examples/popups-query.msl"),
+    );
 
     #[test]
     fn shipped_popup_examples_build_correctly() {

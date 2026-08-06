@@ -1,0 +1,7 @@
+; Private-query right-click menu.
+menu query {
+  Whois $target:whois $target
+  Version check:ctcp $target VERSION
+  -
+  Close:close -m $target
+}

@@ -1,0 +1,31 @@
+; Channel window right-click menu.
+;   Label:command  — everything after the FIRST colon is the command, so keep
+;                    colons out of labels.
+;   .  ..          — submenu depth, one dot per level.  -  is a separator.
+menu channel {
+  Topic:echo -a Topic for $chan is $chan($chan).topic
+  Who is here:who $chan
+  -
+  ; Greys itself out unless you hold ops here.
+  $style($iif($me isop $chan,0,2)) Channel modes
+  .No external messages:mode $chan +n
+  .Topic ops only:mode $chan +t
+  .Invite only:mode $chan +i
+  .Moderated:mode $chan +m
+  .-
+  .Remove moderation:mode $chan -m
+  -
+  Jump to
+  .$submenu($popc_chans($1))
+  -
+  Clear this window:clear
+  Part $chan:part $chan
+}
+
+alias -l popc_chans {
+  if ($1 == begin) return -
+  if ($1 == end) return -
+  var %c = $chan($1)
+  if (%c == $null) return
+  return %c $+ : $+ join %c
+}

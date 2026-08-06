@@ -1,0 +1,30 @@
+; Server/status window right-click menu.
+;   $style(1) puts a check mark on an item, $style(2) greys it out, $style(0)
+;   leaves it plain — so $iif() can drive the state. It never shows in the menu.
+menu status {
+  Server info:echo -a Connected to $server ( $+ $network $+ ) as $me
+  ; The tick tracks your away state.
+  $style($iif($away,1,0)) Away:pops_away
+  -
+  ; One entry per channel you are on, built when the menu opens.
+  Channels
+  .$submenu($pops_chans($1))
+  -
+  Server links:links
+  Reconnect:server
+}
+
+; jIRC calls this with "begin", then 1, 2, 3 ... then "end". Return one popup
+; line each time ("label:command"), or nothing to end the run. "-" is a separator.
+alias -l pops_chans {
+  if ($1 == begin) return -
+  if ($1 == end) return -
+  var %c = $chan($1)
+  if (%c == $null) return
+  return %c $+ : $+ join %c
+}
+
+alias -l pops_away {
+  if ($away) { away }
+  else { away Back later }
+}
