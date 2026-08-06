@@ -12,6 +12,25 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🖱️ 26.8.15 — Default popup menus
+
+- Replaced the seeded `popups.mrc` example, which defined a single nick-list
+  menu, with default right-click menus for the channel, nick list, query, and
+  status windows.
+- The defaults demonstrate the popup engine rather than just listing commands:
+  operator actions grey themselves out when you do not hold ops, the away item
+  carries a live check mark, "Jump to" builds one entry per joined channel with
+  `$submenu`, and the nick-list group acts on a multiple selection through
+  `$snicks`.
+- The shipped file is ordinary mSL kept alongside the source and included at
+  build time, so it stays readable and is covered by the test that verifies the
+  menus it produces.
+- Existing installations keep their current `popups.mrc`; jIRC only writes
+  example scripts that do not already exist. Delete or rename yours and use
+  Add examples to pick up the new defaults.
+
+---
+
 ## 🧩 26.8.14 — mSL parity completion
 
 - Added the client-side commands that previously fell through to the IRC server
