@@ -12,6 +12,26 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 💬 26.8.18 — CTCP over IRCX whispers
+
+- Fixed CTCP payloads carried by an IRCX `WHISPER` being shown as ordinary
+  whisper text. A reply to `/ctcp <nick> VERSION` on a network that answers by
+  whisper appeared as "Snue whispers: VERSION mIRC v7.84"; it now reads as
+  `[CTCP reply from Snue] mIRC v7.84`, in the channel the whisper was scoped to.
+  An action sent by whisper shows its text instead of the control characters
+  around it.
+- Fixed whispers never reaching the scripting engine. Nothing forwarded them,
+  so on IRCX networks neither `on TEXT` nor `on CTCPREPLY` fired for a whisper,
+  silently, however the script was written. They are now dispatched like any
+  other message.
+- A whispered CTCP is treated as a reply rather than a request. IRC marks the
+  difference with `PRIVMSG` against `NOTICE` and `WHISPER` has no equivalent, so
+  the safe reading is the one that cannot make two clients auto-reply to each
+  other indefinitely. The consequence is that a genuine CTCP request sent by
+  whisper receives no automatic answer.
+
+---
+
 ## 🧠 26.8.17 — Advanced default popups, and a script editor fix
 
 - Fixed the script editor showing a stale cached draft instead of the file on

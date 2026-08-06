@@ -1616,6 +1616,73 @@ pub fn process_message(ctx: &mut Context, raw: &str, msg: Message) -> Effects {
             }
             // IRCX numerics (800–999) and extension commands land here.
             match crate::irc::ircx::raw_event(&server_id, source, cmd, args) {
+                // An IRCX WHISPER is a channel-scoped private message, and it
+                // carries CTCP payloads too. Without this the `\x01` framing
+                // fell through as ordinary whisper text (a VERSION reply showed
+                // as "Snue whispers: VERSION mIRC v7.84"), and scripts never saw
+                // whispers at all because nothing forwarded them to the engine.
+                //
+                // IRC distinguishes a CTCP request (PRIVMSG) from a reply
+                // (NOTICE); WHISPER has no such split. A framed whisper is
+                // therefore treated as a *reply*: that is what peers send in
+                // practice, and treating it as a request would let two clients
+                // auto-reply to one another indefinitely.
+                Some(UiEvent::Whisper {
+                    from,
+                    channel,
+                    text,
+                    ..
+                }) => {
+                    let framed = text
+                        .strip_prefix('\u{1}')
+                        .map(|body| body.trim_end_matches('\u{1}').to_string());
+                    let action = framed
+                        .as_deref()
+                        .and_then(|body| body.strip_prefix("ACTION "))
+                        .map(str::to_string);
+                    // Scripts see whispers as ordinary messages, so the existing
+                    // classifier routes them: an ACTION or plain whisper as a
+                    // PRIVMSG (`on ACTION` / `on TEXT`), a framed one as a NOTICE
+                    // (`on CTCPREPLY`).
+                    let kind = if framed.is_some() && action.is_none() {
+                        MessageKind::Notice
+                    } else {
+                        MessageKind::Privmsg
+                    };
+                    fx.script_events.push(UiEvent::Message {
+                        server_id: server_id.clone(),
+                        kind,
+                        from: from.clone(),
+                        target: channel.clone(),
+                        text: text.clone(),
+                        time: server_time.clone(),
+                    });
+                    match (action, framed) {
+                        // `/me` over a whisper — show the action text, not the
+                        // control characters around it.
+                        (Some(act), _) => fx.events.push(UiEvent::Whisper {
+                            server_id,
+                            from,
+                            channel,
+                            text: act,
+                        }),
+                        (None, Some(ctcp)) => fx.events.push(UiEvent::Echo {
+                            server_id,
+                            target: channel,
+                            text: format!(
+                                "[CTCP reply from {}] {}",
+                                from.as_deref().unwrap_or("?"),
+                                ctcp_reply_pretty(&ctcp)
+                            ),
+                        }),
+                        (None, None) => fx.events.push(UiEvent::Whisper {
+                            server_id,
+                            from,
+                            channel,
+                            text,
+                        }),
+                    }
+                }
                 Some(ev) => fx.events.push(ev),
                 None => {
                     // An unrecognised numeric irc-proto routed to Raw: surface it
@@ -3813,6 +3880,75 @@ mod tests {
         );
         assert!(!fx.outgoing.iter().any(|l| l.starts_with("JOIN")));
         assert_eq!(s.nick, "me");
+    }
+
+    /// IRCX `WHISPER` carries CTCP payloads, but unlike IRC it has no
+    /// PRIVMSG/NOTICE split to mark request versus reply. Modelled on a real
+    /// line from an MSN-Chat style network.
+    #[test]
+    fn whispered_ctcp_is_rendered_and_reaches_scripts() {
+        fn feed(line: &str) -> Effects {
+            let p = profile();
+            let mut s = SessionState::default();
+            let mut accum = Default::default();
+            let mut whois = Default::default();
+            let mut auth = AuthState::default();
+            let mut ctx = Context {
+                server_id: "s1",
+                profile: &p,
+                state: &mut s,
+                names_accum: &mut accum,
+                whois_accum: &mut whois,
+                auth: &mut auth,
+            };
+            process_message(&mut ctx, line, line.parse().unwrap())
+        }
+
+        // A framed whisper is a CTCP reply: shown readably, not as raw text.
+        let fx = feed(":Snue!u@h WHISPER %#lobby me :\u{1}VERSION mIRC v7.84\u{1}");
+        match fx.events.as_slice() {
+            [UiEvent::Echo { text, target, .. }] => {
+                assert!(text.contains("CTCP reply from Snue"), "got {text}");
+                assert!(text.contains("mIRC v7.84"), "got {text}");
+                assert!(!text.contains('\u{1}'), "control chars leaked: {text:?}");
+                assert_eq!(target, "%#lobby");
+            }
+            other => panic!("expected a CTCP reply echo, got {other:?}"),
+        }
+        // Scripts see it, so `on CTCPREPLY` can fire. It must never be treated
+        // as a request, or two clients would auto-reply to each other forever.
+        match fx.script_events.as_slice() {
+            [UiEvent::Message { kind, from, .. }] => {
+                assert!(matches!(kind, MessageKind::Notice));
+                assert_eq!(from.as_deref(), Some("Snue"));
+            }
+            other => panic!("expected one script message, got {other:?}"),
+        }
+        assert!(
+            fx.outgoing.is_empty(),
+            "a whispered CTCP must not trigger an auto-reply: {:?}",
+            fx.outgoing
+        );
+
+        // A plain whisper still renders as a whisper, and now reaches scripts.
+        let fx = feed(":Snue!u@h WHISPER %#lobby me :hello there");
+        assert!(
+            matches!(fx.events.as_slice(), [UiEvent::Whisper { text, .. }] if text == "hello there"),
+            "got {:?}",
+            fx.events
+        );
+        assert!(matches!(
+            fx.script_events.as_slice(),
+            [UiEvent::Message { kind, .. }] if matches!(kind, MessageKind::Privmsg)
+        ));
+
+        // `/me` over a whisper shows the action text, not the framing.
+        let fx = feed(":Snue!u@h WHISPER %#lobby me :\u{1}ACTION waves\u{1}");
+        assert!(
+            matches!(fx.events.as_slice(), [UiEvent::Whisper { text, .. }] if text == "waves"),
+            "got {:?}",
+            fx.events
+        );
     }
 
     #[test]
