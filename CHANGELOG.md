@@ -12,6 +12,55 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🧩 26.8.14 — mSL parity completion
+
+- Added the client-side commands that previously fell through to the IRC server
+  as invalid protocol and failed silently: `/leave`, `/action`, `/partall`,
+  `/exit`, `/disconnect`, `/closemsg`, `/clearial`, `/vmsg`, `/vnotice`,
+  `/wallchops`, `/wallvoices`, `/ctcps`, and `/colour`.
+- `/vmsg`, `/vnotice`, `/wallchops`, and `/wallvoices` use a `@#channel` or
+  `+#channel` STATUSMSG target when the server advertises the prefix, and
+  address the matching members individually when it does not.
+- Fixed the parser silently discarding event handlers written in mIRC's
+  documented form. Events whose syntax is `ON <level>:EVENT:<commands>` have no
+  matchtext or target field, but the parser read the command as a target, found
+  an empty command, and dropped the handler without an error. This affected
+  `on DNS`, `on START`, `on LOAD`, `on UNLOAD`, `on EXIT`, `on QUIT`, `on NICK`,
+  `on USERMODE`, `on AGENT`, and the five playback events.
+- Added `on MIDIEND`, `on MP3END`, and `on SONGEND`. `/splay` now selects the
+  end event from the file extension and pairs each sound event with `on SONGEND`.
+- Recognised `isaop`, `isavoice`, `isignore`, `isprotect`, `isnotify`, and
+  `isquiet`. An unrecognised operator previously fell through to a truthiness
+  test and read as always true, so `if (%address isaop)` granted access to
+  everyone; these now test against an empty list and fail closed.
+- Fixed `$color`, which returned an RGB value for both of its forms. `$color(N)`
+  returns the RGB for colour index N, while `$color(<name>)` returns the index
+  number. Added the `.dd` property and mIRC's partial name matching.
+- Fixed `$isalias`, which ignored its property argument, and added `.fname` and
+  `.ftype`.
+- Added identifiers `$colour`, `$naddress`, `$iaddress`, `$rnick`, `$nvnick`,
+  `$nopnick`, `$nhnick`, `$adate`, `$evalnext`, `$isnumber`, `$isutf`, `$lof`,
+  `$freadex`, `$hfile`, `$hmatch`, `$hregex`, `$regbr`, `$banlist`, `$iql`,
+  `$initopic`, `$factorial`, `$fibonacci`, `$fserv`, `$fupdate`, `$mp3dir`,
+  `$wavedir`, `$inmp3`, `$vc`, `$nonstdmsg`, `$inmode`, `$inwho`,
+  `$sslcertsha1`, and `$sslcertsha256`.
+- Added the `$chan().banlist` and `$chan().inwho` properties, backed by
+  listing-in-flight state that the `RPL_ENDOFBANLIST` and `RPL_ENDOFWHO`
+  numerics now clear. They share a sentinel with `$inmode` and `$inwho` so
+  mIRC's comparison idiom works.
+- Added properties `$iptype().expand`/`.compress`, `$fopen().bom`, and
+  `$sslhash().babble`, the last verified against the Bubble Babble
+  specification's published test vectors.
+- Added the `/fsend` and `/fupdate` client settings, and `$freadex` for reading
+  a file from its pointer to the end.
+- Removed exponential backtracking from wildcard matching, which could hang the
+  client on a pattern such as `*a*a*a*b` against a long non-matching message.
+- Added an example popup file (`popups.mrc`) covering the channel, nicklist,
+  query, status, and menu bar contexts, with dynamic `$submenu` lists,
+  `$style` states, nested menus, and multi-selection helpers.
+
+---
+
 ## 🎨 26.8.13 — mSL accuracy and interface polish
 
 - Fixed `$mask` and every identifier built on it. The mask type table was

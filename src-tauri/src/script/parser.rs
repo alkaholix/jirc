@@ -47,22 +47,37 @@ const NO_TARGET_MATCHTEXT: &[&str] = &[
     "SERV",
 ];
 
-/// Events with neither a matchtext nor a target — `on EVENT:<cmd>`.
-const PLAIN_EVENTS: &[&str] = &[
-    "CONNECT",
-    "DISCONNECT",
-    "CONNECTFAIL",
-    "PING",
-    "PONG",
-    "NOTIFY",
-    "UNOTIFY",
+/// Events whose mIRC synopsis is `ON <level>:EVENT:<commands>` — no matchtext
+/// and no target field, so the entire tail is the command. Taken from the
+/// reference synopses rather than assembled by hand.
+///
+/// Getting this list wrong is silent: the parser would read the command as a
+/// target, find an empty command, and discard the handler without any error.
+const NO_FIELD_EVENTS: &[&str] = &[
+    "AGENT",
     "APPACTIVE",
+    "CONNECT",
+    "CONNECTFAIL",
+    "DISCONNECT",
+    "DNS",
+    "EXIT",
+    "LOAD",
+    "MIDIEND",
+    "MP3END",
+    "NICK",
     "NOSOUND",
+    "NOTIFY",
+    "PING",
+    "PLAYEND",
+    "PONG",
+    "QUIT",
+    "SONGEND",
+    "START",
+    "UNLOAD",
+    "UNOTIFY",
+    "USERMODE",
+    "WAVEEND",
 ];
-
-/// Playback-finished events. mIRC writes these with no matchtext and no target
-/// (`on *:MP3END:<command>`), filling `$filename` with the file that ended.
-const AUDIO_END_EVENTS: &[&str] = &["WAVEEND", "MIDIEND", "MP3END", "SONGEND", "PLAYEND"];
 
 struct Cursor {
     chars: Vec<char>,
@@ -705,20 +720,12 @@ fn parse_braceless_event(header: &str, source_line: usize) -> Option<Event> {
         let target = p.next().unwrap_or("").trim().to_string();
         let command = p.next().unwrap_or("").trim().to_string();
         (matchtext, String::new(), target, command)
-    } else if PLAIN_EVENTS.contains(&kind.as_str()) {
-        // on *:CONNECT|PING|…:<command> — no matchtext, no target.
-        (
-            String::new(),
-            String::new(),
-            String::new(),
-            rest.trim().to_string(),
-        )
-    } else if AUDIO_END_EVENTS.contains(&kind.as_str()) {
-        // on *:MP3END|WAVEEND|…:<command> — mIRC has no matchtext or target
-        // field here, so the whole tail is the command. Also accept the
-        // historical jIRC form with a leading `*` target, which earlier scripts
-        // (and this crate's own tests) were written against. Only a bare `*` is
-        // treated that way, so a command containing a colon stays intact.
+    } else if NO_FIELD_EVENTS.contains(&kind.as_str()) {
+        // on *:CONNECT|DNS|QUIT|MP3END|…:<command> — no matchtext or target, so
+        // the whole tail is the command. A leading bare `*` is also accepted:
+        // earlier jIRC scripts (and this crate's own tests) were written with a
+        // redundant target field. Only an exact `*` is stripped, so a command
+        // containing a colon stays intact.
         let rest = rest.trim();
         let command = match rest.split_once(':') {
             Some((candidate, command)) if candidate.trim() == "*" => command.trim().to_string(),

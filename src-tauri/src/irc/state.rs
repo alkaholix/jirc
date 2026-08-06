@@ -339,6 +339,11 @@ pub struct ChannelState {
     pub member_activity: BTreeMap<String, u64>,
     /// Active `+b` ban masks (from live MODE and RPL_BANLIST), for `isban`.
     pub bans: std::collections::BTreeSet<String>,
+    /// True while a `+b` listing is in flight (RPL_BANLIST until its ENDOF),
+    /// for `$chan().banlist` / `$inmode`.
+    pub in_mode: bool,
+    /// True while a `/who` reply is in flight, for `$chan().inwho` / `$inwho`.
+    pub in_who: bool,
     pub ban_entries: BTreeMap<String, ListEntry>,
     pub except_entries: BTreeMap<String, ListEntry>,
     pub invite_entries: BTreeMap<String, ListEntry>,
@@ -399,6 +404,9 @@ pub struct SessionState {
     pub tls_version: String,
     pub tls_peer_certificate: Vec<u8>,
     pub tls_cert_valid: bool,
+    /// Path to this connection's client certificate, for `$sslcertsha1` /
+    /// `$sslcertsha256`. Empty when no client certificate is configured.
+    pub tls_client_cert_path: String,
     pub alt_nick: String,
     /// Our configured main (primary) nick, for `$mnick`.
     pub main_nick: String,
@@ -884,6 +892,9 @@ pub struct ChannelView {
     pub member_activity: Vec<(String, u64)>,
     /// Active `+b` ban masks, for the `isban` operator.
     pub bans: Vec<String>,
+    /// Listing-in-flight flags, for `$chan().banlist` / `$chan().inwho`.
+    pub in_mode: bool,
+    pub in_who: bool,
     pub ban_entries: Vec<ListEntry>,
     pub except_entries: Vec<ListEntry>,
     pub invite_entries: Vec<ListEntry>,
@@ -911,6 +922,9 @@ pub struct StateSnapshot {
     pub tls_version: String,
     pub tls_peer_certificate: Vec<u8>,
     pub tls_cert_valid: bool,
+    /// Path to this connection's client certificate, for `$sslcertsha1` /
+    /// `$sslcertsha256`. Empty when no client certificate is configured.
+    pub tls_client_cert_path: String,
     pub alt_nick: String,
     /// Our configured main (primary) nick, for `$mnick`.
     pub main_nick: String,
@@ -972,6 +986,7 @@ impl Default for StateSnapshot {
             server_ip: String::new(),
             server_target: String::new(),
             tls_version: String::new(),
+            tls_client_cert_path: String::new(),
             tls_peer_certificate: Vec::new(),
             tls_cert_valid: false,
             alt_nick: String::new(),
@@ -1015,6 +1030,8 @@ impl SessionState {
                         .map(|(nick, last)| (nick.clone(), *last))
                         .collect(),
                     bans: ch.bans.iter().cloned().collect(),
+                    in_mode: ch.in_mode,
+                    in_who: ch.in_who,
                     ban_entries: ch.ban_entries.values().cloned().collect(),
                     except_entries: ch.except_entries.values().cloned().collect(),
                     invite_entries: ch.invite_entries.values().cloned().collect(),
@@ -1050,6 +1067,7 @@ impl SessionState {
             tls_version: self.tls_version.clone(),
             tls_peer_certificate: self.tls_peer_certificate.clone(),
             tls_cert_valid: self.tls_cert_valid,
+            tls_client_cert_path: self.tls_client_cert_path.clone(),
             alt_nick: self.alt_nick.clone(),
             main_nick: self.main_nick.clone(),
             realname: self.realname.clone(),

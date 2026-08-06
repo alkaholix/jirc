@@ -4333,6 +4333,10 @@ pub fn drive_event_halt_raw(
                 .unwrap_or_default();
             let is_chan = !chan.is_empty();
             let reply = if is_chan { chan.clone() } else { from.clone() };
+            // `$nonstdmsg`: a server normally addresses a PRIVMSG/NOTICE either
+            // to a channel we are on or to our own nick. Anything else is the
+            // non-standard combination mIRC flags.
+            let nonstdmsg = !is_chan && !ctx.state.isupport.names_equal(target, ctx.my_nick);
             // CTCP framing: \x01COMMAND args\x01. ACTION surfaces as `on ACTION`;
             // any other CTCP (PING, VERSION, DCC, ...) as `on CTCP`, with
             // $1 = the command word.
@@ -4355,6 +4359,7 @@ pub fn drive_event_halt_raw(
                     target: reply,
                     params: words(body),
                     text: body.to_string(),
+                    nonstdmsg,
                     ..Default::default()
                 };
                 let sound = (ckind == "CTCP")
@@ -4396,6 +4401,7 @@ pub fn drive_event_halt_raw(
                 target: reply,
                 params: words(text),
                 text: text.clone(),
+                nonstdmsg,
                 ..Default::default()
             };
             (kind, vars)
@@ -8622,6 +8628,226 @@ mod tests {
         assert!(kids[3].separator);
     }
 
+    /// The shipped example popup file (docs/examples/popups.mrc), inlined so
+    /// the test has no dependency on a path outside the crate. Keep in sync if
+    /// the example changes — this is what proves the example actually works.
+    const EXAMPLE_POPUPS: &str = r#"
+menu channel {
+  Topic:echo -a Topic for $chan is: $chan($chan).topic
+  Who is here:who $chan
+  $style($iif($me isop $chan,0,2)) Set moderated:mode $chan +m
+  $style($iif(m isincs $chan($chan).mode,1,0)) Moderated now:mode $chan -m
+  -
+  Channel modes
+  .No external messages:mode $chan +n
+  .Limits
+  ..Set limit 50:mode $chan +l 50
+  -
+  Jump to
+  .$submenu($pop_chans($1))
+}
+menu nicklist {
+  Whois $snick($active,1):whois $snick($active,1)
+  $style($iif($me isop $chan,0,2)) Give ops:mode $chan +o $snick($active,1)
+  $style($iif($snick($active,2),0,2)) Selected $numtok($snicks,32) nicks
+  .Whois each:pop_each whois $snicks
+}
+alias -l pop_chans {
+  if ($1 == begin) return -
+  if ($1 == end) return -
+  var %c = $chan($1)
+  if (%c == $null) return
+  return %c $+ : $+ join %c
+}
+alias -l pop_each {
+  var %cmd = $1
+  var %list = $2-
+  var %i = 1
+  while (%i <= $numtok(%list,32)) {
+    %cmd $gettok(%list,%i,32)
+    inc %i
+  }
+}
+"#;
+
+    #[test]
+    fn shipped_popup_examples_build_correctly() {
+        use crate::irc::state::{ChannelView, StateSnapshot};
+        // Two joined channels, and we hold ops on the active one.
+        let snap = StateSnapshot {
+            nick: "me".into(),
+            channels: vec![
+                ChannelView {
+                    name: "#one".into(),
+                    nicks: vec!["me".into(), "bob".into()],
+                    members: vec![("me".into(), "@".into()), ("bob".into(), String::new())],
+                    mode: "+nt".into(),
+                    ..Default::default()
+                },
+                ChannelView {
+                    name: "#two".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let rctx = RunCtx {
+            state: std::sync::Arc::new(snap),
+            ..ctx()
+        };
+        let engine = ScriptEngine::new();
+        engine.load(EXAMPLE_POPUPS);
+
+        let items = engine.popups_evaluated(&rctx, "channel", "bob", "#one");
+        let by = |l: &str| {
+            items
+                .iter()
+                .find(|i| i.label == l)
+                .unwrap_or_else(|| panic!("missing {l}: {items:?}"))
+        };
+        // Commands are stored unexpanded; they expand when the item is run.
+        assert_eq!(by("Who is here").command, "who $chan");
+        let modes = by("Channel modes");
+        let limits = modes
+            .children
+            .iter()
+            .find(|i| i.label == "Limits")
+            .expect("Limits submenu");
+        assert_eq!(limits.children[0].command, "mode $chan +l 50");
+        // $style($iif(...)) — we are op, so this must NOT be greyed out.
+        assert!(!by("Set moderated").disabled, "op should enable moderate");
+        // The mode string contains no `m`, so this is unchecked.
+        assert!(!by("Moderated now").checked);
+        // $submenu built one entry per joined channel, with begin/end
+        // separators around them.
+        let jump = by("Jump to");
+        assert_eq!(jump.children.len(), 4, "got {:?}", jump.children);
+        assert!(jump.children[0].separator && jump.children[3].separator);
+        assert_eq!(jump.children[1].label, "#one");
+        assert_eq!(jump.children[1].command, "join #one");
+        // Running an item expands it against the live context.
+        assert_eq!(
+            engine.run_popup_command(
+                &rctx, "#one", "who $chan", &["bob".into()], &["bob".into()],
+                "", "channel", "#one",
+            ),
+            vec![Action::Send("WHO #one".into())]
+        );
+        assert_eq!(jump.children[2].label, "#two");
+
+        // Nicklist: labels interpolate the selected nick, and the multi-select
+        // group greys out with only one nick chosen.
+        let nl = engine.popups_evaluated(&rctx, "nicklist", "bob", "#one");
+        assert!(nl.iter().any(|i| i.label == "Whois bob"));
+        let sel = nl
+            .iter()
+            .find(|i| i.label.starts_with("Selected "))
+            .unwrap_or_else(|| panic!("selected group missing; got {nl:#?}"));
+        assert!(sel.disabled, "single selection should grey the group");
+    }
+
+    #[test]
+    fn popup_engine_handles_depth_styles_and_separators() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "menu channel {\n\
+             Top:echo top\n\
+             -\n\
+             Parent\n\
+             .Child:echo child\n\
+             .Deeper\n\
+             ..Deepest:echo deepest\n\
+             $style(1) Checked:echo checked\n\
+             $style(2) Greyed:echo greyed\n\
+             $style(3) Both:echo both\n\
+             Dyn $+ amic:echo dynamic\n\
+             }",
+        );
+        let items = engine.popups_evaluated(&ctx(), "channel", "bob", "#a");
+        let by = |l: &str| {
+            items
+                .iter()
+                .find(|i| i.label == l)
+                .unwrap_or_else(|| panic!("missing {l}: {items:?}"))
+        };
+        // A separator survives as its own item.
+        assert!(items.iter().any(|i| i.separator), "separator kept");
+        // Three levels of nesting via leading dots.
+        let parent = by("Parent");
+        assert_eq!(parent.children.len(), 2);
+        let deeper = parent
+            .children
+            .iter()
+            .find(|i| i.label == "Deeper")
+            .expect("Deeper present");
+        assert_eq!(deeper.children.len(), 1);
+        assert_eq!(deeper.children[0].label, "Deepest");
+        assert_eq!(deeper.children[0].command, "echo deepest");
+        // $style marks are applied and stripped from the visible label.
+        assert!(by("Checked").checked && !by("Checked").disabled);
+        assert!(by("Greyed").disabled && !by("Greyed").checked);
+        assert!(by("Both").checked && by("Both").disabled);
+        // Labels are expanded, so $+ concatenation works.
+        assert_eq!(by("Dynamic").command, "echo dynamic");
+    }
+
+    #[test]
+    fn submenu_expands_dynamically_like_mirc() {
+        // The KB's own example: the identifier is called with `begin`, then an
+        // incrementing integer, then `end`, and each numbered call returns a
+        // `label:command` popup line.
+        let engine = ScriptEngine::new();
+        engine.load(
+            "menu status {\n\
+             Animal\n\
+             .$submenu($animal($1))\n\
+             }\n\
+             alias animal {\n\
+               if ($1 == begin) return -\n\
+               if ($1 == 1) return Cow:echo Cow\n\
+               if ($1 == 2) return Llama:echo Llama\n\
+               if ($1 == 3) return Emu:echo Emu\n\
+               if ($1 == end) return -\n\
+             }",
+        );
+        let items = engine.popups_evaluated(&ctx(), "status", "", "");
+        let animal = items
+            .iter()
+            .find(|i| i.label == "Animal")
+            .expect("Animal parent present");
+        let kids = &animal.children;
+        // begin -> separator, three animals, end -> separator.
+        assert_eq!(kids.len(), 5, "got {kids:?}");
+        assert!(kids[0].separator);
+        assert!(kids[4].separator);
+        let labels: Vec<&str> = kids[1..4].iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, ["Cow", "Llama", "Emu"]);
+        let commands: Vec<&str> = kids[1..4].iter().map(|i| i.command.as_str()).collect();
+        assert_eq!(commands, ["echo Cow", "echo Llama", "echo Emu"]);
+        // Iteration stops as soon as a numbered call returns nothing, so an
+        // alias with no terminating case cannot run away.
+        let bounded = ScriptEngine::new();
+        bounded.load(
+            "menu status {\n\
+             Few\n\
+             .$submenu($two($1))\n\
+             }\n\
+             alias two {\n\
+               if ($1 == 1) return One:echo 1\n\
+               if ($1 == 2) return Two:echo 2\n\
+             }",
+        );
+        let few = bounded.popups_evaluated(&ctx(), "status", "", "");
+        let kids = &few
+            .iter()
+            .find(|i| i.label == "Few")
+            .expect("Few present")
+            .children;
+        assert_eq!(kids.len(), 2);
+        assert_eq!(kids[0].label, "One");
+        assert_eq!(kids[1].label, "Two");
+    }
+
     #[test]
     fn submenu_arg_parse() {
         use super::parse_submenu_arg;
@@ -9302,7 +9528,7 @@ mod tests {
         std::fs::create_dir_all(&data_dir).unwrap();
         let rctx = updater_ctx(data_dir.clone());
         let engine = ScriptEngine::new();
-        engine.load(include_str!("../../../docs/examples/i7updater.mrc"));
+        engine.load(include_str!("../../tests/fixtures/msl-compat/i7updater.msl"));
         assert!(engine.has_alias("i7update"));
 
         let actions = engine.run_alias(&rctx, "", "i7update", "PassportOne pick client");
@@ -9358,7 +9584,7 @@ mod tests {
         .unwrap();
         let inferred_ctx = updater_ctx(inferred_dir.clone());
         let inferred = ScriptEngine::new();
-        inferred.load(include_str!("../../../docs/examples/i7updater.mrc"));
+        inferred.load(include_str!("../../tests/fixtures/msl-compat/i7updater.msl"));
         inferred.run_alias(&inferred_ctx, "", "i7update", "PassportTwo");
         finish_credentials(&inferred, &inferred_ctx, "ticket-two", "profile-two");
 
@@ -10985,6 +11211,384 @@ mod tests {
             engine.run_alias(&ctx(), "#c", "t", ""),
             vec![Action::Send("PRIVMSG #c :a=[] keep=3".into())]
         );
+    }
+
+    #[test]
+    fn listing_sentinels_and_media_identifiers_match_mirc() {
+        use crate::irc::state::{ChannelView, StateSnapshot};
+        // #busy is mid-listing on both; #idle is not.
+        let snap = StateSnapshot {
+            nick: "me".into(),
+            channels: vec![
+                ChannelView {
+                    name: "#busy".into(),
+                    in_mode: true,
+                    in_who: true,
+                    ..Default::default()
+                },
+                ChannelView {
+                    name: "#idle".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let rctx = RunCtx {
+            state: std::sync::Arc::new(snap),
+            ..ctx()
+        };
+        let run = |script: &str| {
+            let e = ScriptEngine::new();
+            e.load(&format!("alias t {{ echo -a {script} }}"));
+            match e.run_alias(&rctx, "#busy", "t", "").as_slice() {
+                [Action::Echo { text, .. }] => text.clone(),
+                other => panic!("unexpected: {other:?}"),
+            }
+        };
+        // mIRC's idiom is comparing the property against the sentinel.
+        assert_eq!(run("$chan(#busy).banlist"), run("$inmode"));
+        assert_eq!(run("$chan(#busy).inwho"), run("$inwho"));
+        assert_eq!(run("$chan(#idle).banlist"), "$false");
+        assert_eq!(run("$chan(#idle).inwho"), "$false");
+        assert_ne!(run("$inmode"), run("$inwho"));
+        // Sound directories all resolve to the same folder as $mididir.
+        assert_eq!(run("$wavedir"), run("$mididir"));
+        assert_eq!(run("$mp3dir"), run("$mididir"));
+        // Per-format playback tests stay inactive, like $insong/$inwave.
+        assert_eq!(run("$inmp3"), "$false");
+        assert_eq!(run("$inmp3"), run("$insong"));
+        // $fserv is the mIRC spelling of the existing $fserve list.
+        assert_eq!(run("$fserv(0)"), run("$fserve(0)"));
+    }
+
+    #[test]
+    fn fsend_and_fupdate_round_trip_their_settings() {
+        let engine = ScriptEngine::new();
+        let show = |e: &ScriptEngine, cmd: &str| match e
+            .run_command(&ctx(), "#a", cmd, &[])
+            .as_slice()
+        {
+            [Action::Echo { text, .. }] => text.clone(),
+            other => panic!("unexpected: {other:?}"),
+        };
+        // Bare form reports the current value.
+        assert_eq!(show(&engine, "/fsend"), "* Fast send is on");
+        assert_eq!(show(&engine, "/fupdate"), "* Update delay is 0");
+        // Setting a value is silent and sticks.
+        assert!(engine.run_command(&ctx(), "#a", "/fsend off", &[]).is_empty());
+        assert_eq!(show(&engine, "/fsend"), "* Fast send is off");
+        assert!(engine.run_command(&ctx(), "#a", "/fupdate 40", &[]).is_empty());
+        assert_eq!(show(&engine, "/fupdate"), "* Update delay is 40");
+        // $fupdate reads the same setting back, clamped to mIRC's 0-100.
+        engine.load("alias t { echo -a $fupdate }");
+        assert!(matches!(
+            engine.run_alias(&ctx(), "#a", "t", "").as_slice(),
+            [Action::Echo { text, .. }] if text == "40"
+        ));
+        engine.run_command(&ctx(), "#a", "/fupdate 500", &[]);
+        assert_eq!(show(&engine, "/fupdate"), "* Update delay is 100");
+    }
+
+    #[test]
+    fn nonstdmsg_flags_unusual_privmsg_targets() {
+        use crate::irc::state::{ChannelView, StateSnapshot};
+        let snap = StateSnapshot {
+            nick: "me".into(),
+            channels: vec![ChannelView {
+                name: "#a".into(),
+                nicks: vec!["me".into(), "bob".into()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let rctx = RunCtx {
+            state: std::sync::Arc::new(snap),
+            ..ctx()
+        };
+        let engine = ScriptEngine::new();
+        engine.load("on *:TEXT:*:*:/echo -a nonstd=$nonstdmsg");
+        let fire = |target: &str| {
+            let event = UiEvent::Message {
+                server_id: "s".into(),
+                kind: MessageKind::Privmsg,
+                from: Some("bob".into()),
+                target: target.into(),
+                text: "hi".into(),
+                time: None,
+            };
+            match drive_event(&engine, &rctx, &event).as_slice() {
+                [Action::Echo { text, .. }] => text.clone(),
+                other => panic!("unexpected for {target}: {other:?}"),
+            }
+        };
+        // A channel we are on, and a message to us, are both standard.
+        assert_eq!(fire("#a"), "nonstd=$false");
+        assert_eq!(fire("me"), "nonstd=$false");
+        // A target that is neither is the combination mIRC flags.
+        assert_eq!(fire("someoneelse"), "nonstd=$true");
+    }
+
+    #[test]
+    fn nick_variants_and_list_identifiers_read_live_state() {
+        use crate::irc::state::{ChannelView, StateSnapshot};
+        // op / halfop / voiced / plain, so each filter picks a different set.
+        let snap = StateSnapshot {
+            nick: "me".into(),
+            channels: vec![ChannelView {
+                name: "#a".into(),
+                nicks: vec!["op".into(), "hop".into(), "vox".into(), "plain".into()],
+                members: vec![
+                    ("op".into(), "@".into()),
+                    ("hop".into(), "%".into()),
+                    ("vox".into(), "+".into()),
+                    ("plain".into(), String::new()),
+                ],
+                bans: vec!["*!*@bad.example".into(), "spam!*@*".into()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let rctx = RunCtx {
+            state: std::sync::Arc::new(snap),
+            ..ctx()
+        };
+        let engine = ScriptEngine::new();
+        let run = |script: &str| {
+            let e = ScriptEngine::new();
+            e.load(&format!("alias t {{ echo -a {script} }}"));
+            match e.run_alias(&rctx, "#a", "t", "").as_slice() {
+                [Action::Echo { text, .. }] => text.clone(),
+                other => panic!("unexpected: {other:?}"),
+            }
+        };
+        let _ = &engine;
+        // $rnick / $nvnick — only members with no status prefix at all.
+        assert_eq!(run("$nvnick(#a,0)"), "1");
+        assert_eq!(run("$nvnick(#a,1)"), "plain");
+        assert_eq!(run("$rnick(#a,1)"), "plain");
+        // $nopnick — everyone who is not an operator.
+        assert_eq!(run("$nopnick(#a,0)"), "3");
+        assert_eq!(run("$nopnick(#a,1)"), "hop");
+        // $nhnick — everyone who is not a halfop.
+        assert_eq!(run("$nhnick(#a,0)"), "3");
+        assert_eq!(run("$nhnick(#a,1)"), "op");
+        // $banlist(#chan,N); N=0 is the count.
+        assert_eq!(run("$banlist(#a,0)"), "2");
+        assert_eq!(run("$banlist(#a,1)"), "*!*@bad.example");
+        // The quiet list is not tracked, so $iql is consistently empty.
+        assert_eq!(run("$iql(#a,0)"), "0");
+    }
+
+    #[test]
+    fn no_field_events_accept_mircs_documented_braceless_form() {
+        // `ON <level>:EVENT:<commands>` has no matchtext and no target. If the
+        // parser treats the command as a target it finds an empty command and
+        // discards the handler with no error, so cover the whole class.
+        for kind in [
+            "CONNECT", "DISCONNECT", "DNS", "START", "LOAD", "UNLOAD", "EXIT", "QUIT", "NICK",
+            "USERMODE", "PING", "PONG", "NOTIFY", "UNOTIFY", "APPACTIVE", "NOSOUND", "AGENT",
+            "WAVEEND", "MIDIEND", "MP3END", "SONGEND", "PLAYEND",
+        ] {
+            let engine = ScriptEngine::new();
+            engine.load(&format!("on *:{kind}:/echo -a fired {kind}"));
+            assert_eq!(
+                engine.dispatch_event(&ctx(), kind, EventVars::default()),
+                vec![Action::Echo {
+                    target: "(status)".into(),
+                    text: format!("fired {kind}")
+                }],
+                "braceless `on *:{kind}:<command>` was dropped"
+            );
+            // The historical jIRC form with a redundant `*` still works too.
+            let legacy = ScriptEngine::new();
+            legacy.load(&format!("on *:{kind}:*:/echo -a fired {kind}"));
+            assert_eq!(
+                legacy.dispatch_event(&ctx(), kind, EventVars::default()),
+                vec![Action::Echo {
+                    target: "(status)".into(),
+                    text: format!("fired {kind}")
+                }],
+                "legacy `on *:{kind}:*:<command>` regressed"
+            );
+        }
+    }
+
+    #[test]
+    fn dns_event_exposes_name_and_resolved_address() {
+        let engine = ScriptEngine::new();
+        engine.load("on *:DNS:/echo -a $naddress $iaddress $raddress");
+        assert_eq!(
+            engine.dispatch_event(
+                &ctx(),
+                "DNS",
+                EventVars {
+                    dns_query: "example.org".into(),
+                    dns_ips: vec!["198.51.100.7".into()],
+                    ..Default::default()
+                }
+            ),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "example.org 198.51.100.7 example.org".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn client_side_commands_do_not_leak_to_the_server() {
+        use crate::irc::state::{ChannelView, Isupport, StateSnapshot};
+        // Two channels, and a server that advertises STATUSMSG=@+.
+        let snap = StateSnapshot {
+            nick: "me".into(),
+            isupport: Isupport {
+                status_msg: "@+".into(),
+                ..Default::default()
+            },
+            channels: vec![
+                ChannelView {
+                    name: "#a".into(),
+                    nicks: vec!["me".into(), "bob".into()],
+                    members: vec![("me".into(), "@".into()), ("bob".into(), "+".into())],
+                    ..Default::default()
+                },
+                ChannelView {
+                    name: "#b".into(),
+                    nicks: vec!["me".into()],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let rctx = RunCtx {
+            state: std::sync::Arc::new(snap),
+            ..ctx()
+        };
+        let engine = ScriptEngine::new();
+
+        // `/leave` and `/action` are mIRC synonyms, not raw IRC verbs.
+        assert_eq!(
+            engine.run_command(&rctx, "#a", "/leave #a", &[]),
+            vec![Action::Send("PART #a".into())]
+        );
+        assert_eq!(
+            engine.run_command(&rctx, "#a", "/action waves", &[]),
+            vec![Action::Send("PRIVMSG #a :\u{1}ACTION waves\u{1}".into())]
+        );
+        // `/partall` leaves every joined channel.
+        assert_eq!(
+            engine.run_command(&rctx, "#a", "/partall", &[]),
+            vec![
+                Action::Send("PART #a".into()),
+                Action::Send("PART #b".into())
+            ]
+        );
+        // STATUSMSG is advertised, so these use the prefixed target.
+        assert_eq!(
+            engine.run_command(&rctx, "#a", "/vmsg hello", &[]),
+            vec![Action::Send("PRIVMSG +#a :hello".into())]
+        );
+        assert_eq!(
+            engine.run_command(&rctx, "#a", "/wallchops #a listen up", &[]),
+            vec![Action::Send("NOTICE @#a :listen up".into())]
+        );
+        assert_eq!(
+            engine.run_command(&rctx, "#a", "/wallvoices #a hi voices", &[]),
+            vec![Action::Send("NOTICE +#a :hi voices".into())]
+        );
+        // `/exit` and `/disconnect` are client actions, never server lines.
+        assert!(matches!(
+            engine.run_command(&rctx, "#a", "/exit", &[]).as_slice(),
+            [Action::ClientCommand { command, .. }] if command == "exit"
+        ));
+        assert!(matches!(
+            engine.run_command(&rctx, "#a", "/disconnect bye", &[]).as_slice(),
+            [Action::ClientCommand { command, args, .. }]
+                if command == "disconnect" && args == "bye"
+        ));
+        // `/closemsg` maps onto the existing close router.
+        assert!(matches!(
+            engine.run_command(&rctx, "#a", "/closemsg", &[]).as_slice(),
+            [Action::ClientCommand { command, args, .. }]
+                if command == "close" && args == "-m"
+        ));
+        // `/colour` normalises to `color` so the frontend knows one name.
+        assert!(matches!(
+            engine.run_command(&rctx, "#a", "/colour", &[]).as_slice(),
+            [Action::ClientCommand { command, .. }] if command == "color"
+        ));
+        // `/username` is inert but must not reach the server.
+        assert!(engine.run_command(&rctx, "#a", "/username bob", &[]).is_empty());
+        // Real IRC verbs still pass through untouched.
+        assert_eq!(
+            engine.run_command(&rctx, "#a", "/whois bob", &[]),
+            vec![Action::Send("WHOIS bob".into())]
+        );
+    }
+
+    #[test]
+    fn status_message_commands_fall_back_without_statusmsg() {
+        use crate::irc::state::{ChannelView, StateSnapshot};
+        // No STATUSMSG token: address the prefixed members individually.
+        let snap = StateSnapshot {
+            nick: "me".into(),
+            channels: vec![ChannelView {
+                name: "#a".into(),
+                nicks: vec!["me".into(), "opguy".into(), "voiced".into()],
+                members: vec![
+                    ("me".into(), String::new()),
+                    ("opguy".into(), "@".into()),
+                    ("voiced".into(), "+".into()),
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let rctx = RunCtx {
+            state: std::sync::Arc::new(snap),
+            ..ctx()
+        };
+        let engine = ScriptEngine::new();
+        assert_eq!(
+            engine.run_command(&rctx, "#a", "/wallchops #a ping", &[]),
+            vec![Action::Send("NOTICE opguy :ping".into())]
+        );
+        assert_eq!(
+            engine.run_command(&rctx, "#a", "/vmsg hey", &[]),
+            vec![Action::Send("PRIVMSG voiced :hey".into())]
+        );
+    }
+
+    #[test]
+    fn ctcps_gates_ctcp_events_like_events_gates_the_rest() {
+        let engine = ScriptEngine::new();
+        engine.load("on *:CTCP:PING*:*:/echo -a ctcp $1-\non *:TEXT:*:#:/echo -a text $1-");
+        let vars = || EventVars {
+            chan: "#a".into(),
+            target: "#a".into(),
+            text: "PING 123".into(),
+            params: vec!["PING".into(), "123".into()],
+            ..Default::default()
+        };
+        // On by default.
+        assert!(!engine.dispatch_event(&ctx(), "CTCP", vars()).is_empty());
+        // `/ctcps off` clears the CTCP bit without disturbing normal events.
+        engine.run_command(&ctx(), "#a", "/ctcps off", &[]);
+        assert!(engine.dispatch_event(&ctx(), "CTCP", vars()).is_empty());
+        assert!(!engine
+            .dispatch_event(
+                &ctx(),
+                "TEXT",
+                EventVars {
+                    chan: "#a".into(),
+                    target: "#a".into(),
+                    text: "hi".into(),
+                    ..Default::default()
+                }
+            )
+            .is_empty());
+        // And back on again.
+        engine.run_command(&ctx(), "#a", "/ctcps on", &[]);
+        assert!(!engine.dispatch_event(&ctx(), "CTCP", vars()).is_empty());
     }
 
     #[test]

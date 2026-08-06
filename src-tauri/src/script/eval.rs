@@ -426,6 +426,11 @@ pub const CLIENT_BIGFLOAT_KEY: &str = "\0client-bigfloat";
 pub const CLIENT_DLEVEL_KEY: &str = "\0client-dlevel";
 pub const CLIENT_DEBUG_KEY: &str = "\0client-debug";
 pub const CLIENT_DCCIGNORE_KEY: &str = "\0client-dccignore";
+/// `/fsend [on|off]` — mIRC's fast-DCC-send toggle.
+pub const CLIENT_FSEND_KEY: &str = "\0client-fsend";
+/// `/fupdate [N]` — display update delay, 0-100. Presentation tuning only, but
+/// scripts read and write it, so the value round-trips.
+pub const CLIENT_FUPDATE_KEY: &str = "\0client-fupdate";
 pub const CLIENT_EMAIL_KEY: &str = "\0client-email";
 pub const CLIENT_CREQ_KEY: &str = "\0client-creq";
 pub const CLIENT_SREQ_KEY: &str = "\0client-sreq";
@@ -467,6 +472,10 @@ pub struct EventVars {
     pub hotlink_line_text: String,
     pub hotlink_line: usize,
     pub hotlink_pos: usize,
+    /// `$nonstdmsg` — true when a PRIVMSG/NOTICE arrived with a source/target
+    /// combination a server would not normally send, i.e. the target is neither
+    /// a channel we know nor our own nick.
+    pub nonstdmsg: bool,
     /// Secondary nick for events that involve two people (e.g. `on KICK`'s
     /// kicked user, exposed as `$knick`).
     pub knick: String,
@@ -1368,7 +1377,9 @@ impl<'a> Runtime<'a> {
                         .push(Action::Send(format!("NOTICE {target} :{text}")));
                 }
             }
-            "me" => {
+            // `/action` is mIRC's synonym for `/me` — a CTCP ACTION to the
+            // active window, not a raw `ACTION` line to the server.
+            "me" | "action" => {
                 let text = self.expand(raw_args);
                 let target = self.reply_target();
                 if !target.is_empty() {
@@ -1391,7 +1402,8 @@ impl<'a> Runtime<'a> {
                     self.actions.push(Action::Send(format!("JOIN {ch}")));
                 }
             }
-            "part" => {
+            // `/leave` is mIRC's synonym for `/part`.
+            "part" | "leave" => {
                 let ch = self.expand(raw_args);
                 let ch = if ch.is_empty() {
                     self.event.chan.clone()
@@ -1400,6 +1412,14 @@ impl<'a> Runtime<'a> {
                 };
                 if !ch.is_empty() {
                     self.actions.push(Action::Send(format!("PART {ch}")));
+                }
+            }
+            // `/partall` leaves every channel on this connection.
+            "partall" => {
+                let _ = self.expand(raw_args);
+                for view in &self.state.channels {
+                    self.actions
+                        .push(Action::Send(format!("PART {}", view.name)));
                 }
             }
             "nick" | "tnick" => {
@@ -1540,6 +1560,56 @@ impl<'a> Runtime<'a> {
             "quit" => {
                 let msg = self.expand(raw_args);
                 self.actions.push(Action::Send(format!("QUIT :{msg}")));
+            }
+            // Status-prefixed targeting: `/vmsg` and `/vnotice` address voiced
+            // users, `/wallchops` and `/wallvoices` notice ops and voices.
+            // mIRC uses a `@#chan` / `+#chan` STATUSMSG target when the server
+            // advertises the prefix, and falls back to addressing the matching
+            // members individually when it does not.
+            "vmsg" | "vnotice" | "wallchops" | "wallvoices" => {
+                let voiced = matches!(lname, "vmsg" | "vnotice" | "wallvoices");
+                let notice = matches!(lname, "vnotice" | "wallchops" | "wallvoices");
+                let (prefix, mode) = if voiced { ('+', 'v') } else { ('@', 'o') };
+                let verb = if notice { "NOTICE" } else { "PRIVMSG" };
+                let (chan, text) = if matches!(lname, "vmsg" | "vnotice") {
+                    (self.event.chan.clone(), self.expand(raw_args))
+                } else {
+                    self.split_target(raw_args)
+                };
+                let chan = if chan.is_empty() {
+                    self.event.chan.clone()
+                } else {
+                    chan
+                };
+                if chan.is_empty() || text.is_empty() {
+                    return;
+                }
+                if self.state.isupport.status_msg.contains(prefix) {
+                    self.actions
+                        .push(Action::Send(format!("{verb} {prefix}{chan} :{text}")));
+                } else {
+                    // No STATUSMSG support: address each holder of the prefix.
+                    let wanted = self.state.isupport.prefix_for_mode(mode);
+                    let members: Vec<String> = self
+                        .state
+                        .channels
+                        .iter()
+                        .find(|view| self.state.isupport.names_equal(&view.name, &chan))
+                        .map(|view| {
+                            view.members
+                                .iter()
+                                .filter(|(_, pre)| {
+                                    wanted.is_some_and(|want| pre.contains(want))
+                                })
+                                .map(|(nick, _)| nick.clone())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    for nick in members {
+                        self.actions
+                            .push(Action::Send(format!("{verb} {nick} :{text}")));
+                    }
+                }
             }
             "raw" | "quote" => {
                 let line = self.expand(raw_args);
@@ -1943,8 +2013,41 @@ impl<'a> Runtime<'a> {
                 });
                 self.halted = true;
             }
+            // `/fsend [on|off]` toggles fast DCC send; `/fupdate [N]` sets the
+            // display update delay (0-100). Both report their current value
+            // when called with no parameter, as mIRC does.
+            "fsend" | "fupdate" => {
+                let arg = self.expand(raw_args).trim().to_ascii_lowercase();
+                let fsend = lname == "fsend";
+                let key = if fsend {
+                    CLIENT_FSEND_KEY
+                } else {
+                    CLIENT_FUPDATE_KEY
+                };
+                if arg.is_empty() {
+                    let current = self.vars.get(key).cloned().unwrap_or_else(|| {
+                        if fsend { "on".into() } else { "0".into() }
+                    });
+                    let label = if fsend {
+                        format!("* Fast send is {current}")
+                    } else {
+                        format!("* Update delay is {current}")
+                    };
+                    self.actions.push(Action::Echo {
+                        target: self.reply_target(),
+                        text: label,
+                    });
+                } else if fsend {
+                    if arg == "on" || arg == "off" {
+                        self.vars.insert(key.into(), arg);
+                    }
+                } else if let Ok(n) = arg.parse::<u32>() {
+                    self.vars.insert(key.into(), n.min(100).to_string());
+                }
+            }
             "ial" => self.cmd_ial(raw_args),
-            "ialclear" => self.cmd_ialclear(raw_args),
+            // mIRC accepts both spellings for the same operation.
+            "ialclear" | "clearial" => self.cmd_ialclear(raw_args),
             "ialfill" => self.cmd_ialfill(raw_args),
             "ialmark" => self.cmd_ialmark(raw_args),
             "remote" => match self.expand(raw_args).trim().to_ascii_lowercase().as_str() {
@@ -1956,7 +2059,11 @@ impl<'a> Runtime<'a> {
                 }
                 _ => {}
             },
-            "events" => {
+            // `/events` gates the event flag (bit 2); `/ctcps` gates CTCP
+            // processing (bit 1). Both report their state when called bare.
+            "events" | "ctcps" => {
+                let bit: u8 = if lname == "ctcps" { 1 } else { 2 };
+                let label = if lname == "ctcps" { "CTCPs" } else { "Events" };
                 let mode = self.expand(raw_args).trim().to_ascii_lowercase();
                 let current = self
                     .vars
@@ -1964,15 +2071,18 @@ impl<'a> Runtime<'a> {
                     .and_then(|value| value.parse::<u8>().ok())
                     .unwrap_or(7);
                 let next = match mode.as_str() {
-                    "on" => current | 2,
-                    "off" => current & !2,
+                    "on" => current | bit,
+                    "off" => current & !bit,
                     _ => current,
                 };
                 self.vars.insert(REMOTE_FLAGS_KEY.into(), next.to_string());
                 if mode.is_empty() {
                     self.actions.push(Action::Echo {
                         target: self.reply_target(),
-                        text: format!("* Events are {}", if next & 2 != 0 { "on" } else { "off" }),
+                        text: format!(
+                            "* {label} are {}",
+                            if next & bit != 0 { "on" } else { "off" }
+                        ),
                     });
                 }
             }
@@ -2317,6 +2427,42 @@ impl<'a> Runtime<'a> {
                     current_target: self.reply_target(),
                 });
             }
+            // `/exit` closes jIRC; `/disconnect` drops the current connection
+            // but leaves the client running. Both are client-side in mIRC —
+            // without these arms they were sent to the server as invalid verbs.
+            "exit" | "disconnect" => {
+                let args = self.expand(raw_args);
+                self.actions.push(Action::ClientCommand {
+                    command: lname.into(),
+                    args,
+                    current_target: self.reply_target(),
+                });
+            }
+            // mIRC accepts the British spelling. Normalise to `color` so the
+            // frontend router only ever has to know one name.
+            "colour" => {
+                let args = self.expand(raw_args);
+                self.actions.push(Action::ClientCommand {
+                    command: "color".into(),
+                    args,
+                    current_target: self.reply_target(),
+                });
+            }
+            // `/closemsg [nick]` closes query windows — `/close -m` in current
+            // mIRC terms, which the frontend's `close` router already handles.
+            "closemsg" => {
+                let args = self.expand(raw_args);
+                let args = if args.trim().is_empty() {
+                    "-m".to_string()
+                } else {
+                    format!("-m {}", args.trim())
+                };
+                self.actions.push(Action::ClientCommand {
+                    command: "close".into(),
+                    args,
+                    current_target: self.reply_target(),
+                });
+            }
             "ulist" => {
                 let filter = self.expand(raw_args).to_ascii_lowercase();
                 for entry in self.users.formatted_entries() {
@@ -2347,7 +2493,14 @@ impl<'a> Runtime<'a> {
             }
             // We evaluate any parameters (for identifier side effects) and stop.
             // `/run` is deliberately a no-op — jIRC never launches programs.
-            "fline" | "renwin" | "run" | "url" | "maximize" | "minimize" => {
+            //
+            // `/username` is recognised but inactive: mIRC edits one global
+            // connect-dialog field, whereas jIRC's username is per server
+            // profile and only takes effect at registration. Silently rewriting
+            // a stored profile would be a surprising side effect, so this stays
+            // inert until we decide which profile it should target. Recognising
+            // it still matters — otherwise it reaches the server as `USERNAME`.
+            "fline" | "renwin" | "run" | "url" | "maximize" | "minimize" | "username" => {
                 let _ = self.expand(raw_args);
             }
             _ => {
@@ -6889,7 +7042,7 @@ fn is_state_word_op(op: &str) -> bool {
 /// mIRC's idea of a number: an optional sign, decimal digits, and at most one
 /// decimal point. Rust's `f64` parser is looser — it also accepts `inf`, `NaN`,
 /// and exponent forms like `1e5`, none of which mIRC counts as numeric.
-fn is_mirc_number(s: &str) -> bool {
+pub(super) fn is_mirc_number(s: &str) -> bool {
     let body = s.strip_prefix(['+', '-']).unwrap_or(s);
     !body.is_empty()
         && body.chars().all(|c| c.is_ascii_digit() || c == '.')

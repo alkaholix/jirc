@@ -446,6 +446,16 @@ export function routeClientCommand(
     case "clearall":
       routeClearAll(event.serverId, event.args);
       break;
+    // `/exit` quits jIRC. `/disconnect` drops this connection only, with an
+    // optional quit message, and leaves the client running.
+    case "exit":
+      void api.exitApp();
+      break;
+    case "disconnect": {
+      const message = event.args.trim();
+      void api.disconnect(event.serverId, message || undefined);
+      break;
+    }
     case "close":
       routeClose(event.serverId, event.args);
       break;

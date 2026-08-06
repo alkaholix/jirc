@@ -161,6 +161,38 @@ impl FileStore {
         }
     }
 
+    /// `$freadex(name)` — everything from the pointer to end of file, leaving
+    /// the pointer at EOF. Unlike `read_line` this keeps embedded line breaks.
+    pub fn read_rest(&mut self, name: &str) -> String {
+        let Self {
+            handles,
+            feof,
+            ferr,
+        } = self;
+        *feof = false;
+        let Some(h) = handles.get_mut(name) else {
+            *ferr = true;
+            return String::new();
+        };
+        match std::fs::read(&h.path) {
+            Ok(bytes) => {
+                let start = (h.pos as usize).min(bytes.len());
+                let rest = &bytes[start..];
+                h.pos = bytes.len() as u64;
+                h.eof = true;
+                h.err = false;
+                *feof = true;
+                *ferr = false;
+                String::from_utf8_lossy(rest).into_owned()
+            }
+            Err(_) => {
+                h.err = true;
+                *ferr = true;
+                String::new()
+            }
+        }
+    }
+
     /// `$fgetc(name)` — the next character (byte).
     pub fn read_char(&mut self, name: &str) -> String {
         let Self {

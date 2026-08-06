@@ -11,6 +11,12 @@ use sha2::Digest; // brings the Digest trait into scope for Md5/Sha1/Sha2 too
 
 /// Evaluates `$name(args...)` with an optional `.property` suffix (empty when
 /// none). Args are already expanded.
+/// Sentinels returned by `$inmode` / `$inwho` and by the matching
+/// `$chan()` properties while a `+b` listing or `/who` reply is in flight.
+/// Scripts compare the two rather than reading the literal text.
+const INMODE_SENTINEL: &str = "$inmode";
+const INWHO_SENTINEL: &str = "$inwho";
+
 pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> String {
     rt.purge_expired();
     let a = |i: usize| args.get(i).cloned().unwrap_or_default();
@@ -53,7 +59,10 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         // Full local path in on FILESENT/FILERCVD/GETFAIL/SENDFAIL.
         "filename" => rt.event.filename.clone(),
         "dccid" => rt.event.dcc_id.clone(),
-        "raddress" => rt.event.dns_query.clone(),
+        // In an `on DNS` event: $naddress is the name being resolved and
+        // $iaddress the resolved IP (empty when the lookup returned none).
+        "raddress" | "naddress" => rt.event.dns_query.clone(),
+        "iaddress" => rt.event.dns_ips.first().cloned().unwrap_or_default(),
         "dns" => {
             let n = a(0).parse::<usize>().unwrap_or(0);
             if n == 0 {
@@ -102,15 +111,29 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         }
         "pnick" => rt.event.pnick.clone(),
         "mnick" => rt.state.main_nick.clone(),
-        "nick" => {
-            // $nick = event nick; $nick(#chan,N/nick[,include[,exclude]])
-            // reads the live nickname list using the server's CASEMAPPING.
-            if args.len() >= 2 {
+        // $nick = event nick; $nick(#chan,N/nick[,include[,exclude]]) reads the
+        // live nickname list using the server's CASEMAPPING.
+        //
+        // The variants are the same lookup with a preset filter, so they share
+        // this arm rather than duplicating the selector logic:
+        //   $rnick / $nvnick — nicks holding no status prefix at all
+        //   $nopnick        — nicks that are not operators
+        //   $nhnick         — nicks that are not halfop/helper
+        // Per mIRC, "not an op" excludes anyone holding the op prefix even if
+        // they also hold another, which is exactly what `exclude` already does.
+        "nick" | "rnick" | "nvnick" | "nopnick" | "nhnick" => {
+            let variant = name.to_ascii_lowercase();
+            let is_variant = variant != "nick";
+            if args.len() >= 2 || is_variant {
                 let Some(channel) = find_channel(&rt.state, &a(0)) else {
                     return String::new();
                 };
-                let include = a(2);
-                let exclude = a(3);
+                let (include, exclude) = match variant.as_str() {
+                    "rnick" | "nvnick" => ("r".to_string(), String::new()),
+                    "nopnick" => (String::new(), "o".to_string()),
+                    "nhnick" => (String::new(), "h".to_string()),
+                    _ => (a(2), a(3)),
+                };
                 let member_rows = if channel.members.is_empty() {
                     channel
                         .nicks
@@ -181,6 +204,15 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                         "key" => channel.key.clone(),
                         "limit" => channel.limit.clone(),
                         "status" => "joined".to_string(),
+                        // While a listing is in flight these report the same
+                        // sentinel as $inmode / $inwho, so mIRC's
+                        // `if ($chan(1).banlist == $inmode)` idiom works.
+                        "banlist" => {
+                            if channel.in_mode { INMODE_SENTINEL } else { "$false" }.to_string()
+                        }
+                        "inwho" => {
+                            if channel.in_who { INWHO_SENTINEL } else { "$false" }.to_string()
+                        }
                         "ial" => {
                             let nicks = if channel.members.is_empty() {
                                 channel.nicks.iter().map(String::as_str).collect::<Vec<_>>()
@@ -436,7 +468,9 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         }
         "cb" => eval_clipboard(rt, args, prop),
         "disk" => eval_disk(rt, args, prop),
-        "chat" | "send" | "get" | "fserve" => eval_dcc_ident(rt, name, args, prop),
+        // mIRC spells the fileserver identifier `$fserv`; jIRC registered it as
+        // `$fserve`. Both reach the same DCC session list.
+        "chat" | "send" | "get" | "fserve" | "fserv" => eval_dcc_ident(rt, name, args, prop),
         "onchan" => {
             // $onchan(#chan) -> are you in that channel?
             if rt
@@ -1117,8 +1151,28 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 String::new()
             }
         }
-        "agentname" | "agentstat" | "agentver" | "vcmd" | "vcmdstat" | "vcmdver" => String::new(),
-        "inmidi" | "insong" | "inwave" => "$false".into(),
+        // Microsoft Agent and voice-command facilities have no cross-platform
+        // equivalent. They report their documented inactive state so scripts can
+        // feature-detect them. `$vc` is documented as a synonym for `$vcmd`.
+        "agentname" | "agentstat" | "agentver" | "vcmd" | "vcmdstat" | "vcmdver" | "vc" => {
+            String::new()
+        }
+        // Per-format "is playing" tests. jIRC's `/splay` drives one audio
+        // channel without exposing per-format state, so these report the
+        // documented inactive value and scripts can feature-detect them.
+        "inmidi" | "insong" | "inwave" | "inmp3" => "$false".into(),
+        // Sentinels compared against $chan().banlist / $chan().inwho.
+        "inmode" => INMODE_SENTINEL.to_string(),
+        "inwho" => INWHO_SENTINEL.to_string(),
+        // $nonstdmsg — $true inside a PRIVMSG/NOTICE-derived event whose target
+        // was neither a known channel nor our own nick.
+        "nonstdmsg" => bool_str(rt.event.nonstdmsg),
+        // $fupdate mirrors the `/fupdate` setting (0-100, default 0).
+        "fupdate" => rt
+            .vars
+            .get(super::eval::CLIENT_FUPDATE_KEY)
+            .cloned()
+            .unwrap_or_else(|| "0".into()),
         "ssldll" => "rustls".into(),
         "ssllibdll" => "rustls-ring".into(),
         "sslready" => "$true".into(),
@@ -1214,7 +1268,8 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 String::new()
             }
         }
-        "color" => eval_color(&a(0), prop),
+        // mIRC accepts the British spelling for the same lookup.
+        "color" | "colour" => eval_color(&a(0), prop),
         "tip" => eval_tip_ident(rt, args, prop),
         "menu" => rt.event.menu.clone(),
         "menutype" => {
@@ -1515,7 +1570,9 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 .insert(super::eval::LASTINPUT_KEY.to_string(), v.clone());
             v
         }
-        "sfile" => {
+        // $hfile once laid the file dialog out horizontally; current mIRC makes
+        // it a straight synonym for $sfile.
+        "sfile" | "hfile" => {
             let files = rt.input.pick_files(&a(0), &a(1), false);
             store_file_selection(rt, &files);
             files.into_iter().next().unwrap_or_default()
@@ -1695,7 +1752,9 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         }
         "logdir" => data_subdir(rt, "logs"),
         "getdir" => data_subdir(rt, "dcc"),
-        "mididir" => data_subdir(rt, "sounds"),
+        // All three sound-library directories resolve to the same `sounds`
+        // folder, which is also where `$sound` and `/splay` look.
+        "mididir" | "wavedir" | "mp3dir" => data_subdir(rt, "sounds"),
         "sound" => {
             let base = std::path::PathBuf::from(data_subdir(rt, "sounds"));
             let name = a(0);
@@ -2080,11 +2139,46 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "chantypes" => rt.state.isupport.chan_types.clone(),
         "modespl" => rt.state.isupport.modes.to_string(),
         // $isalias(name) — $true if a user alias by that name is defined.
-        "isalias" => bool_str(
-            rt.script
-                .find_active_alias_from(&a(0), rt.vars, &rt.event.script_source)
-                .is_some(),
-        ),
+        // $isalias(name) -> $true/$false, with mIRC's three properties:
+        //   .fname — the script file the alias lives in
+        //   .ftype — "alias" for a runtime `/alias` definition, else "remote"
+        //   .alias — the alias body; `.alias` with N selects the Nth line
+        "isalias" => {
+            let found = rt
+                .script
+                .find_active_alias_from(&a(0), rt.vars, &rt.event.script_source);
+            let Some(alias) = found else {
+                return if prop.is_empty() {
+                    "$false".to_string()
+                } else {
+                    String::new()
+                };
+            };
+            match prop.to_ascii_lowercase().as_str() {
+                "" => "$true".to_string(),
+                "fname" => alias.source.clone(),
+                // jIRC compiles every script as a remote file; only the
+                // runtime `/alias` writer uses the `_runtime` stem, which is
+                // mIRC's "alias file" equivalent.
+                "ftype" => {
+                    let stem = alias
+                        .source
+                        .rsplit(['\\', '/'])
+                        .next()
+                        .unwrap_or(&alias.source);
+                    if stem.starts_with("_runtime") {
+                        "alias".to_string()
+                    } else {
+                        "remote".to_string()
+                    }
+                }
+                // `.alias` would return the definition text. The parser keeps an
+                // AST rather than the source span, so reconstructing it would
+                // be lossy; left unimplemented rather than returning something
+                // that only looks like the original.
+                _ => String::new(),
+            }
+        }
         // $signal = the name of the signal currently being handled (on SIGNAL).
         "signal" => {
             if rt.event.event == "signal" {
@@ -2168,14 +2262,17 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             if certificate.is_empty() || (!a(1).is_empty() && !a(1).eq_ignore_ascii_case("s")) {
                 String::new()
             } else {
-                let digest = match a(0).to_ascii_lowercase().as_str() {
-                    "md5" => format!("{:x}", md5::Md5::digest(certificate)),
-                    "sha1" => format!("{:x}", sha1::Sha1::digest(certificate)),
-                    "sha512" => format!("{:x}", sha2::Sha512::digest(certificate)),
-                    "sha256" | "" => format!("{:x}", sha2::Sha256::digest(certificate)),
+                let raw: Vec<u8> = match a(0).to_ascii_lowercase().as_str() {
+                    "md5" => md5::Md5::digest(certificate).to_vec(),
+                    "sha1" => sha1::Sha1::digest(certificate).to_vec(),
+                    "sha512" => sha2::Sha512::digest(certificate).to_vec(),
+                    "sha256" | "" => sha2::Sha256::digest(certificate).to_vec(),
                     _ => return String::new(),
                 };
-                if prop.eq_ignore_ascii_case("colons") {
+                let digest: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+                if prop.eq_ignore_ascii_case("babble") {
+                    bubble_babble(&raw)
+                } else if prop.eq_ignore_ascii_case("colons") {
                     digest
                         .as_bytes()
                         .chunks(2)
@@ -2188,6 +2285,30 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             }
         }
         "sslcertvalid" => bool_str(rt.state.tls && rt.state.tls_cert_valid),
+        // Fingerprints of the *client* certificate configured for this
+        // connection (mIRC reads it from the loaded private key file). Hashed
+        // over the DER body, which is what every server and CertFP service
+        // quotes. $null when no client certificate is configured.
+        "sslcertsha1" | "sslcertsha256" => {
+            let path = &rt.state.tls_client_cert_path;
+            if path.is_empty() {
+                return String::new();
+            }
+            let Ok(pem) = std::fs::read(path) else {
+                return String::new();
+            };
+            let mut reader = std::io::BufReader::new(pem.as_slice());
+            let Some(Ok(der)) = rustls_pemfile::certs(&mut reader).next() else {
+                return String::new();
+            };
+            if name.eq_ignore_ascii_case("sslcertsha1") {
+                use sha1::{Digest, Sha1};
+                format!("{:x}", Sha1::digest(&der))
+            } else {
+                use sha2::{Digest, Sha256};
+                format!("{:x}", Sha256::digest(&der))
+            }
+        }
         "anick" => rt.state.alt_nick.clone(),
         "fullname" => rt.state.realname.clone(),
         "usermode" => rt.state.user_mode.clone(),
@@ -2707,6 +2828,17 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             }
         }
         "hfind" => eval_hfind_expanded(rt, args, prop, None),
+        // $hmatch(table, wildtext, N) and $hregex(table, regex, N) are $hfind
+        // with the match method fixed to wildcard and regex respectively.
+        "hmatch" | "hregex" => {
+            let mode = if name.eq_ignore_ascii_case("hregex") {
+                "r"
+            } else {
+                "w"
+            };
+            let fixed = [a(0), a(1), a(2), mode.to_string()];
+            eval_hfind_expanded(rt, &fixed, prop, None)
+        }
         // Socket identifiers (used inside on SOCKOPEN/SOCKREAD/SOCKCLOSE).
         "sock" => {
             // $sock(name) -> the name if a matching socket exists (else empty),
@@ -3293,7 +3425,8 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 }
             }
         }
-        "regml" => {
+        // $regbr is mIRC's older name for the same backreference lookup.
+        "regml" | "regbr" => {
             // $regml([name,] N, [&binvar]); N=0 returns the number of capture
             // strings, and the properties expose the captured span metadata.
             let (result_name, n_index) = if args.len() >= 2 && !is_integer_arg(&a(0)) {
@@ -3362,6 +3495,8 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "feof" => bool_str(rt.files.feof),
         "ferr" => bool_str(rt.files.ferr),
         "fread" => rt.files.read_line(&a(0)),
+        // $freadex(name) — the rest of the file from the current pointer.
+        "freadex" => rt.files.read_rest(&a(0)),
         "fgetc" => rt.files.read_char(&a(0)),
         "fopen" => {
             // $fopen(N) -> Nth open handle (0 = count); $fopen(name) -> the name if
@@ -3392,6 +3527,22 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                     .unwrap_or_default(),
                 "eof" => bool_str(rt.files.handle(&name).map(|h| h.eof).unwrap_or(false)),
                 "err" => bool_str(rt.files.handle(&name).map(|h| h.err).unwrap_or(false)),
+                // `.bom` reports the file's encoding from its byte-order mark:
+                // "utf16le", "utf16be", "utf8", or "ascii" when there is none.
+                "bom" => rt
+                    .files
+                    .handle(&name)
+                    .and_then(|h| std::fs::read(&h.path).ok())
+                    .map(|bytes| {
+                        match bytes.as_slice() {
+                            [0xff, 0xfe, ..] => "utf16le",
+                            [0xfe, 0xff, ..] => "utf16be",
+                            [0xef, 0xbb, 0xbf, ..] => "utf8",
+                            _ => "ascii",
+                        }
+                        .to_string()
+                    })
+                    .unwrap_or_default(),
                 _ => String::new(),
             }
         }
@@ -3414,7 +3565,10 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 has_switches && switches.contains('p'),
             )
         }
-        "ini" => {
+        // $initopic(file, topic/N) is the two-argument $ini lookup — mIRC calls
+        // an ini section a "topic", and it has no three-argument form, so it
+        // falls through the same branch naturally.
+        "ini" | "initopic" => {
             // $ini(file, N) -> Nth section (N=0 -> count); $ini(file, section) -> its
             // 1-based index. $ini(file, section, N) -> Nth item; (.., item) -> index.
             let path = super::eval::sandbox_path(&rt.data_dir, &a(0));
@@ -3448,25 +3602,108 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "mkfn" | "mknickfn" => mkfn(&a(0)),
         "iptype" => {
             // mIRC: "ipv4" / "ipv6" for a valid address, else $null (empty).
+            // `.expand` writes every IPv6 group in full; `.compress` returns the
+            // shortest form. Both are $null for IPv4, which has no such forms.
             let s = a(0);
             if s.parse::<std::net::Ipv4Addr>().is_ok() {
-                "ipv4".to_string()
-            } else if s.parse::<std::net::Ipv6Addr>().is_ok() {
-                "ipv6".to_string()
+                match prop.to_ascii_lowercase().as_str() {
+                    "expand" | "compress" => String::new(),
+                    _ => "ipv4".to_string(),
+                }
+            } else if let Ok(v6) = s.parse::<std::net::Ipv6Addr>() {
+                match prop.to_ascii_lowercase().as_str() {
+                    "expand" => v6
+                        .segments()
+                        .iter()
+                        .map(|group| format!("{group:04x}"))
+                        .collect::<Vec<_>>()
+                        .join(":"),
+                    // Display formatting already produces the compressed form.
+                    "compress" => v6.to_string(),
+                    _ => "ipv6".to_string(),
+                }
             } else {
                 String::new()
             }
         }
-        "eval" => {
-            // mIRC `$eval(text,N)` evaluates text N times (default 1; N=0 → not
-            // evaluated). Args arrive already expanded once, so N≤1 returns it as-is
-            // and N≥2 expands the remaining N-1 times.
-            let n: i64 = a(1).trim().parse().unwrap_or(1);
+        // mIRC `$eval(text,N)` evaluates text N times (default 1; N=0 → not
+        // evaluated). Args arrive already expanded once, so N≤1 returns it as-is
+        // and N≥2 expands the remaining N-1 times. `$evalnext(text)` is defined
+        // as exactly `$eval(text,2)`.
+        "eval" | "evalnext" => {
+            let n: i64 = if name.eq_ignore_ascii_case("evalnext") {
+                2
+            } else {
+                a(1).trim().parse().unwrap_or(1)
+            };
             let mut s = a(0);
             for _ in 1..n.max(1) {
                 s = rt.expand(&s);
             }
             s
+        }
+        // $lof(filename) is the file's byte size — the same value as
+        // `$file(filename).size`.
+        "lof" => std::fs::metadata(super::eval::sandbox_path(&rt.data_dir, &a(0)))
+            .map(|md| md.len().to_string())
+            .unwrap_or_default(),
+        // $isnumber(text) -> $true/$false. Uses the same numeric rule as the
+        // `isnum` operator, so `inf`, `NaN` and exponent forms are not numbers.
+        "isnumber" => bool_str(super::eval::is_mirc_number(&a(0))),
+        // $isutf(text) -> 0 invalid UTF-8 · 1 plain ASCII text · 2 valid UTF-8.
+        // Rust strings are already UTF-8, so 0 is unreachable from script text;
+        // it remains for callers reading raw bytes.
+        "isutf" => {
+            let text = a(0);
+            if text.is_ascii() { "1" } else { "2" }.to_string()
+        }
+        // $adate is $date in USA month/day/year order.
+        "adate" => asctime(now_secs() as i64, "mm/dd/yyyy"),
+        // $banlist(#chan,N) -> the Nth ban mask; N=0 is the count.
+        // $iql(#chan,N) is the same shape for the quiet (+q) list, which jIRC
+        // does not track, so it reports an empty list rather than guessing.
+        "banlist" | "iql" => {
+            let entries: Vec<String> = if name.eq_ignore_ascii_case("iql") {
+                Vec::new()
+            } else {
+                find_channel(&rt.state, &a(0))
+                    .map(|c| c.bans.clone())
+                    .unwrap_or_default()
+            };
+            match a(1).trim().parse::<usize>() {
+                Ok(0) => entries.len().to_string(),
+                Ok(n) => entries.get(n - 1).cloned().unwrap_or_default(),
+                Err(_) => String::new(),
+            }
+        }
+        // Recursive integer maths. mIRC caps these at what a double can hold;
+        // anything beyond that overflows to $null rather than a wrong number.
+        "factorial" | "fibonacci" => {
+            let n: u64 = match a(0).trim().parse() {
+                Ok(n) => n,
+                Err(_) => return String::new(),
+            };
+            let value: Option<u64> = if name.eq_ignore_ascii_case("factorial") {
+                (1..=n).try_fold(1u64, |acc, k| acc.checked_mul(k))
+            } else {
+                let (mut a0, mut b0) = (0u64, 1u64);
+                let mut ok = Some(0u64);
+                for _ in 0..n {
+                    match a0.checked_add(b0) {
+                        Some(next) => {
+                            a0 = b0;
+                            b0 = next;
+                            ok = Some(a0);
+                        }
+                        None => {
+                            ok = None;
+                            break;
+                        }
+                    }
+                }
+                if n == 0 { Some(0) } else { ok }
+            };
+            value.map(|v| v.to_string()).unwrap_or_default()
         }
         // A user-defined alias used as an identifier ($myalias): run it and use
         // its `/return` value.
@@ -5496,6 +5733,38 @@ fn argon2_ident(args: &[String]) -> String {
     hex_of(output)
 }
 
+/// Bubble Babble encoding of a digest (`$sslhash().babble`). Produces the
+/// `xexih-...-xexax` form used for eyeball-comparing fingerprints. Follows
+/// Huima's original specification, including the running checksum.
+fn bubble_babble(data: &[u8]) -> String {
+    const VOWELS: &[u8] = b"aeiouy";
+    const CONSONANTS: &[u8] = b"bcdfghklmnprstvzx";
+    let mut out = String::from("x");
+    let mut checksum: usize = 1;
+    let rounds = data.len() / 2 + 1;
+    for round in 0..rounds {
+        if round + 1 < rounds || !data.len().is_multiple_of(2) {
+            let byte1 = data[round * 2] as usize;
+            out.push(VOWELS[(((byte1 >> 6) & 3) + checksum) % 6] as char);
+            out.push(CONSONANTS[(byte1 >> 2) & 15] as char);
+            out.push(VOWELS[((byte1 & 3) + checksum / 6) % 6] as char);
+            if round + 1 < rounds {
+                let byte2 = data[round * 2 + 1] as usize;
+                out.push(CONSONANTS[(byte2 >> 4) & 15] as char);
+                out.push('-');
+                out.push(CONSONANTS[byte2 & 15] as char);
+                checksum = (checksum * 5 + byte1 * 7 + byte2) % 36;
+            }
+        } else {
+            out.push(VOWELS[checksum % 6] as char);
+            out.push(CONSONANTS[16] as char);
+            out.push(VOWELS[checksum / 6] as char);
+        }
+    }
+    out.push('x');
+    out
+}
+
 fn eval_color(selector: &str, prop: &str) -> String {
     const COLORS: [(&str, u32); 16] = [
         ("white", 0xffffff),
@@ -5515,20 +5784,40 @@ fn eval_color(selector: &str, prop: &str) -> String {
         ("grey", 0x7f7f7f),
         ("lightgrey", 0xd2d2d2),
     ];
-    let selected = selector
+    // mIRC's two forms return different things: `$color(N)` is the RGB value
+    // for colour index N, while `$color(<name>)` is the *index number* for that
+    // name. `.dd` zero-pads the index form to two digits and does not apply to
+    // an RGB result. `.name` is a jIRC extension retained for compatibility.
+    if let Some((index, (name, rgb))) = selector
+        .trim()
         .parse::<usize>()
         .ok()
-        .and_then(|index| COLORS.get(index))
-        .or_else(|| {
-            COLORS
-                .iter()
-                .find(|(name, _)| name.eq_ignore_ascii_case(selector))
-        });
-    selected.map_or_else(String::new, |(name, rgb)| {
-        if prop.eq_ignore_ascii_case("name") {
+        .and_then(|index| COLORS.get(index).map(|entry| (index, entry)))
+    {
+        let _ = index;
+        return if prop.eq_ignore_ascii_case("name") {
             (*name).into()
         } else {
             rgb.to_string()
+        };
+    }
+    // Named lookup, including mIRC's partial matches (`$color(action)`).
+    let found = COLORS
+        .iter()
+        .position(|(name, _)| name.eq_ignore_ascii_case(selector))
+        .or_else(|| {
+            let needle = selector.trim().to_ascii_lowercase();
+            (!needle.is_empty())
+                .then(|| COLORS.iter().position(|(name, _)| name.starts_with(&needle)))
+                .flatten()
+        });
+    found.map_or_else(String::new, |index| {
+        if prop.eq_ignore_ascii_case("name") {
+            COLORS[index].0.into()
+        } else if prop.eq_ignore_ascii_case("dd") {
+            format!("{index:02}")
+        } else {
+            index.to_string()
         }
     })
 }
@@ -7553,6 +7842,36 @@ mod tests {
         assert_eq!(e("deltok", &["a b c d", "-1--2", "32"]), "a b");
         // $sorttok 'a' — numeric tokens sort numerically, after the rest.
         assert_eq!(e("sorttok", &["10 b 2 a", "32", "a"]), "a b 2 10");
+
+        // ---- identifiers added in the 26.8.14 parity pass ----
+        // $evalnext(text) is defined as exactly $eval(text,2).
+        assert_eq!(e("evalnext", &["plain"]), e("eval", &["plain", "2"]));
+        // $isnumber uses the same rule as the `isnum` operator.
+        assert_eq!(e("isnumber", &["42"]), "$true");
+        assert_eq!(e("isnumber", &["-3.5"]), "$true");
+        assert_eq!(e("isnumber", &["1e5"]), "$false");
+        assert_eq!(e("isnumber", &["abc"]), "$false");
+        // $isutf: 1 = plain ASCII, 2 = contains valid multi-byte UTF-8.
+        assert_eq!(e("isutf", &["plain"]), "1");
+        assert_eq!(e("isutf", &["caf\u{e9}"]), "2");
+        // $adate is month/day/year where $date is day/month/year.
+        let adate = e("adate", &[]);
+        assert!(
+            adate.len() == 10 && &adate[2..3] == "/" && &adate[5..6] == "/",
+            "adate={adate}"
+        );
+        assert_ne!(adate, e("date", &[]));
+        // Recursive maths, with overflow reported as $null rather than a wrong
+        // number.
+        assert_eq!(e("factorial", &["0"]), "1");
+        assert_eq!(e("factorial", &["5"]), "120");
+        assert_eq!(e("factorial", &["500"]), "");
+        assert_eq!(e("fibonacci", &["0"]), "0");
+        assert_eq!(e("fibonacci", &["10"]), "55");
+        // $colour is the British spelling of $color.
+        assert_eq!(e("colour", &["4"]), e("color", &["4"]));
+        // jIRC keeps no quiet list, so $iql reports an empty one.
+        assert_eq!(e("iql", &["#a", "0"]), "0");
     }
 
     #[test]
@@ -7662,6 +7981,66 @@ mod tests {
         assert_eq!(format_duration(90061), "1day1hr1min1sec");
         assert_eq!(format_duration_without_seconds(30), "0mins");
         assert_eq!(format_duration_without_seconds(3691), "1hr1min");
+    }
+
+    #[test]
+    fn bubble_babble_matches_the_published_vectors() {
+        // Test vectors from Huima's Bubble Babble specification.
+        assert_eq!(bubble_babble(b""), "xexax");
+        assert_eq!(bubble_babble(b"1234567890"), "xesef-disof-gytuf-katof-movif-baxux");
+        assert_eq!(bubble_babble(b"Pineapple"), "xigak-nyryk-humil-bosek-sonax");
+    }
+
+    #[test]
+    fn identifier_properties_added_in_the_property_pass() {
+        use crate::script::ast::Script;
+        use std::collections::HashMap;
+        let script = Script::default();
+        let mut vars = HashMap::new();
+        let mut hashes = HashMap::new();
+        let mut var_expiry = HashMap::new();
+        let mut hash_expiry = HashMap::new();
+        let mut files = crate::script::files::FileStore::default();
+        let mut bins = crate::script::binvar::BinStore::default();
+        let mut windows = crate::script::window::WindowStore::default();
+        let mut users = crate::script::users::UserList::default();
+        let mut rt = rt_for(
+            &script,
+            &mut vars,
+            &mut hashes,
+            &mut var_expiry,
+            &mut hash_expiry,
+            &mut files,
+            &mut bins,
+            &mut windows,
+            &mut users,
+        );
+        let mut p = |n: &str, a: &[&str], prop: &str| {
+            eval_ident(
+                &mut rt,
+                n,
+                &a.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                prop,
+            )
+        };
+        // $iptype: .expand writes every IPv6 group in full, .compress shortens.
+        assert_eq!(p("iptype", &["2001:db8::1"], ""), "ipv6");
+        assert_eq!(
+            p("iptype", &["2001:db8::1"], "expand"),
+            "2001:0db8:0000:0000:0000:0000:0000:0001"
+        );
+        assert_eq!(p("iptype", &["2001:0db8:0:0:0:0:0:1"], "compress"), "2001:db8::1");
+        // IPv4 has neither form.
+        assert_eq!(p("iptype", &["192.168.0.1"], "expand"), "");
+        assert_eq!(p("iptype", &["192.168.0.1"], ""), "ipv4");
+        // $color: N -> RGB, name -> index, .dd -> zero-padded index.
+        assert_eq!(p("color", &["red"], ""), "4");
+        assert_eq!(p("color", &["red"], "dd"), "04");
+        assert_eq!(p("color", &["4"], ""), "255");
+        assert_eq!(p("colour", &["red"], "dd"), "04");
+        // $isalias reports where an alias came from; unknown names are $false.
+        assert_eq!(p("isalias", &["nosuchalias"], ""), "$false");
+        assert_eq!(p("isalias", &["nosuchalias"], "ftype"), "");
     }
 
     #[test]
@@ -7886,8 +8265,16 @@ mod tests {
             ]),
             "3"
         );
-        assert_eq!(eval_color("red", ""), "255");
+        // `$color(N)` is the RGB for index N; `$color(<name>)` is the index.
+        assert_eq!(eval_color("4", ""), "255");
         assert_eq!(eval_color("4", "name"), "red");
+        assert_eq!(eval_color("red", ""), "4");
+        // `.dd` pads the index form to two digits; RGB results are unaffected.
+        assert_eq!(eval_color("red", "dd"), "04");
+        assert_eq!(eval_color("lightcyan", ""), "11");
+        assert_eq!(eval_color("lightcyan", "dd"), "11");
+        // Partial name matches work, as in `$color(action)`.
+        assert_eq!(eval_color("light", ""), eval_color("lightgreen", ""));
         assert_eq!(
             argon2_ident(&["password".into(), "12345678".into()]).len(),
             64

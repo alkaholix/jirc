@@ -581,6 +581,7 @@ async fn run_once(
         server_ip: connection_info.peer_ip,
         tls_version: connection_info.tls_version,
         tls_peer_certificate: connection_info.tls_peer_certificate,
+        tls_client_cert_path: profile.tls_client_cert_path.clone().unwrap_or_default(),
         server_target: profile.host.clone(),
         tls_cert_valid: connection_info.tls_cert_valid && !profile.tls_insecure,
         alt_nick: profile.alt_nick.clone().unwrap_or_default(),
@@ -2012,6 +2013,14 @@ fn handle_numeric(ctx: &mut Context, fx: &mut Effects, resp: Response, args: &[S
         }
         Response::RPL_BANLIST => {
             // [nick, channel, banmask, ...] — populate the channel ban list.
+            // The listing stays "in flight" until its ENDOF numeric, which is
+            // what `$chan().banlist` / `$inmode` report.
+            if let Some(channel) = args.get(1) {
+                if let Some(ch) = ctx.state.channel_mut(channel) {
+                    ch.in_mode = true;
+                    fx.channel_state_changed = true;
+                }
+            }
             if let (Some(channel), Some(mask)) = (args.get(1), args.get(2)) {
                 ctx.state.set_channel_list(
                     channel,
@@ -2075,7 +2084,29 @@ fn handle_numeric(ctx: &mut Context, fx: &mut Effects, resp: Response, args: &[S
                 fx.channel_state_changed = true;
             }
         }
+        // Listing finished — clear the in-flight flags read by `$inmode`
+        // and `$inwho`. These numerics are otherwise unused.
+        Response::RPL_ENDOFBANLIST | Response::RPL_ENDOFWHO => {
+            if let Some(channel) = args.get(1) {
+                if let Some(ch) = ctx.state.channel_mut(channel) {
+                    if matches!(resp, Response::RPL_ENDOFBANLIST) {
+                        ch.in_mode = false;
+                    } else {
+                        ch.in_who = false;
+                    }
+                    fx.channel_state_changed = true;
+                }
+            }
+        }
         Response::RPL_WHOREPLY => {
+            // A /who reply is in flight until RPL_ENDOFWHO; `$chan().inwho` and
+            // `$inwho` report that window.
+            if let Some(channel) = args.get(1) {
+                if let Some(ch) = ctx.state.channel_mut(channel) {
+                    ch.in_who = true;
+                    fx.channel_state_changed = true;
+                }
+            }
             // 352: <me> <channel> <user> <host> <server> <nick> <flags>
             //      :<hopcount> <realname>. This is the fallback used when WHOX
             // isn't advertised; account and idle fields are unavailable.
