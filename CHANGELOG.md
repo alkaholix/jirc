@@ -12,6 +12,18 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🚪 26.8.20 — CTCP no longer opens a window
+
+- Fixed `/ctcp <nick> <request>` opening a query window named after the target.
+  The outgoing message was echoed locally like ordinary conversation, so the
+  request appeared as a message from you in a new window. mIRC shows
+  `-> [nick] VERSION` in the active window and opens nothing, which is now what
+  jIRC does. The same applies to `/ctcpreply`.
+- Actions are unaffected: `/me` is conversation and still echoes into the buffer
+  it was sent to.
+
+---
+
 ## 🪟 26.8.19 — Notices and CTCP replies go where mIRC puts them
 
 - Notices no longer open a window. A notice carrying a sender was routed into a

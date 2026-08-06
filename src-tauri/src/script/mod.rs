@@ -2494,6 +2494,19 @@ fn self_echo(server_id: &str, my_nick: &str, line: &str) -> Option<UiEvent> {
         return None;
     };
     let (target, text) = rest.split_once(" :")?;
+    // A CTCP request or reply is not conversation. mIRC shows it as
+    // `-> [nick] VERSION` in the active window and never opens a query for it,
+    // so echoing one here would create a window named after the target — which
+    // is exactly what `/ctcp <nick> VERSION` used to do. The `/ctcp` command
+    // emits that arrow line itself, so returning None leaves mIRC's behaviour.
+    //
+    // ACTION is the exception: `/me` is ordinary conversation and belongs in
+    // the buffer like any other message.
+    if let Some(body) = text.strip_prefix('\u{1}') {
+        if !body.starts_with("ACTION ") {
+            return None;
+        }
+    }
     Some(UiEvent::Message {
         server_id: server_id.to_string(),
         kind,
@@ -12179,6 +12192,32 @@ mod tests {
         engine.load("alias hi { /msg $chan yo }");
         let actions = engine.run_alias(&ctx(), "%#lobby", "hi", "");
         assert_eq!(actions, vec![Action::Send("PRIVMSG %#lobby :yo".into())]);
+    }
+
+    /// `/ctcp <nick> VERSION` used to open a query window named after the
+    /// target, because the outgoing PRIVMSG was echoed locally like ordinary
+    /// conversation. mIRC shows `-> [nick] VERSION` in the active window and
+    /// opens nothing.
+    #[test]
+    fn ctcp_requests_and_replies_do_not_echo_into_a_query() {
+        assert!(
+            self_echo("s1", "me", "PRIVMSG Snue :\u{1}VERSION\u{1}").is_none(),
+            "a CTCP request must not open a query window"
+        );
+        assert!(
+            self_echo("s1", "me", "NOTICE Snue :\u{1}VERSION jIRC\u{1}").is_none(),
+            "a CTCP reply must not open a query window"
+        );
+        // `/me` is conversation and still belongs in the buffer.
+        match self_echo("s1", "me", "PRIVMSG #c :\u{1}ACTION waves\u{1}") {
+            Some(UiEvent::Message { target, text, .. }) => {
+                assert_eq!(target, "#c");
+                assert!(text.contains("ACTION waves"), "got {text}");
+            }
+            other => panic!("expected an action echo, got {other:?}"),
+        }
+        // Ordinary messages are unaffected.
+        assert!(self_echo("s1", "me", "PRIVMSG Snue :hello").is_some());
     }
 
     #[test]
