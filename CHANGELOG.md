@@ -12,6 +12,22 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🧭 26.8.24 — One icon bar instead of text menus
+
+- **The File / View / Scripts / Commands / Tools / Help menus are gone.** The
+  top bar now holds the icon actions — About, Scripts, Address book, Auto-join,
+  Settings, Add connection. Every one of those menus already duplicated an icon,
+  so nothing was lost with them.
+- Those icons previously appeared **twice**, once in the tree sidebar and once
+  in the switchbar. They now exist once, in the top bar, so the sidebar header
+  is just the jIRC label and the switchbar is just tabs.
+- Script-defined menubar menus (`menu menubar { … }`) still work, but the button
+  is **hidden until a script actually defines items** — previously it sat there
+  as a menu that did nothing when clicked — and appears as an `≡` icon in
+  keeping with the rest of the bar.
+
+---
+
 ## 👑 26.8.23 — IRCX uses its own prefixes
 
 - **Fixed: channel owners showed a `~` instead of IRCX's `.`.** On a server that

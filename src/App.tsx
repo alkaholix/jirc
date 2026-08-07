@@ -534,7 +534,7 @@ function MainApp() {
     onOpenAddressBook: () => useAddressBook.getState().show(),
   };
   const dockPanes: DockPane[] = [];
-  if (layout === "tree") dockPanes.push({ id: "treebar", label: "Treebar", content: <Sidebar {...actions} /> });
+  if (layout === "tree") dockPanes.push({ id: "treebar", label: "Treebar", content: <Sidebar /> });
   if (active?.kind === "channel" && !activePoppedOut) {
     dockPanes.push({ id: "nicklist", label: "Nick list", content: <NickList buffer={active} /> });
   }
@@ -544,15 +544,33 @@ function MainApp() {
     <div className={`app layout-${layout}`}>
       {menubarVisible && (
         <nav className="app-menubar" aria-label="Application menu">
-          <button onClick={() => setChooserOpen(true)}>File</button>
-          <button onClick={() => setSettingsOpen(true)}>View</button>
-          <button onClick={() => setScriptOpen(true)}>Scripts</button>
-          <ScriptMenubarMenu buffer={active} server={active ? useStore.getState().servers[active.serverId] : undefined} />
-          <button onClick={() => useAddressBook.getState().show()}>Tools</button>
-          <button onClick={() => setAboutOpen(true)}>Help</button>
+          <button className="icon-btn" onClick={actions.onOpenAbout} title="About jIRC">
+            ?
+          </button>
+          <button className="icon-btn" onClick={actions.onOpenScripts} title="Scripts">
+            ⟨⟩
+          </button>
+          <button className="icon-btn" onClick={actions.onOpenAddressBook} title="Address book">
+            ♙
+          </button>
+          <button className="icon-btn" onClick={actions.onOpenAutoJoin} title="Auto-join channels">
+            #
+          </button>
+          <button className="icon-btn" onClick={actions.onOpenSettings} title="Settings">
+            ⚙
+          </button>
+          <button className="icon-btn" onClick={actions.onAddServer} title="Add a connection">
+            +
+          </button>
+          {/* Script-defined menubar menus (`/menubar`). Renders nothing until a
+              script actually defines items, so the bar stays icons-only. */}
+          <ScriptMenubarMenu
+            buffer={active}
+            server={active ? useStore.getState().servers[active.serverId] : undefined}
+          />
         </nav>
       )}
-      {layout === "switchbar" && <SwitchBar {...actions} />}
+      {layout === "switchbar" && <SwitchBar />}
       <DockLayout panes={dockPanes} center={<main className="main">
         <ScriptToolbar />
         {active ? (

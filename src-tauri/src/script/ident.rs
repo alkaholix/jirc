@@ -7856,13 +7856,22 @@ mod tests {
         // $isutf: 1 = plain ASCII, 2 = contains valid multi-byte UTF-8.
         assert_eq!(e("isutf", &["plain"]), "1");
         assert_eq!(e("isutf", &["caf\u{e9}"]), "2");
-        // $adate is month/day/year where $date is day/month/year.
+        // $adate is month/day/year where $date is day/month/year. Compare the
+        // field *order* rather than the rendered strings: on the twelve days a
+        // year where day and month agree (08/08, 09/09, …) both render
+        // identically, and asserting they differ fails for a reason that has
+        // nothing to do with the code.
         let adate = e("adate", &[]);
+        let date = e("date", &[]);
         assert!(
             adate.len() == 10 && &adate[2..3] == "/" && &adate[5..6] == "/",
             "adate={adate}"
         );
-        assert_ne!(adate, e("date", &[]));
+        let a: Vec<&str> = adate.split('/').collect();
+        let d: Vec<&str> = date.split('/').collect();
+        assert_eq!(a[0], d[1], "$adate leads with the month, $date with the day");
+        assert_eq!(a[1], d[0], "$adate's second field is $date's first");
+        assert_eq!(a[2], d[2], "both end with the year");
         // Recursive maths, with overflow reported as $null rather than a wrong
         // number.
         assert_eq!(e("factorial", &["0"]), "1");

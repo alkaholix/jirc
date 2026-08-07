@@ -55,47 +55,13 @@ function Tab({ buffer, active }: { buffer: Buffer; active: boolean }) {
   );
 }
 
-export function SwitchBar({
-  onAddServer,
-  onOpenSettings,
-  onOpenScripts,
-  onOpenAutoJoin,
-  onOpenAbout,
-  onOpenAddressBook,
-}: {
-  onAddServer: () => void;
-  onOpenSettings: () => void;
-  onOpenScripts: () => void;
-  onOpenAutoJoin: () => void;
-  onOpenAbout: () => void;
-  onOpenAddressBook: () => void;
-}) {
+export function SwitchBar() {
   const buffers = useStore((s) => s.buffers);
   const order = useStore((s) => s.order);
   const active = useStore((s) => s.active);
 
   return (
     <div className="switchbar">
-      <div className="switchbar-actions">
-        <button className="icon-btn" onClick={onOpenAbout} title="About jIRC">
-          ?
-        </button>
-        <button className="icon-btn" onClick={onOpenScripts} title="Scripts">
-          ⟨⟩
-        </button>
-        <button className="icon-btn" onClick={onOpenAddressBook} title="Address book">
-          ♙
-        </button>
-        <button className="icon-btn" onClick={onOpenAutoJoin} title="Auto-join channels">
-          #
-        </button>
-        <button className="icon-btn" onClick={onOpenSettings} title="Settings">
-          ⚙
-        </button>
-        <button className="icon-btn" onClick={onAddServer} title="Add a connection">
-          +
-        </button>
-      </div>
       <div className="switchbar-tabs">
         {order.map((key) => {
           const b = buffers[key];

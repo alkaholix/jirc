@@ -83,21 +83,7 @@ function ServerGroup({ server, buffers }: { server: Server; buffers: Buffer[] })
   );
 }
 
-export function Sidebar({
-  onAddServer,
-  onOpenSettings,
-  onOpenScripts,
-  onOpenAutoJoin,
-  onOpenAbout,
-  onOpenAddressBook,
-}: {
-  onAddServer: () => void;
-  onOpenSettings: () => void;
-  onOpenScripts: () => void;
-  onOpenAutoJoin: () => void;
-  onOpenAbout: () => void;
-  onOpenAddressBook: () => void;
-}) {
+export function Sidebar() {
   const servers = useStore((s) => s.servers);
   const buffers = useStore((s) => s.buffers);
   const order = useStore((s) => s.order);
@@ -115,26 +101,6 @@ export function Sidebar({
     <nav className="sidebar">
       <div className="sidebar-header">
         <span>jIRC</span>
-        <div className="header-actions">
-          <button className="icon-btn" onClick={onOpenAbout} title="About jIRC">
-            ?
-          </button>
-          <button className="icon-btn" onClick={onOpenScripts} title="Scripts">
-            ⟨⟩
-          </button>
-          <button className="icon-btn" onClick={onOpenAddressBook} title="Address book">
-            ♙
-          </button>
-          <button className="icon-btn" onClick={onOpenAutoJoin} title="Auto-join channels">
-            #
-          </button>
-          <button className="icon-btn" onClick={onOpenSettings} title="Settings">
-            ⚙
-          </button>
-          <button className="icon-btn" onClick={onAddServer} title="Add a connection">
-            +
-          </button>
-        </div>
       </div>
       <div className="sidebar-body">
         {Object.values(servers).map((srv) => (

@@ -255,11 +255,6 @@ input:focus {
   padding: 0.3rem 0.4rem;
   overflow: hidden;
 }
-.switchbar-actions {
-  display: flex;
-  gap: 0.25rem;
-  flex: 0 0 auto;
-}
 .switchbar-tabs {
   display: flex;
   gap: 0.3rem;
@@ -325,10 +320,6 @@ input:focus {
   color: var(--accent);
   letter-spacing: 0.05em;
   border-bottom: 1px solid var(--border);
-}
-.header-actions {
-  display: flex;
-  gap: 0.3rem;
 }
 .icon-btn {
   background: transparent;
@@ -2324,25 +2315,26 @@ label.inline {
   color: var(--ok);
   font-size: 0.85rem;
 }
+/* The top bar holds the icon actions (About, Scripts, Address book, Auto-join,
+   Settings, Add connection) — it replaced the old File/View/Scripts/Commands/
+   Tools/Help text menus, every one of which duplicated an icon here. */
 .app-menubar {
   display: flex;
   flex: 0 0 auto;
-  gap: 2px;
-  min-height: 28px;
-  padding: 2px 6px;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 3px 8px;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
 }
 
-.app-menubar button {
-  padding: 3px 9px;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-}
-
-.app-menubar button:hover {
-  background: var(--panel2);
+/* Deliberately targets `.icon-btn` rather than a bare `button`: an element
+   selector here (0,1,1) outranks `.icon-btn` (0,1,0) and would silently strip
+   the borders and padding that give these buttons their shape. */
+.app-menubar .icon-btn {
+  min-width: 30px;
+  text-align: center;
 }
 .tip-overlay {
   position: fixed;
