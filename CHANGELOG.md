@@ -12,6 +12,22 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 👑 26.8.23 — IRCX uses its own prefixes
+
+- **Fixed: channel owners showed a `~` instead of IRCX's `.`.** On a server that
+  sends no `PREFIX` token, jIRC fell back to the standard `~&@%+` table. IRCX's
+  set is `.@+` — owner is `.`, there is no halfop or admin rank, and `%`/`&` are
+  *channel-name* characters there (`%#room`), so listing them as member prefixes
+  was wrong on both counts.
+- IRCX connections now announce their prefix table at connect time rather than
+  waiting for a `005` that older servers never send. Without it the nicklist
+  kept the standard table and sorted owners **below** ordinary users, unranked
+  and uncoloured, even once the backend had them right.
+- A server that does state its own `PREFIX` is still believed exactly as sent,
+  IRCX or not.
+
+---
+
 ## 🛠️ 26.8.22 — Channel modes on pre-ISUPPORT IRCX servers
 
 - **Fixed: channel modes lost their parameters on old IRCX servers**, showing

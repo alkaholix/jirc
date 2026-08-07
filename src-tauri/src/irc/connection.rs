@@ -623,6 +623,8 @@ async fn run_once(
     };
     if profile.ircx {
         state.isupport.apply_ircx_defaults();
+        // Announce the IRCX table now: this server may never send a 005.
+        emit(app, isupport_event(server_id, &state.isupport));
     }
     // The status connection exists before registration lines are sent, so
     // PARSELINE handlers on CAP/NICK/USER already see this connection's cid.
@@ -2037,6 +2039,32 @@ fn member_has_prefix_mode(state: &SessionState, channel: &str, nick: &str, mode:
 }
 
 /// Re-renders a modestring with an explicit sign on every letter (`+i+x`).
+/// Builds the ISUPPORT snapshot the frontend needs for routing and rendering.
+///
+/// Factored out because it is emitted from two places: on `RPL_ISUPPORT`, and
+/// at connect time for IRCX connections — the original Exchange 5.5 Chat
+/// Service predates 005 and never sends one, so without the second the UI would
+/// keep the standard `~&@%+` prefix table and sort IRCX owners (`.`) *below*
+/// ordinary users, unranked and uncoloured.
+fn isupport_event(server_id: &str, isupport: &crate::irc::state::Isupport) -> UiEvent {
+    UiEvent::Isupport {
+        server_id: server_id.to_string(),
+        network: isupport.network.clone(),
+        chan_types: isupport.chan_types.clone(),
+        prefixes: isupport.prefix_chars(),
+        prefix_modes: isupport.prefix_modes.iter().map(|(mode, _)| *mode).collect(),
+        case_mapping: isupport.case_mapping.as_str().to_string(),
+        status_msg: isupport.status_msg.clone(),
+        chan_modes: format!(
+            "{},{},{},{}",
+            isupport.chanmodes_a, isupport.chanmodes_b, isupport.chanmodes_c, isupport.chanmodes_d
+        ),
+        modes_per_line: isupport.modes,
+        monitor: isupport.monitor.is_some(),
+        monitor_limit: isupport.monitor.unwrap_or(0),
+    }
+}
+
 fn render_modestring(modestring: &str) -> String {
     let mut out = String::new();
     let mut adding = true;
@@ -2413,31 +2441,8 @@ fn handle_numeric(ctx: &mut Context, fx: &mut Effects, resp: Response, args: &[S
                 ctx.state.reindex_ial();
                 fx.ial_changed = true;
             }
-            fx.events.push(UiEvent::Isupport {
-                server_id,
-                network: ctx.state.isupport.network.clone(),
-                chan_types: ctx.state.isupport.chan_types.clone(),
-                prefixes: ctx.state.isupport.prefix_chars(),
-                prefix_modes: ctx
-                    .state
-                    .isupport
-                    .prefix_modes
-                    .iter()
-                    .map(|(mode, _)| *mode)
-                    .collect(),
-                case_mapping: ctx.state.isupport.case_mapping.as_str().to_string(),
-                status_msg: ctx.state.isupport.status_msg.clone(),
-                chan_modes: format!(
-                    "{},{},{},{}",
-                    ctx.state.isupport.chanmodes_a,
-                    ctx.state.isupport.chanmodes_b,
-                    ctx.state.isupport.chanmodes_c,
-                    ctx.state.isupport.chanmodes_d
-                ),
-                modes_per_line: ctx.state.isupport.modes,
-                monitor: ctx.state.isupport.monitor.is_some(),
-                monitor_limit: ctx.state.isupport.monitor.unwrap_or(0),
-            });
+            fx.events
+                .push(isupport_event(&server_id, &ctx.state.isupport));
         }
         Response::RPL_WHOISUSER
         | Response::RPL_WHOISSERVER
@@ -4091,6 +4096,28 @@ mod tests {
         advertised.parse_token("CHANTYPES=%#");
         advertised.parse_token("PREFIX=(qov).@+");
         assert_eq!(run(advertised, ":Snue!u@h MODE %#lobby +q me").0, "+q me");
+
+        // IRCX's prefix set is `.@+`, not the standard `~&@%+`: owner is `.`,
+        // there is no halfop or admin rank, and `%`/`&` are channel-name
+        // characters there rather than member prefixes. Getting this wrong put
+        // a `~` on owners and left the UI unable to rank them.
+        let mut ircx = Isupport::default();
+        ircx.apply_ircx_defaults();
+        assert_eq!(ircx.prefix_chars(), ".@+");
+        assert_eq!(ircx.prefix_for_mode('q'), Some('.'));
+        assert_eq!(ircx.mode_for_prefix('.'), Some('q'));
+        // NAMES entries must have that prefix stripped, or the owner's nick
+        // carries a literal '.' and stops matching anything.
+        assert_eq!(
+            ircx.split_prefixes(".Snue"),
+            (".".to_string(), "Snue".to_string())
+        );
+
+        // A server that does state its PREFIX is believed, IRCX or not.
+        let mut stated = Isupport::default();
+        stated.apply_ircx_defaults();
+        stated.parse_token("PREFIX=(qaohv)~&@%+");
+        assert_eq!(stated.prefix_chars(), "~&@%+");
 
         // Non-IRCX is untouched: on Charybdis-family servers `+q` is the quiet
         // list, advertised in CHANMODES group A, and must stay a mask — adding

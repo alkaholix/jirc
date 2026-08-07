@@ -137,6 +137,10 @@ pub struct Isupport {
     /// completely they fill in ISUPPORT, so a few defaults are inferred rather
     /// than assumed absent — see [`Isupport::apply_ircx_defaults`].
     pub ircx: bool,
+    /// Whether the server actually sent a `PREFIX=` token. Distinguishes
+    /// "the server chose this table" from "these are our defaults", so an
+    /// IRCX fallback never overrides something the server stated.
+    pub prefix_advertised: bool,
 }
 
 impl Default for Isupport {
@@ -155,6 +159,7 @@ impl Default for Isupport {
             case_mapping: CaseMapping::default(),
             status_msg: String::new(),
             ircx: false,
+            prefix_advertised: false,
         }
     }
 }
@@ -198,31 +203,41 @@ impl Isupport {
         *prefixes = ranked;
     }
 
-    /// Marks this connection as IRCX and fills in what such servers commonly
-    /// leave out of ISUPPORT.
+    /// IRCX's member prefixes, highest rank first: **owner `.`**, host `@`,
+    /// voice `+`.
     ///
-    /// `q` (owner) is the one that matters: several IRCX servers send
-    /// `MODE %#chan +q <nick>` while advertising a PREFIX that lists only
-    /// `(ov)@+`. Without `q` there, `mode_takes_arg` says the mode carries no
-    /// argument, the nick is dropped, and the user sees a bare
-    /// "Snue sets mode: +q" — with the member's owner status never recorded.
+    /// Deliberately not the standard `~&@%+` set. IRCX uses `.` for owner, not
+    /// `~`, and has no halfop or admin rank — and `%`/`&` are *channel-name*
+    /// characters there (`%#room`, `%&room`), so listing them as member
+    /// prefixes is actively wrong.
+    const IRCX_PREFIX_MODES: [(char, char); 3] = [('q', '.'), ('o', '@'), ('v', '+')];
+
+    /// Marks this connection as IRCX and fills in what such servers leave out
+    /// of ISUPPORT.
     ///
-    /// This is safe precisely because it is gated on IRCX. On Charybdis-family
-    /// servers `+q` is the *quiet list* and is advertised in CHANMODES group A,
-    /// so it already takes an argument and is never touched here.
+    /// The original Exchange 5.5 Chat Service predates `RPL_ISUPPORT` entirely
+    /// and advertises nothing, so every default has to be right up front rather
+    /// than corrected on arrival of a 005 that never comes.
     pub fn apply_ircx_defaults(&mut self) {
         self.ircx = true;
+        if !self.prefix_advertised {
+            self.prefix_modes = Self::IRCX_PREFIX_MODES.to_vec();
+        }
         self.ensure_ircx_owner_prefix();
     }
 
-    /// Adds IRCX's owner mode if the server did not advertise one. Ranked
-    /// first: owner outranks every other prefix.
+    /// Adds IRCX's owner mode when the server advertised a PREFIX that omits
+    /// it — several send `MODE %#chan +q <nick>` while listing only `(ov)@+`.
+    /// Without `q` in the table `mode_takes_arg` reports no argument, the nick
+    /// is dropped, and owner status is never recorded.
+    ///
+    /// Ranked first: owner outranks every other prefix.
     fn ensure_ircx_owner_prefix(&mut self) {
         if !self.ircx || self.prefix_modes.iter().any(|(m, _)| *m == 'q') {
             return;
         }
-        // IRC7 and its relatives use '.' for owner rather than the common '~'.
-        // Only fall back to '~' if the server somehow already uses '.'.
+        // Take the owner prefix the server left out, unless it has somehow
+        // already claimed '.' for another rank.
         let prefix = if self.prefix_modes.iter().any(|(_, p)| *p == '.') {
             '~'
         } else {
@@ -320,6 +335,7 @@ impl Isupport {
                 let pairs: Vec<(char, char)> = modes.chars().zip(prefixes.chars()).collect();
                 if !pairs.is_empty() {
                     self.prefix_modes = pairs;
+                    self.prefix_advertised = true;
                     // The server's PREFIX replaces the defaults wholesale, so an
                     // IRCX connection has to re-assert owner afterwards.
                     self.ensure_ircx_owner_prefix();
