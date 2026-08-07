@@ -12,6 +12,29 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🛠️ 26.8.22 — Channel modes on pre-ISUPPORT IRCX servers
+
+- **Fixed: channel modes lost their parameters on old IRCX servers**, showing
+  as a bare `Snue sets mode: +q` with no nick. The original Exchange 5.5 Chat
+  Service predates `RPL_ISUPPORT` and advertises nothing, so jIRC never learned
+  that `%` starts a channel name — `MODE %#chan +q nick` did not look like a
+  channel mode and took the *user*-mode path, which renders mode letters
+  without their arguments.
+  - This affected **every** parameterised mode (`+o`, `+v`, `+b` too), not just
+    `+q`; it also meant channel member status was not updated from MODE, and a
+    channel mode was being written into your own user-mode string, corrupting
+    `$usermode`.
+  - IRCX connections now recognise the unambiguous `%#`/`%&` channel forms even
+    with no `CHANTYPES` token, matching the fallback channel-target resolution
+    has always had. Gated on IRCX: `%` is a STATUSMSG prefix elsewhere, where
+    `%#chan` addresses the halfops of `#chan` rather than naming a channel.
+- IRCX connections whose server *does* send `PREFIX` but omits `q` now still
+  treat `+q` as taking a nick, and record owner status rather than only
+  displaying it. Non-IRCX networks are untouched — on Charybdis-family servers
+  `+q` is the quiet list and continues to take a mask.
+
+---
+
 ## ⌨️ 26.8.21 — Typing indicators, MONITOR, and an owners list
 
 ### Typing notifications

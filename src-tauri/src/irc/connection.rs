@@ -621,6 +621,9 @@ async fn run_once(
         realname: profile.realname.clone().unwrap_or_default(),
         ..Default::default()
     };
+    if profile.ircx {
+        state.isupport.apply_ircx_defaults();
+    }
     // The status connection exists before registration lines are sent, so
     // PARSELINE handlers on CAP/NICK/USER already see this connection's cid.
     if let Some(engine) = app.try_state::<crate::script::ScriptEngine>() {
@@ -4006,6 +4009,101 @@ mod tests {
             auth: &mut auth,
         };
         process_message(&mut ctx, line, line.parse().unwrap())
+    }
+
+    /// `+q` on an IRCX server displayed as a bare "Snue sets mode: +q", with the
+    /// nick missing and the member's owner status never recorded. Two separate
+    /// causes, both reproduced here.
+    #[test]
+    fn ircx_owner_mode_keeps_its_nick() {
+        use crate::irc::state::Isupport;
+        fn run(isupport: Isupport, line: &str) -> (String, String) {
+            let p = profile();
+            let mut s = SessionState {
+                nick: "me".into(),
+                isupport,
+                ..Default::default()
+            };
+            s.upsert_member("%#lobby", "me", String::new());
+            s.upsert_member("%#lobby", "Snue", "@".into());
+            let mut accum = Default::default();
+            let mut whois = Default::default();
+            let mut auth = AuthState::default();
+            let mut ctx = Context {
+                server_id: "s1",
+                profile: &p,
+                state: &mut s,
+                names_accum: &mut accum,
+                whois_accum: &mut whois,
+                auth: &mut auth,
+            };
+            let fx = process_message(&mut ctx, line, line.parse().unwrap());
+            let modes = fx
+                .events
+                .iter()
+                .find_map(|e| match e {
+                    UiEvent::Mode { modes, .. } => Some(modes.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| "<no mode event>".into());
+            let prefixes = s
+                .channel("%#lobby")
+                .and_then(|c| c.members.get("me").cloned())
+                .unwrap_or_default();
+            (modes, prefixes)
+        }
+
+        // Cause 1: the server advertises a PREFIX without `q`, yet still sends
+        // `+q <nick>`. `mode_takes_arg` said "no argument" and ate the nick.
+        let mut without_q = Isupport::default();
+        without_q.apply_ircx_defaults();
+        without_q.parse_token("CHANTYPES=%#");
+        without_q.parse_token("PREFIX=(ov)@+");
+        let (modes, prefixes) = run(without_q, ":Snue!u@h MODE %#lobby +q me");
+        assert_eq!(modes, "+q me");
+        assert_eq!(prefixes, ".", "owner status must be recorded, not just shown");
+
+        // Cause 2, and the one that hits the original Exchange 5.5 Chat
+        // Service: it predates RPL_ISUPPORT, so it advertises *nothing*. With
+        // no CHANTYPES, `%#lobby` did not look like a channel and the whole
+        // line took the user-mode path — which renders modes with no arguments
+        // at all, and fed a channel mode into `$usermode`.
+        let mut no_isupport = Isupport::default();
+        no_isupport.apply_ircx_defaults();
+        let (modes, _) = run(no_isupport, ":Snue!u@h MODE %#lobby +q me");
+        assert_eq!(modes, "+q me");
+
+        // Every other parameterised mode was equally affected on such a server;
+        // `+q` is simply the one most likely to be noticed.
+        let mut bare = Isupport::default();
+        bare.apply_ircx_defaults();
+        assert_eq!(run(bare, ":Snue!u@h MODE %#lobby +o me").0, "+o me");
+        let mut bare = Isupport::default();
+        bare.apply_ircx_defaults();
+        assert_eq!(
+            run(bare, ":Snue!u@h MODE %#lobby +b *!*@bad.host").0,
+            "+b *!*@bad.host"
+        );
+
+        // A server that does advertise owner is left exactly as it asked.
+        let mut advertised = Isupport::default();
+        advertised.apply_ircx_defaults();
+        advertised.parse_token("CHANTYPES=%#");
+        advertised.parse_token("PREFIX=(qov).@+");
+        assert_eq!(run(advertised, ":Snue!u@h MODE %#lobby +q me").0, "+q me");
+
+        // Non-IRCX is untouched: on Charybdis-family servers `+q` is the quiet
+        // list, advertised in CHANMODES group A, and must stay a mask — adding
+        // an owner prefix there would silently reinterpret quiets as owners.
+        let mut charybdis = Isupport::default();
+        charybdis.parse_token("PREFIX=(ov)@+");
+        charybdis.parse_token("CHANMODES=beIq,k,l,imnst");
+        assert_eq!(charybdis.prefix_for_mode('q'), None);
+        let s = SessionState {
+            isupport: charybdis,
+            ..Default::default()
+        };
+        assert!(s.isupport.mode_takes_arg('q', true), "quiet takes a mask");
     }
 
     /// IRCv3 typing notifications arrive as a client-only tag on TAGMSG, which

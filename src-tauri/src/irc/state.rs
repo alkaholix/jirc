@@ -133,6 +133,10 @@ pub struct Isupport {
     /// Prefixes which may address only channel members of a given status, e.g.
     /// `@#channel` when `STATUSMSG=@+`.
     pub status_msg: String,
+    /// This connection speaks IRCX (from the profile). IRCX servers vary in how
+    /// completely they fill in ISUPPORT, so a few defaults are inferred rather
+    /// than assumed absent — see [`Isupport::apply_ircx_defaults`].
+    pub ircx: bool,
 }
 
 impl Default for Isupport {
@@ -150,6 +154,7 @@ impl Default for Isupport {
             whox: false,
             case_mapping: CaseMapping::default(),
             status_msg: String::new(),
+            ircx: false,
         }
     }
 }
@@ -193,11 +198,53 @@ impl Isupport {
         *prefixes = ranked;
     }
 
-    #[allow(dead_code)]
+    /// Marks this connection as IRCX and fills in what such servers commonly
+    /// leave out of ISUPPORT.
+    ///
+    /// `q` (owner) is the one that matters: several IRCX servers send
+    /// `MODE %#chan +q <nick>` while advertising a PREFIX that lists only
+    /// `(ov)@+`. Without `q` there, `mode_takes_arg` says the mode carries no
+    /// argument, the nick is dropped, and the user sees a bare
+    /// "Snue sets mode: +q" — with the member's owner status never recorded.
+    ///
+    /// This is safe precisely because it is gated on IRCX. On Charybdis-family
+    /// servers `+q` is the *quiet list* and is advertised in CHANMODES group A,
+    /// so it already takes an argument and is never touched here.
+    pub fn apply_ircx_defaults(&mut self) {
+        self.ircx = true;
+        self.ensure_ircx_owner_prefix();
+    }
+
+    /// Adds IRCX's owner mode if the server did not advertise one. Ranked
+    /// first: owner outranks every other prefix.
+    fn ensure_ircx_owner_prefix(&mut self) {
+        if !self.ircx || self.prefix_modes.iter().any(|(m, _)| *m == 'q') {
+            return;
+        }
+        // IRC7 and its relatives use '.' for owner rather than the common '~'.
+        // Only fall back to '~' if the server somehow already uses '.'.
+        let prefix = if self.prefix_modes.iter().any(|(_, p)| *p == '.') {
+            '~'
+        } else {
+            '.'
+        };
+        self.prefix_modes.insert(0, ('q', prefix));
+    }
+
     pub fn is_channel(&self, name: &str) -> bool {
-        // Driven entirely by the server's advertised CHANTYPES. IRCX servers list
-        // their '%#'/'%&' prefixes here (e.g. CHANTYPES=%#), so no client-side
-        // special-casing is needed.
+        // Normally driven entirely by the server's advertised CHANTYPES. The
+        // `%#`/`%&` fallback mirrors `channel_target`, which has always had it:
+        // an IRCX MODE can arrive before (or without) the `CHANTYPES=%#` token,
+        // and treating the channel as a nick routes the whole line down the
+        // user-mode path, which renders modes with no arguments at all.
+        //
+        // Gated on IRCX because `%` is also a STATUSMSG prefix elsewhere, where
+        // `%#chan` addresses the halfops of `#chan` rather than naming one.
+        // This function backs `channel_target`, so a blanket match would
+        // reinterpret those targets on ordinary networks.
+        if self.ircx && (name.starts_with("%#") || name.starts_with("%&")) {
+            return true;
+        }
         name.chars()
             .next()
             .is_some_and(|c| self.chan_types.contains(c))
@@ -273,6 +320,9 @@ impl Isupport {
                 let pairs: Vec<(char, char)> = modes.chars().zip(prefixes.chars()).collect();
                 if !pairs.is_empty() {
                     self.prefix_modes = pairs;
+                    // The server's PREFIX replaces the defaults wholesale, so an
+                    // IRCX connection has to re-assert owner afterwards.
+                    self.ensure_ircx_owner_prefix();
                 }
             }
         } else if let Some(v) = token.strip_prefix("CHANTYPES=") {
