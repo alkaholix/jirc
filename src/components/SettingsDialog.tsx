@@ -60,7 +60,7 @@ const TAB_GROUPS: {
         label: "General",
         keywords:
           "logging logs data folder location spell check autocorrect away reconnect " +
-          "join part quit updates",
+          "join part quit updates typing notifications",
       },
     ],
   },
@@ -599,6 +599,14 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               {toggle("rejoinOnReconnect", "Rejoin channels after a disconnect")}
               {toggle("keepOpenOnKickQuit", "Keep channel windows open on kick / disconnect")}
               {toggle("showAway", "Show when users go away / come back")}
+              <div className="settings-label">Typing notifications</div>
+              {toggle("showTyping", "Show when others are typing")}
+              {toggle("sendTyping", "Let others see when you are typing")}
+              <p className="cheat-tip">
+                Uses the IRCv3 <code>+typing</code> tag. Servers that do not support
+                message tags ignore it, and nothing is sent while you type a
+                <code>/command</code>.
+              </p>
               <div className="settings-label">Application updates</div>
               <div className="row">
                 <button

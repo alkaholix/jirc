@@ -12,6 +12,54 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## ⌨️ 26.8.21 — Typing indicators, MONITOR, and an owners list
+
+### Typing notifications
+- **"Bob is typing…" above the composer**, from the IRCv3 `+typing` tag. Scales
+  to "Bob and Sue", then "4 people are typing…". The row is absent when nobody
+  is typing, so the input never jumps.
+- A paused typist still shows — they are composing, just not that instant. A
+  message from them clears it, as does parting or quitting, and a stale
+  notification expires after 6 seconds so a client that drops mid-compose does
+  not leave the indicator stuck.
+- Nothing is sent while you are typing a `/command`, and outgoing notifications
+  are throttled to one every three seconds.
+- Two toggles in **Settings → General**: show others' typing, and let others
+  see yours.
+
+### Notify list
+- **MONITOR replaces ISON polling** wherever the server advertises it, so the
+  watch list updates the moment someone connects instead of up to 30 seconds
+  later. Servers without MONITOR keep polling; a full monitor list falls back
+  to polling for that server.
+
+### Owners list (jIRC extension — mIRC has no equivalent)
+- **`/aowner`**, `$aowner` and the `isaowner` operator, matching `/aop` in every
+  respect, plus an **Auto-owner** section in Settings → Users. Sets `+q` on
+  join, and outranks auto-op.
+- Inert where the server does not advertise `q` as a member prefix — on
+  Charybdis-family networks `+q` is the quiet list, so auto-owner there would
+  have quieted the person it was meant to promote.
+- **Fixed: the list operators always answered "no".** `isaop`, `isavoice`,
+  `isprotect`, `isnotify` and `isignore` were hardcoded to false, which was
+  right when jIRC kept no such lists — but `/aop` and friends landed later and
+  the operators were never updated, so the list a command wrote and the operator
+  that read it disagreed. They now consult the real list. Membership only:
+  `/aop off` stops the automatic op without emptying the list.
+- `isowner` is unchanged — it remains a live channel-state test, like `isop`.
+
+### Other IRCv3
+- **standard-replies**: `FAIL`, `WARN` and `NOTE` are shown with the command
+  they relate to and their machine-readable code.
+- **STS**: a policy advertised over plaintext reconnects to the server's TLS
+  port immediately. The upgrade is not written back to the saved profile.
+- Also requested: `utf8only` and `extended-monitor`.
+- `draft/multiline` and `draft/pre-away` are deliberately **not** requested —
+  acknowledging a capability promises the server how the client will behave,
+  and jIRC does not yet reassemble multiline batches.
+
+---
+
 ## 🚪 26.8.20 — CTCP no longer opens a window
 
 - Fixed `/ctcp <nick> <request>` opening a query window named after the target.

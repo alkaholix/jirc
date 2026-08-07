@@ -97,6 +97,7 @@ pub fn run() {
             commands::irc_connect,
             commands::irc_disconnect,
             commands::irc_send_raw,
+            commands::irc_send_typing,
             commands::irc_send_message,
             commands::irc_join,
             commands::irc_part,

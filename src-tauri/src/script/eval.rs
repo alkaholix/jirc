@@ -1976,6 +1976,8 @@ impl<'a> Runtime<'a> {
             "aop" => self.cmd_autolist(crate::script::users::AutoKind::Aop, raw_args),
             "avoice" => self.cmd_autolist(crate::script::users::AutoKind::Avoice, raw_args),
             "protect" => self.cmd_autolist(crate::script::users::AutoKind::Protect, raw_args),
+            // jIRC extension — mIRC has no owner list. See `AutoKind::Aowner`.
+            "aowner" => self.cmd_autolist(crate::script::users::AutoKind::Aowner, raw_args),
             "ban" => self.cmd_ban(raw_args, true),
             "unban" => self.cmd_ban(raw_args, false),
             "query" => self.cmd_query(raw_args),
@@ -6171,7 +6173,11 @@ impl<'a> Runtime<'a> {
         // Clone the Arc (cheap) so the leaf resolver can read channel state
         // without borrowing `self` across the evaluation.
         let state = self.state.clone();
-        eval_bool_with(&expanded, &|term| state_op(&state, term))
+        // Reborrowed immutably: the leaf resolver only reads them, and `expand`
+        // above has already finished with `&mut self`.
+        let users: &crate::script::users::UserList = self.users;
+        let vars: &HashMap<String, String> = self.vars;
+        eval_bool_with(&expanded, &|term| state_op(&state, users, vars, term))
     }
 
     /// Lazy `$iif(cond, iftrue, iffalse)`: expand the condition, publish `$v1`/`$v2`,
@@ -6327,6 +6333,7 @@ fn is_binary_word_op(op: &str) -> bool {
             | "isban"
             | "isquiet"
             | "isaop"
+            | "isaowner"
             | "isavoice"
             | "isignore"
             | "isprotect"
@@ -6404,6 +6411,7 @@ fn is_supported_positive_operator(op: &str) -> bool {
             | "isban"
             | "isquiet"
             | "isaop"
+            | "isaowner"
             | "isavoice"
             | "isignore"
             | "isprotect"
@@ -6931,7 +6939,13 @@ fn eval_term_with(s: &str, leaf: &dyn Fn(&str) -> Option<bool>) -> bool {
 /// for any other term so the caller falls back to the pure comparison logic.
 /// Prefix chars assume the standard PREFIX set (~ owner, & admin, @ op,
 /// % halfop, + voice).
-fn state_op(state: &crate::irc::state::StateSnapshot, term: &str) -> Option<bool> {
+fn state_op(
+    state: &crate::irc::state::StateSnapshot,
+    users: &crate::script::users::UserList,
+    vars: &HashMap<String, String>,
+    term: &str,
+) -> Option<bool> {
+    use crate::script::users::AutoKind;
     let toks: Vec<&str> = term.split_whitespace().collect();
     let (a, raw_op, target_from) = if toks.get(1).is_some_and(|op| is_state_word_op(op)) {
         (toks[0], toks[1], 2)
@@ -6999,15 +7013,46 @@ fn state_op(state: &crate::irc::state::StateSnapshot, term: &str) -> Option<bool
         }),
         // `#chan ischan` -> are we on that channel?
         "ischan" => Some(find_channel(a).is_some()),
-        // jIRC keeps no auto-op/auto-voice/ignore/protect/notify lists and the
-        // servers it targets expose no quiet list, so these membership tests
-        // resolve against an empty list. They must still be *recognised*:
+        // Local-list membership. These read the list the matching command
+        // writes, so `/aop <mask>` then `if (%addr isaop)` agrees. The on/off
+        // flag is deliberately not consulted — it gates the automatic
+        // behaviour, not whether someone is on the list.
+        "isaop" => Some(users.auto_contains(AutoKind::Aop, a)),
+        "isavoice" => Some(users.auto_contains(AutoKind::Avoice, a)),
+        "isprotect" => Some(users.auto_contains(AutoKind::Protect, a)),
+        "isaowner" => Some(users.auto_contains(AutoKind::Aowner, a)),
+        // The ignore and notify lists live client-side; the engine receives
+        // them as the same `\x1f`-joined vars `$ignore` and `$notify` read.
+        "isignore" => Some(client_list_contains(vars, CLIENT_IGNORE_LIST_KEY, a)),
+        "isnotify" => Some(client_list_contains(vars, CLIENT_NOTIFY_LIST_KEY, a)),
+        // No quiet list is tracked (`$iql` is empty for the same reason), so
+        // this one still resolves against nothing. It must stay *recognised*:
         // an unknown operator falls through to a truthiness test, which would
-        // make `if (%addr isaop)` silently true and open access up.
-        "isaop" | "isavoice" | "isignore" | "isprotect" | "isnotify" | "isquiet" => Some(false),
+        // make `if (%addr isquiet)` silently true and open access up.
+        "isquiet" => Some(false),
         _ => None,
     };
     result.map(|value| if negated { !value } else { value })
+}
+
+/// Membership test against one of the `\x1f`-joined client lists (ignore,
+/// notify). Entries may be wildcard masks, so match both directions the way the
+/// auto-lists do — `*!*@host` in the list must match a bare nick's address and
+/// vice versa.
+fn client_list_contains(vars: &HashMap<String, String>, key: &str, value: &str) -> bool {
+    let Some(raw) = vars.get(key) else {
+        return false;
+    };
+    if value.is_empty() {
+        return false;
+    }
+    raw.split('\u{1f}')
+        .filter(|e| !e.is_empty())
+        .any(|entry| {
+            entry.eq_ignore_ascii_case(value)
+                || wildcard_match(&entry.to_ascii_lowercase(), &value.to_ascii_lowercase())
+                || wildcard_match(&value.to_ascii_lowercase(), &entry.to_ascii_lowercase())
+        })
 }
 
 fn fold_irc_mask(isupport: &crate::irc::state::Isupport, value: &str) -> String {
@@ -7032,6 +7077,7 @@ fn is_state_word_op(op: &str) -> bool {
             | "isban"
             | "isquiet"
             | "isaop"
+            | "isaowner"
             | "isavoice"
             | "isignore"
             | "isprotect"
@@ -7065,11 +7111,12 @@ fn unary_op(a: &str, op: &str) -> bool {
     let (negated, op) = split_operator_negation(&lower);
     let result = match op {
         "isnum" => is_mirc_number(a),
-        // Lists jIRC keeps no equivalent of — always an empty list. Answered
-        // here as well as in `state_op` so the result never depends on a state
-        // resolver being wired up: an unrecognised operator would otherwise
-        // fall through to a truthiness test and read as true.
-        "isaop" | "isavoice" | "isignore" | "isprotect" | "isnotify" | "isquiet" => false,
+        // The real lists live behind `state_op`, which needs a state resolver.
+        // Without one the honest answer is 'not on it' — but the arm must
+        // still exist: an unrecognised operator falls through to a truthiness
+        // test and would read as *true*, granting rather than denying access.
+        "isaop" | "isaowner" | "isavoice" | "isignore" | "isprotect" | "isnotify"
+        | "isquiet" => false,
         "isletter" | "isalpha" => !a.is_empty() && a.chars().all(|c| c.is_alphabetic()),
         "isalnum" => !a.is_empty() && a.chars().all(|c| c.is_alphanumeric()),
         // mIRC only asks that no character of the opposite case is present —
@@ -7096,8 +7143,9 @@ fn compare(a: &str, op: &str, b: &str) -> bool {
         "!=" => !a.eq_ignore_ascii_case(b),
         "isin" => b.to_lowercase().contains(&a.to_lowercase()),
         "isincs" => b.contains(a),
-        // See `unary_op`: lists jIRC does not keep, tested against empty.
-        "isaop" | "isavoice" | "isignore" | "isprotect" | "isnotify" | "isquiet" => false,
+        // See `unary_op`: resolved for real in `state_op`, denied here.
+        "isaop" | "isaowner" | "isavoice" | "isignore" | "isprotect" | "isnotify"
+        | "isquiet" => false,
         "iswm" => wildcard_match(a, b),
         "iswmcs" => wildcard_match_cs(a, b),
         // `v1 isnum n1-n2` — numeric and within the inclusive range.
@@ -7179,6 +7227,7 @@ fn is_binary_test_op(op: &str) -> bool {
             | "<="
             | ">="
             | "isaop"
+            | "isaowner"
             | "isavoice"
             | "isignore"
             | "isprotect"
@@ -7682,9 +7731,12 @@ mod tests {
         assert!(eval_bool("123 isupper"));
         assert!(eval_bool("abc123 islower"));
         assert!(!eval_bool("Abc islower"));
-        // Lists jIRC does not keep must read as empty, never as truthy text:
-        // an unrecognised operator would make these silently true.
+        // With nothing on the lists these read false — and must do so as a real
+        // empty-list answer, not as truthy text: an unrecognised operator would
+        // make them silently true. `populated_list_operators` covers the other
+        // half, that a real entry now reads true.
         assert!(!eval_bool("*!*@host isaop"));
+        assert!(!eval_bool("*!*@host isaowner"));
         assert!(!eval_bool("*!*@host isaop #chan"));
         assert!(!eval_bool("*!*@host isavoice"));
         assert!(!eval_bool("*!*@host isignore"));

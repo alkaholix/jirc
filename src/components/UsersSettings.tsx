@@ -6,9 +6,10 @@ const EMPTY: UserListSnapshot = {
   aop: { enabled: false, entries: [] },
   avoice: { enabled: false, entries: [] },
   protect: { enabled: false, entries: [] },
+  aowner: { enabled: false, entries: [] },
 };
 
-/** The Settings "Users" tab: the access list + auto-op/voice/protect lists. */
+/** The Settings "Users" tab: the access list + auto-owner/op/voice/protect lists. */
 export function UsersSettings() {
   const [snap, setSnap] = useState<UserListSnapshot>(EMPTY);
   const refresh = () =>
@@ -93,6 +94,12 @@ export function UsersSettings() {
         <button onClick={addUser}>Add</button>
       </div>
 
+      <AutoSection
+        title="Auto-owner"
+        kind="aowner"
+        list={snap.aowner ?? EMPTY.aowner!}
+        onChange={refresh}
+      />
       <AutoSection title="Auto-op" kind="aop" list={snap.aop} onChange={refresh} />
       <AutoSection title="Auto-voice" kind="avoice" list={snap.avoice} onChange={refresh} />
       <AutoSection title="Protect" kind="protect" list={snap.protect} onChange={refresh} />

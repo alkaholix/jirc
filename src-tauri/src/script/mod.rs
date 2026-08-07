@@ -1345,7 +1345,7 @@ impl ScriptEngine {
                 .find(|(n, _)| ctx.state.isupport.names_equal(n, &event.nick))
                 .map(|(_, a)| a.as_str())
                 .unwrap_or("");
-            let am_op = ctx
+            let my_prefixes = ctx
                 .state
                 .channels
                 .iter()
@@ -1362,10 +1362,37 @@ impl ScriptEngine {
                         .iter()
                         .find(|(n, _)| ctx.state.isupport.names_equal(n, ctx.my_nick))
                 })
-                .map(|(_, p)| p.contains('@') || p.contains('&') || p.contains('~'))
-                .unwrap_or(false);
-            if am_op {
-                use users::AutoKind;
+                .map(|(_, p)| p.clone())
+                .unwrap_or_default();
+            let am_op = my_prefixes.contains('@')
+                || my_prefixes.contains('&')
+                || my_prefixes.contains('~');
+            // Owner is resolved through ISUPPORT rather than assumed: `~` is the
+            // common prefix but IRC7 uses `.`, and on Charybdis-family servers
+            // `q` is the quiet *list* and not a member prefix at all — there
+            // `prefix_for_mode` returns None and the owner list stays inert
+            // rather than sending a `+q` that would set a quiet.
+            let am_owner = ctx
+                .state
+                .isupport
+                .prefix_for_mode('q')
+                .is_some_and(|p| my_prefixes.contains(p));
+            use users::AutoKind;
+            // Owner outranks op, which outranks voice: one mode per join.
+            if am_owner
+                && users.auto_should_apply(
+                    AutoKind::Aowner,
+                    addr,
+                    &event.nick,
+                    &event.chan,
+                    ctx.network,
+                )
+            {
+                actions.push(Action::Send(format!(
+                    "MODE {} +q {}",
+                    event.chan, event.nick
+                )));
+            } else if am_op {
                 if users.auto_should_apply(
                     AutoKind::Aop,
                     addr,
@@ -3623,6 +3650,7 @@ fn auto_kind(s: &str) -> Option<users::AutoKind> {
         "aop" => Some(users::AutoKind::Aop),
         "avoice" => Some(users::AutoKind::Avoice),
         "protect" => Some(users::AutoKind::Protect),
+        "aowner" => Some(users::AutoKind::Aowner),
         _ => None,
     }
 }
@@ -8331,6 +8359,81 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The membership operators returned a hardcoded `false` for as long as
+    /// jIRC kept no such lists. The lists arrived; the operators did not follow,
+    /// so `/aop <mask>` then `if (%a isaop)` disagreed with itself.
+    #[test]
+    fn populated_list_operators_read_true() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias t {\n\
+               aop *!*@friend.com\n\
+               avoice *!*@regular.com\n\
+               protect *!*@vip.com\n\
+               aowner *!*@boss.com\n\
+               /msg #c $iif(bob!u@friend.com isaop,Y,N) \
+                       $iif(bob!u@regular.com isavoice,Y,N) \
+                       $iif(bob!u@vip.com isprotect,Y,N) \
+                       $iif(bob!u@boss.com isaowner,Y,N) \
+                       $iif(eve!u@evil.com isaop,Y,N)\n\
+             }",
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :Y Y Y Y N".into())]
+        );
+    }
+
+    /// `/aop off` stops the *automatic* op; it does not remove anyone from the
+    /// list, so the operator must keep saying yes.
+    #[test]
+    fn disabling_an_autolist_does_not_empty_it() {
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias t { aop *!*@friend.com | aop off \
+             | /msg #c $iif(bob!u@friend.com isaop,Y,N) $aop }",
+        );
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :Y $false".into())]
+        );
+    }
+
+    /// `isowner` is a live channel-state test and predates the list operators.
+    /// It must not get swept into the local-list group by a future edit.
+    #[test]
+    fn isowner_still_tests_channel_state_not_the_owner_list() {
+        use crate::irc::state::{ChannelView, StateSnapshot};
+        let snap = StateSnapshot {
+            channels: vec![ChannelView {
+                name: "#c".into(),
+                nicks: vec!["boss".into(), "bob".into()],
+                members: vec![("boss".into(), "~".into()), ("bob".into(), "".into())],
+                bans: vec![],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(snap),
+        };
+        let engine = ScriptEngine::new();
+        // bob is on the owner *list* but holds no prefix; boss is the reverse.
+        engine.load(
+            "alias t { aowner bob \
+             | /msg #c $iif(bob isowner #c,Y,N) $iif(boss isowner #c,Y,N) \
+                       $iif(bob isaowner,Y,N) $iif(boss isaowner,Y,N) }",
+        );
+        assert_eq!(
+            engine.run_alias(&rctx, "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :N Y Y N".into())]
+        );
+    }
+
     #[test]
     fn autolist_commands_and_idents() {
         let engine = ScriptEngine::new();
@@ -8397,6 +8500,109 @@ mod tests {
         );
         // eve doesn't match -> nothing queued.
         assert_eq!(engine.dispatch_event(&rctx, "JOIN", join("eve")), vec![]);
+    }
+
+    #[test]
+    fn auto_owner_on_join() {
+        use crate::irc::state::{ChannelView, Isupport, StateSnapshot};
+        let snapshot = |isupport: Isupport, my_prefix: &str| StateSnapshot {
+            ial: vec![
+                ("boss".into(), "boss!u@boss.com".into()),
+                ("bob".into(), "bob!u@trusted.com".into()),
+            ],
+            channels: vec![ChannelView {
+                name: "#c".into(),
+                nicks: vec!["me".into(), "boss".into()],
+                members: vec![("me".into(), my_prefix.into())],
+                bans: vec![],
+                ..Default::default()
+            }],
+            isupport,
+            ..Default::default()
+        };
+        let run = |snap: StateSnapshot| {
+            let rctx = RunCtx {
+                my_nick: "me",
+                network: "Net",
+                server: "s",
+                data_dir: std::env::temp_dir(),
+                state: std::sync::Arc::new(snap),
+            };
+            let engine = ScriptEngine::new();
+            engine.load(
+                "on *:TEXT:!setup:#:{ aowner on | aowner *!*@boss.com \
+                 | aop on | aop *!*@trusted.com }",
+            );
+            engine.dispatch_event(
+                &rctx,
+                "TEXT",
+                EventVars {
+                    nick: "x".into(),
+                    chan: "#c".into(),
+                    target: "#c".into(),
+                    text: "!setup".into(),
+                    params: vec!["!setup".into()],
+                    ..Default::default()
+                },
+            );
+            let join = |n: &str| EventVars {
+                nick: n.into(),
+                chan: "#c".into(),
+                target: "#c".into(),
+                ..Default::default()
+            };
+            (
+                engine.dispatch_event(&rctx, "JOIN", join("boss")),
+                engine.dispatch_event(&rctx, "JOIN", join("bob")),
+            )
+        };
+
+        // I hold owner (`~`), so boss gets +q. bob still only gets +o — owner
+        // outranks op but does not replace it.
+        let (owner, op) = run(snapshot(Isupport::default(), "~"));
+        assert_eq!(owner, vec![Action::Send("MODE #c +q boss".into())]);
+        assert_eq!(op, vec![Action::Send("MODE #c +o bob".into())]);
+
+        // Plain op cannot grant owner, so nothing is sent for boss.
+        let (owner, op) = run(snapshot(Isupport::default(), "@"));
+        assert_eq!(owner, vec![]);
+        assert_eq!(op, vec![Action::Send("MODE #c +o bob".into())]);
+
+        // Charybdis-family: `q` is the quiet *list*, not a member prefix. The
+        // owner list must stay inert rather than quieting the person it was
+        // meant to promote.
+        let quiet_q = Isupport {
+            prefix_modes: vec![('o', '@'), ('v', '+')],
+            ..Default::default()
+        };
+        let (owner, op) = run(snapshot(quiet_q, "@"));
+        assert_eq!(owner, vec![]);
+        assert_eq!(op, vec![Action::Send("MODE #c +o bob".into())]);
+    }
+
+    /// Adding a field to `UserList` without `#[serde(default)]` would make every
+    /// pre-existing `users.json` fail to parse — and `load_from` swallows that
+    /// into `Default`, silently discarding the user's whole saved list.
+    #[test]
+    fn user_list_loads_a_file_written_before_the_owner_list_existed() {
+        use crate::script::users::{AutoKind, UserList};
+        let dir = std::env::temp_dir().join(format!("jirc-users-legacy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("users.json"),
+            r#"{"entries":[{"levels":["10"],"address":"*!*@old.com","info":"kept"}],
+                "aop":{"enabled":true,"entries":[{"address":"*!*@friend.com",
+                       "channels":[],"network":""}]},
+                "avoice":{"enabled":false,"entries":[]},
+                "protect":{"enabled":false,"entries":[]}}"#,
+        )
+        .unwrap();
+        let loaded = UserList::load_from(&dir);
+        assert_eq!(loaded.levels_for("nick!u@old.com"), "10");
+        assert!(loaded.auto_enabled(AutoKind::Aop));
+        assert!(loaded.auto_contains(AutoKind::Aop, "bob!u@friend.com"));
+        assert!(!loaded.auto_contains(AutoKind::Aowner, "bob!u@friend.com"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

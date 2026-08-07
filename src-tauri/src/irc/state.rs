@@ -121,6 +121,10 @@ pub struct Isupport {
     pub chanmodes_d: String,
     /// Max mode params per `/mode` line (ISUPPORT `MODES`), for `$modespl`.
     pub modes: u32,
+    /// `Some(limit)` when the server advertises MONITOR; 0 = no published
+    /// limit. `None` means no MONITOR, so the notify list falls back to ISON
+    /// polling.
+    pub monitor: Option<u32>,
     /// Server advertises the valueless WHOX token (extended WHO replies).
     pub whox: bool,
     /// Nick/channel comparison rules. RFC1459 is the protocol default when the
@@ -142,6 +146,7 @@ impl Default for Isupport {
             chanmodes_c: "l".to_string(),
             chanmodes_d: "imnpstrS".to_string(),
             modes: 3,
+            monitor: None,
             whox: false,
             case_mapping: CaseMapping::default(),
             status_msg: String::new(),
@@ -298,6 +303,18 @@ impl Isupport {
             if let Ok(n) = v.parse::<u32>() {
                 self.modes = n;
             }
+        } else if token == "MONITOR" || token.starts_with("MONITOR=") {
+            // `MONITOR` may be advertised bare (no stated limit) or as
+            // `MONITOR=<n>`. Either way the command is available; a bare token
+            // or an unparseable value means "no published limit".
+            self.monitor = Some(
+                token
+                    .strip_prefix("MONITOR=")
+                    .and_then(|v| v.parse::<u32>().ok())
+                    .unwrap_or(0),
+            );
+        } else if token == "-MONITOR" {
+            self.monitor = None;
         }
     }
 }
@@ -413,6 +430,10 @@ pub struct SessionState {
     pub realname: String,
     /// Our own user modes (e.g. "iwx"), tracked from MODE messages on our nick.
     pub user_mode: String,
+    /// IRCv3 capabilities the server acknowledged this session, lowercase.
+    /// Mirrored from `AuthState` so commands and scripts can see them
+    /// without reaching into the connection task.
+    pub caps: Vec<String>,
     /// Whether we are marked away (from RPL_UNAWAY/RPL_NOWAWAY).
     pub away: bool,
     /// Unix time we connected (RPL_WELCOME) / went away, for $online / $awaytime.
@@ -931,6 +952,8 @@ pub struct StateSnapshot {
     pub realname: String,
     /// Our own user modes (e.g. "iwx") for `$usermode`.
     pub user_mode: String,
+    /// IRCv3 capabilities acknowledged this session, lowercase.
+    pub caps: Vec<String>,
     /// Whether we are marked away, for `$away`.
     pub away: bool,
     /// Unix times for `$online` (connect) and `$awaytime`.
@@ -981,6 +1004,7 @@ impl Default for StateSnapshot {
             ial_enabled: true,
             ial_info: Vec::new(),
             isupport: Isupport::default(),
+            caps: Vec::new(),
             server_port: 0,
             tls: false,
             server_ip: String::new(),
@@ -1072,6 +1096,7 @@ impl SessionState {
             main_nick: self.main_nick.clone(),
             realname: self.realname.clone(),
             user_mode: self.user_mode.clone(),
+            caps: self.caps.clone(),
             away: self.away,
             connect_time: self.connect_time,
             away_time: self.away_time,

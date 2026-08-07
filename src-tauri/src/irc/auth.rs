@@ -54,7 +54,63 @@ impl AuthState {
     pub fn cap_enabled(&self, name: &str) -> bool {
         self.acknowledged_caps.contains(&name.to_ascii_lowercase())
     }
+
+    /// Every acknowledged capability, sorted for a stable snapshot.
+    pub fn enabled_caps(&self) -> Vec<String> {
+        let mut caps: Vec<String> = self.acknowledged_caps.iter().cloned().collect();
+        caps.sort();
+        caps
+    }
+
+    /// The value the server attached to an offered capability, if any — e.g.
+    /// `sts=port=6697,duration=2592000`.
+    pub fn cap_value(&self, name: &str) -> Option<&str> {
+        self.offered_caps
+            .get(&name.to_ascii_lowercase())
+            .and_then(|v| v.as_deref())
+    }
+
+    /// The advertised STS policy, if the server offered one.
+    pub fn sts_policy(&self) -> Option<StsPolicy> {
+        StsPolicy::parse(self.cap_value("sts")?)
+    }
 }
+
+/// An IRCv3 STS (Strict Transport Security) policy from the `sts` cap value.
+///
+/// Two forms, and which one applies depends on how we are *currently*
+/// connected: over plaintext the server sends `port=`, telling us where to
+/// reconnect with TLS; over TLS it sends `duration=`, telling us how long to
+/// refuse plaintext for this host.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct StsPolicy {
+    /// TLS port to upgrade to (plaintext connections only).
+    pub port: Option<u16>,
+    /// Seconds this host stays TLS-only (TLS connections only).
+    pub duration: Option<u64>,
+    /// The server asks to be added to a preload list. Recorded, not acted on.
+    pub preload: bool,
+}
+
+impl StsPolicy {
+    fn parse(value: &str) -> Option<StsPolicy> {
+        let mut policy = StsPolicy::default();
+        for token in value.split(',') {
+            let (key, val) = token.split_once('=').unwrap_or((token, ""));
+            match key.trim().to_ascii_lowercase().as_str() {
+                "port" => policy.port = val.trim().parse().ok(),
+                "duration" => policy.duration = val.trim().parse().ok(),
+                "preload" => policy.preload = true,
+                _ => {}
+            }
+        }
+        if policy.port.is_none() && policy.duration.is_none() {
+            return None;
+        }
+        Some(policy)
+    }
+}
+
 
 /// Whether SASL should be attempted for this profile.
 pub fn sasl_wanted(p: &ServerProfile) -> bool {
@@ -72,6 +128,20 @@ fn end_cap(state: &mut AuthState) -> Vec<String> {
 }
 
 /// Capabilities jIRC understands and will request if the server offers them.
+///
+/// Not listed, deliberately:
+/// - `sts` is never REQ'd — the policy lives in the `CAP LS` *value* and is
+///   acted on there ([`sts_policy`]); requesting it is a protocol error.
+/// - `cap-notify` is implied by `CAP LS 302`, which is what we send. `CAP NEW`
+///   and `CAP DEL` are handled below regardless.
+/// - typing notifications are the client-only `+typing` tag, carried by
+///   `message-tags`; there is no separate capability to ask for.
+/// - `draft/multiline` is **not** requested: acknowledging it tells the
+///   server we will reassemble multiline batches, and jIRC does not yet do
+///   that. Claiming it and then rendering each line separately is worse
+///   than leaving it off, which degrades to ordinary one-line messages.
+/// - `draft/pre-away` is not requested either: jIRC never sends AWAY before
+///   registration completes, so it would buy nothing.
 const SUPPORTED_CAPS: &[&str] = &[
     "away-notify",
     "server-time",
@@ -87,6 +157,9 @@ const SUPPORTED_CAPS: &[&str] = &[
     "setname",
     "batch",
     "labeled-response",
+    "standard-replies",
+    "utf8only",
+    "extended-monitor",
     "draft/chathistory",
 ];
 
@@ -558,6 +631,85 @@ mod tests {
             vec![format!("AUTHENTICATE {}", p.sasl_mechanism.as_str())]
         );
         state
+    }
+
+    /// `sts` must never be REQ'd — the policy is carried in the LS value and
+    /// requesting it is a protocol error. `cap-notify` likewise: `CAP LS 302`
+    /// implies it.
+    #[test]
+    fn sts_is_read_from_the_ls_value_and_never_requested() {
+        let p = profile(false, None, SaslMechanism::Plain);
+        let mut state = AuthState::default();
+        let req = on_cap(
+            &p,
+            &mut state,
+            &CapSubCommand::LS,
+            "sts=port=6697,duration=2592000 cap-notify server-time",
+            false,
+        );
+        assert_eq!(req, vec!["CAP REQ :server-time"]);
+
+        let policy = state.sts_policy().expect("policy parsed");
+        assert_eq!(policy.port, Some(6697));
+        assert_eq!(policy.duration, Some(2592000));
+        assert!(!policy.preload);
+    }
+
+    #[test]
+    fn sts_policy_forms_parse() {
+        let p = profile(false, None, SaslMechanism::Plain);
+        let mut state = AuthState::default();
+        // Over TLS a server sends only a duration; over plaintext only a port.
+        on_cap(
+            &p,
+            &mut state,
+            &CapSubCommand::LS,
+            "sts=duration=86400,preload",
+            false,
+        );
+        let policy = state.sts_policy().expect("policy parsed");
+        assert_eq!(policy.port, None);
+        assert_eq!(policy.duration, Some(86400));
+        assert!(policy.preload);
+
+        // A malformed policy is no policy, not a policy of zeroes — a `port: 0`
+        // would send the reconnect to a nonsense port.
+        let mut junk = AuthState::default();
+        on_cap(&p, &mut junk, &CapSubCommand::LS, "sts=nonsense", false);
+        assert_eq!(junk.sts_policy(), None);
+    }
+
+    /// Capabilities jIRC does not implement must not be requested: an ACK is a
+    /// promise to the server about how we will behave.
+    #[test]
+    fn unimplemented_capabilities_are_not_requested() {
+        let p = profile(false, None, SaslMechanism::Plain);
+        let mut state = AuthState::default();
+        let req = on_cap(
+            &p,
+            &mut state,
+            &CapSubCommand::LS,
+            "draft/multiline=max-bytes=8192 draft/pre-away batch",
+            false,
+        );
+        assert_eq!(req, vec!["CAP REQ :batch"]);
+    }
+
+    #[test]
+    fn enabled_caps_reflect_ack_and_del() {
+        let p = profile(false, None, SaslMechanism::Plain);
+        let mut state = AuthState::default();
+        on_cap(&p, &mut state, &CapSubCommand::LS, "server-time batch", false);
+        on_cap(
+            &p,
+            &mut state,
+            &CapSubCommand::ACK,
+            "server-time batch",
+            false,
+        );
+        assert_eq!(state.enabled_caps(), vec!["batch", "server-time"]);
+        on_cap(&p, &mut state, &CapSubCommand::DEL, "batch", false);
+        assert_eq!(state.enabled_caps(), vec!["server-time"]);
     }
 
     #[test]

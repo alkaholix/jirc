@@ -1135,6 +1135,48 @@ img.nick-icon {
   border-top: 1px solid var(--border);
   background: var(--bg2);
 }
+/* IRCv3 typing notification. Only present in the DOM while someone is
+   actually typing, so it must not reserve height — the composer would jump
+   every time a notification arrives or expires. */
+.typing-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.8rem 0;
+  font-size: 0.72rem;
+  font-style: italic;
+  color: var(--muted);
+  user-select: none;
+}
+.typing-dots {
+  display: inline-flex;
+  gap: 2px;
+}
+.typing-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.35;
+  animation: typing-bounce 1.2s infinite ease-in-out;
+}
+.typing-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.typing-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes typing-bounce {
+  0%, 60%, 100% { opacity: 0.35; transform: translateY(0); }
+  30% { opacity: 0.9; transform: translateY(-2px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .typing-dots i {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
 .composer-input-row {
   display: flex;
   padding: 0.45rem 0.8rem 0.55rem;

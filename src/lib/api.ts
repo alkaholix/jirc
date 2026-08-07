@@ -61,7 +61,7 @@ export interface AddressEntry {
 }
 
 /** Which auto-list an entry belongs to. */
-export type AutoKind = "aop" | "avoice" | "protect";
+export type AutoKind = "aop" | "avoice" | "protect" | "aowner";
 
 /** A user-list entry: access levels for a nick/address. */
 export interface UserEntry {
@@ -70,7 +70,7 @@ export interface UserEntry {
   info: string;
 }
 
-/** An auto-op/voice/protect entry (channels empty = all; network empty = all). */
+/** An auto-owner/op/voice/protect entry (channels empty = all; network empty = all). */
 export interface AutoEntry {
   address: string;
   channels: string[];
@@ -89,6 +89,8 @@ export interface UserListSnapshot {
   aop: AutoList;
   avoice: AutoList;
   protect: AutoList;
+  /** jIRC extension — mIRC has no owner list. Absent in older snapshots. */
+  aowner?: AutoList;
 }
 
 /** A channel's generated IRCX owner/host keys. */
@@ -152,6 +154,9 @@ export const api = {
   disconnect: (serverId: string, quitMessage?: string) =>
     invoke("irc_disconnect", { serverId, quitMessage }),
   sendRaw: (serverId: string, line: string) => invoke("irc_send_raw", { serverId, line }),
+  /** IRCv3 `+typing`. Dropped by the backend unless `message-tags` was negotiated. */
+  sendTyping: (serverId: string, target: string, state: "active" | "paused" | "done") =>
+    invoke("irc_send_typing", { serverId, target, state }),
   configureFlood: (enabled: boolean, messages: number, seconds: number) =>
     invoke("irc_configure_flood", { enabled, messages, seconds }),
   sendMessage: (serverId: string, target: string, text: string) =>
@@ -479,6 +484,23 @@ export type IrcEvent =
       statusMsg: string;
       chanModes: string;
       modesPerLine: number;
+      monitor: boolean;
+      monitorLimit: number;
+    }
+  | {
+      type: "typing";
+      serverId: string;
+      target: string;
+      nick: string;
+      state: "active" | "paused" | "done";
+    }
+  | {
+      type: "standardReply";
+      serverId: string;
+      severity: "fail" | "warn" | "note";
+      command: string;
+      code: string;
+      text: string;
     }
   | { type: "whois"; serverId: string; nick: string; lines: string[] }
   | { type: "listEntry"; serverId: string; channel: string; users: number; topic: string }

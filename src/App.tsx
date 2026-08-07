@@ -30,6 +30,7 @@ import { routeDialogEvent } from "./state/dialogs";
 import { routeNickIconEvent } from "./state/nickIcons";
 import { routeAwayEvent } from "./state/away";
 import { pollNotify, routeNotifyEvent, useNotify } from "./state/notify";
+import { routeTypingEvent } from "./state/typing";
 import { routeUrlEvent } from "./state/urlGrabber";
 import { routeModeEvent } from "./state/channelModes";
 import { controlAudio } from "./lib/sound";
@@ -207,6 +208,7 @@ function MainApp() {
       routeNickIconEvent(e.payload);
       routeAwayEvent(e.payload);
       routeNotifyEvent(e.payload);
+      routeTypingEvent(e.payload);
       routeUrlEvent(e.payload);
       routeModeEvent(e.payload);
       if (e.payload.type === "audio") {
@@ -363,7 +365,9 @@ function MainApp() {
     };
   }, []);
 
-  // Poll the notify/watch list (ISON) every 30s.
+  // Keep the notify/watch list current. Servers advertising MONITOR push
+  // their updates, so this only registers the list once for them; the rest
+  // are polled with ISON on the same 30s tick.
   useEffect(() => {
     const id = setInterval(pollNotify, 30000);
     pollNotify();

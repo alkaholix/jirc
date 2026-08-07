@@ -167,6 +167,11 @@ pub enum UiEvent {
         chan_modes: String,
         /// Maximum mode changes accepted in one MODE command.
         modes_per_line: u32,
+        /// Server supports MONITOR, so the notify list can be pushed rather
+        /// than polled with ISON.
+        monitor: bool,
+        /// Published MONITOR target limit; 0 when the server states none.
+        monitor_limit: u32,
     },
     /// A formatted WHOIS reply block.
     Whois {
@@ -227,6 +232,26 @@ pub enum UiEvent {
         packages: Option<String>,
         max_message_length: Option<String>,
         options: Option<String>,
+    },
+    /// IRCv3 typing notification: the `+typing` client tag on a TAGMSG.
+    /// `state` is `active`, `paused` or `done`.
+    Typing {
+        server_id: String,
+        /// The buffer the notification applies to — a channel, or the sender's
+        /// nick when it arrived as a direct message.
+        target: String,
+        nick: String,
+        state: String,
+    },
+    /// IRCv3 `standard-replies`: a FAIL, WARN or NOTE from the server.
+    /// `severity` is `fail`, `warn` or `note`.
+    StandardReply {
+        server_id: String,
+        severity: String,
+        /// The command the reply relates to, e.g. `JOIN`, or `*` if unscoped.
+        command: String,
+        code: String,
+        text: String,
     },
     /// A single channel/object access entry (numerics 801/804).
     IrcxAccess {
@@ -439,8 +464,11 @@ mod tests {
             status_msg: "@+".into(),
             chan_modes: "beI,k,l,imnst".into(),
             modes_per_line: 4,
+            monitor: true,
+            monitor_limit: 100,
         };
         let json = serde_json::to_string(&isupport).unwrap();
+        assert!(json.contains("\"monitorLimit\":100"), "{json}");
         assert!(json.contains("\"caseMapping\":\"rfc1459\""), "{json}");
         assert!(json.contains("\"network\":\"TestNet\""), "{json}");
         assert!(json.contains("\"statusMsg\":\"@+\""), "{json}");

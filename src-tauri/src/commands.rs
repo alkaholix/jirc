@@ -624,6 +624,38 @@ pub fn irc_send_raw(
     manager.send(&server_id, line)
 }
 
+/// Sends an IRCv3 `+typing` notification for `target`.
+///
+/// A no-op unless the server negotiated `message-tags`: without it a TAGMSG
+/// carrying a client tag is not merely ignored, it is a protocol error, and
+/// some servers disconnect for it. The check lives here rather than in the UI
+/// so the frontend never has to reason about capability state.
+#[tauri::command]
+pub fn irc_send_typing(
+    app: AppHandle,
+    manager: State<'_, ConnectionManager>,
+    server_id: String,
+    target: String,
+    state: String,
+) -> Result<(), String> {
+    let Some(store) = app.try_state::<crate::irc::state::StateStore>() else {
+        return Ok(());
+    };
+    if !store
+        .get(&server_id)
+        .caps
+        .iter()
+        .any(|c| c == "message-tags")
+    {
+        return Ok(());
+    }
+    let state = match state.as_str() {
+        "active" | "paused" | "done" => state,
+        _ => return Err(format!("invalid typing state: {state}")),
+    };
+    manager.send(&server_id, format!("@+typing={state} TAGMSG {target}"))
+}
+
 /// Sends a PRIVMSG to a target (channel or nick).
 #[tauri::command]
 pub fn irc_send_message(

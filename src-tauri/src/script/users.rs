@@ -20,28 +20,36 @@ pub struct UserEntry {
     pub info: String,
 }
 
-/// The whole user list, plus the auto-op / auto-voice / protect lists.
+/// The whole user list, plus the auto-owner / auto-op / auto-voice / protect lists.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UserList {
     entries: Vec<UserEntry>,
     aop: AutoList,
     avoice: AutoList,
     protect: AutoList,
+    /// `#[serde(default)]` is load-bearing: `load_from` falls back to
+    /// `Default` on any parse error, so a field an older `users.json` lacks
+    /// would not merely be empty — it would discard the whole saved file.
+    #[serde(default)]
+    aowner: AutoList,
     /// Set on any change; the engine saves + clears it after a run.
     #[serde(skip)]
     dirty: bool,
 }
 
 /// Which auto-list a command/identifier operates on.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutoKind {
     Aop,
     Avoice,
     Protect,
+    /// jIRC extension: mIRC has no owner list. Kept separate from `Aop` because
+    /// owner (`+q`) is a distinct mode that only some networks support.
+    Aowner,
 }
 
-/// One of the auto-lists (`/aop`, `/avoice`, `/protect`): an on/off flag plus
-/// entries.
+/// One of the auto-lists (`/aowner`, `/aop`, `/avoice`, `/protect`): an on/off
+/// flag plus entries.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct AutoList {
     enabled: bool,
@@ -315,6 +323,7 @@ impl UserList {
             AutoKind::Aop => &self.aop,
             AutoKind::Avoice => &self.avoice,
             AutoKind::Protect => &self.protect,
+            AutoKind::Aowner => &self.aowner,
         }
     }
 
@@ -323,6 +332,7 @@ impl UserList {
             AutoKind::Aop => &mut self.aop,
             AutoKind::Avoice => &mut self.avoice,
             AutoKind::Protect => &mut self.protect,
+            AutoKind::Aowner => &mut self.aowner,
         }
     }
 
@@ -395,6 +405,18 @@ impl UserList {
             }
         }
         String::new()
+    }
+
+    /// Whether `value` (a nick or address) matches an entry in the list, for the
+    /// `isaop`/`isavoice`/`isprotect`/`isaowner` operators. Membership only — the
+    /// list's on/off flag gates the *automatic* behaviour, not whether someone is
+    /// on it, so `/aop off` must not make `isaop` start lying.
+    pub fn auto_contains(&self, kind: AutoKind, value: &str) -> bool {
+        let q = complete_mask(value);
+        self.auto(kind).entries.iter().any(|e| {
+            let m = complete_mask(&e.address);
+            wildcard_match(&q, &m) || wildcard_match(&m, &q)
+        })
     }
 
     /// Whether the auto behaviour applies to a joining user: the list is enabled

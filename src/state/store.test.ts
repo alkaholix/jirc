@@ -56,6 +56,8 @@ describe("connection lifecycle", () => {
       statusMsg: "",
       chanModes: "beI,k,l,imnst",
       modesPerLine: 3,
+        monitor: false,
+        monitorLimit: 0,
     });
     expect(useStore.getState().servers[SID].name).toBe("IRC7");
   });
@@ -80,6 +82,8 @@ describe("IRC casemapping", () => {
       statusMsg: "@+",
       chanModes: "beI,k,l,imnst",
       modesPerLine: 4,
+      monitor: false,
+      monitorLimit: 0,
     });
     expect(serverBufferKey(SID, "Nick[")).not.toBe(serverBufferKey(SID, "nick{"));
   });
@@ -99,6 +103,8 @@ describe("channel routing", () => {
       statusMsg: "@+",
       chanModes: "beI,k,l,imnst",
       modesPerLine: 4,
+      monitor: false,
+      monitorLimit: 0,
     });
     s.handleEvent({
       type: "message",
@@ -146,6 +152,8 @@ describe("channel routing", () => {
       statusMsg: "@+",
       chanModes: "beI,k,l,imnst",
       modesPerLine: 4,
+      monitor: false,
+      monitorLimit: 0,
     });
     s.handleEvent({
       type: "message",
@@ -268,6 +276,8 @@ describe("channel membership", () => {
         statusMsg: "@+",
         chanModes: "beI,k,l,imnst",
         modesPerLine: 4,
+        monitor: false,
+        monitorLimit: 0,
       });
     useStore.getState().handleEvent({ type: "join", serverId: SID, channel: "#x", nick: "me" });
     useStore.getState().handleEvent({

@@ -907,12 +907,14 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         "clevel" => rt.event.clevel.clone(),
         // $aop / $avoice / $protect -> $true/$false enabled (bare); with an arg,
         // $aop(addr/N)[.type|.network] looks up an auto-list entry.
-        "aop" | "avoice" | "protect" => {
+        "aop" | "avoice" | "protect" | "aowner" => {
             use crate::script::users::AutoKind;
             let kind = if name.eq_ignore_ascii_case("aop") {
                 AutoKind::Aop
             } else if name.eq_ignore_ascii_case("avoice") {
                 AutoKind::Avoice
+            } else if name.eq_ignore_ascii_case("aowner") {
+                AutoKind::Aowner
             } else {
                 AutoKind::Protect
             };

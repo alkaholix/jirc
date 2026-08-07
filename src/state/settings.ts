@@ -31,6 +31,10 @@ export interface Settings {
   urlPreviews: boolean;
   urlPreviewStyle: UrlPreviewStyle;
   notifications: boolean;
+  /** Show "<nick> is typing…" above the input bar. */
+  showTyping: boolean;
+  /** Tell others when you are composing (IRCv3 `+typing`). */
+  sendTyping: boolean;
   soundEnabled: boolean;
   soundVolume: number;
   mentionSound: string;
@@ -116,6 +120,8 @@ const DEFAULTS: Settings = {
   urlPreviews: true,
   urlPreviewStyle: "compact",
   notifications: true,
+  showTyping: true,
+  sendTyping: true,
   soundEnabled: true,
   soundVolume: 0.5,
   mentionSound: "",

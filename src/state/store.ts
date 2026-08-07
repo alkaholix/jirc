@@ -68,6 +68,8 @@ export interface Server {
   statusMsg: string;
   chanModes: string;
   modesPerLine: number;
+  /** Server supports MONITOR, so the notify list is pushed, not polled. */
+  monitor: boolean;
 }
 
 export interface ChannelListEntry {
@@ -763,12 +765,25 @@ export const useStore = create<State>((set, get) => {
                     statusMsg: ev.statusMsg,
                     chanModes: ev.chanModes,
                     modesPerLine: ev.modesPerLine,
+                    monitor: ev.monitor,
                   },
                 },
               }
             : s
         );
         break;
+      // IRCv3 standard-replies. The command context matters — a bare "you may
+      // not do that" with no indication of what failed is useless — so it is
+      // always shown, with the machine-readable code kept for scripts.
+      case "standardReply": {
+        const label = { fail: "!", warn: "*", note: "-" }[ev.severity] ?? "-";
+        const scope = ev.command === "*" ? "" : ` ${ev.command}`;
+        sys(
+          `${label}${scope} ${ev.text}${ev.code ? ` (${ev.code})` : ""}`,
+          ev.severity === "fail" ? "error" : "notice"
+        );
+        break;
+      }
       case "whois": {
         sys(`── WHOIS ${ev.nick} ──`);
         for (const line of ev.lines) sys(`  ${line}`);
@@ -902,6 +917,7 @@ export const useStore = create<State>((set, get) => {
                   statusMsg: "",
                   chanModes: "beI,k,l,imnpstrS",
                   modesPerLine: 3,
+                  monitor: false,
                 },
               },
             }

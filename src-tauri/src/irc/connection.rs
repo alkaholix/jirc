@@ -119,6 +119,10 @@ enum Outcome {
     Dropped,
     /// The outgoing channel closed (the manager removed this connection); stop.
     Stop,
+    /// The server advertised an IRCv3 STS policy over plaintext. Reconnect to
+    /// `port` with TLS, immediately and without backoff — this is a redirect,
+    /// not a failure.
+    UpgradeTls { port: u16 },
 }
 
 /// Supervises a connection: connects, runs it, and reconnects with backoff on
@@ -126,7 +130,7 @@ enum Outcome {
 pub async fn supervise(
     app: AppHandle,
     server_id: String,
-    profile: ServerProfile,
+    mut profile: ServerProfile,
     mut outgoing_rx: UnboundedReceiver<String>,
 ) {
     let mut backoff = Duration::from_secs(2);
@@ -135,6 +139,15 @@ pub async fn supervise(
         let outcome = run_once(&app, &server_id, &profile, &mut outgoing_rx).await;
         match outcome {
             Outcome::Stop => break,
+            // An STS redirect, not a drop: switch to TLS on the advertised port
+            // and reconnect at once. The change is kept in memory only — it is
+            // not written back to the saved profile, so a user who deliberately
+            // configured plaintext still sees what they configured.
+            Outcome::UpgradeTls { port } => {
+                profile.tls = true;
+                profile.port = port;
+                continue;
+            }
             Outcome::Dropped => {
                 if !profile.auto_reconnect {
                     break;
@@ -205,6 +218,25 @@ fn is_echoed_message(line: &str, state: &SessionState, auth: &AuthState) -> bool
         Command::PRIVMSG(_, _) | Command::NOTICE(_, _) => true,
         Command::Raw(command, _) => command.eq_ignore_ascii_case("TAGMSG"),
         _ => false,
+    }
+}
+
+/// The value of the IRCv3 `+typing` client tag, if present and valid.
+///
+/// Client-only tags are prefixed with `+` on the wire. Whether the parser keeps
+/// that `+` in the tag name is an implementation detail, so accept both — and
+/// accept the older `draft/typing` name, which servers and clients still emit.
+fn typing_tag(msg: &Message) -> Option<String> {
+    let value = msg.tags.as_ref()?.iter().find_map(|tag| {
+        let name = tag.0.trim_start_matches('+').to_ascii_lowercase();
+        (name == "typing" || name == "draft/typing").then(|| tag.1.clone())
+    })??;
+    match value.to_ascii_lowercase().as_str() {
+        // `done` is the spec's spelling for "stopped typing"; some clients send
+        // an empty value to mean the same thing.
+        state @ ("active" | "paused" | "done") => Some(state.to_string()),
+        "" => Some("done".to_string()),
+        _ => None,
     }
 }
 
@@ -769,6 +801,28 @@ async fn run_once(
                     .await;
                     line_bytes.clear();
                     buf = line_bytes;
+                    // IRCv3 STS: over plaintext the server names a TLS port to
+                    // move to. Reconnect there rather than continuing in the
+                    // clear. Checked here (not inside `process_message`, which
+                    // is pure) because it ends the connection.
+                    if !profile.tls {
+                        if let Some(port) = auth.sts_policy().and_then(|p| p.port) {
+                            emit(
+                                app,
+                                UiEvent::Echo {
+                                    server_id: server_id.to_string(),
+                                    target: "(status)".to_string(),
+                                    text: format!(
+                                        "Server requires TLS (STS); reconnecting on port {port}…"
+                                    ),
+                                },
+                            );
+                            break (
+                                "upgrading to TLS (STS)".to_string(),
+                                Outcome::UpgradeTls { port },
+                            );
+                        }
+                    }
                 }
                 Err(e) => break (format!("read error: {e}"), Outcome::Dropped),
             },
@@ -1189,6 +1243,10 @@ pub fn process_message(ctx: &mut Context, raw: &str, msg: Message) -> Effects {
                 &caps,
                 continuation,
             ));
+            // Mirror the negotiated set into session state so commands and
+            // scripts can see it without reaching into the connection task.
+            // ACK, NAK, NEW and DEL can all change it, so refresh on any CAP.
+            ctx.state.caps = ctx.auth.enabled_caps();
         }
         Command::AUTHENTICATE(ref data) => {
             fx.outgoing
@@ -1560,6 +1618,52 @@ pub fn process_message(ctx: &mut Context, raw: &str, msg: Message) -> Effects {
             // IRCv3 batch delimiters are structural. The contained messages are
             // still routed normally and retain their @batch tag.
             if cmd.eq_ignore_ascii_case("BATCH") {
+                return fx;
+            }
+            // IRCv3 typing notifications ride on TAGMSG as the client-only
+            // `+typing` tag. TAGMSG carries no text and must never reach the
+            // message path — an empty line in the buffer is worse than nothing.
+            if cmd.eq_ignore_ascii_case("TAGMSG") {
+                if let (Some(nick), Some(raw_target)) = (source.as_deref(), args.first()) {
+                    if let Some(state) = typing_tag(&msg) {
+                        // A direct TAGMSG is addressed to us, so the buffer it
+                        // belongs to is the *sender's* query, not our own nick.
+                        let target = if ctx.state.isupport.channel_target(raw_target).is_some() {
+                            raw_target.clone()
+                        } else {
+                            nick.to_string()
+                        };
+                        fx.events.push(UiEvent::Typing {
+                            server_id: server_id.clone(),
+                            target,
+                            nick: nick.to_string(),
+                            state,
+                        });
+                    }
+                }
+                return fx;
+            }
+            // IRCv3 standard-replies: `FAIL <command> <code> [context] :<text>`.
+            // The context arguments between the code and the trailing text are
+            // optional and command-specific; fold them into the message so
+            // nothing the server said is dropped.
+            if matches!(cmd.to_ascii_uppercase().as_str(), "FAIL" | "WARN" | "NOTE") {
+                let text = args.last().cloned().unwrap_or_default();
+                let context = args
+                    .get(2..args.len().saturating_sub(1))
+                    .map(|c| c.join(" "))
+                    .unwrap_or_default();
+                fx.events.push(UiEvent::StandardReply {
+                    server_id: server_id.clone(),
+                    severity: cmd.to_ascii_lowercase(),
+                    command: args.first().cloned().unwrap_or_else(|| "*".into()),
+                    code: args.get(1).cloned().unwrap_or_default(),
+                    text: if context.is_empty() {
+                        text
+                    } else {
+                        format!("{context}: {text}")
+                    },
+                });
                 return fx;
             }
             // IRCv3 setname: keep the IAL gecos field current and surface the
@@ -2328,6 +2432,8 @@ fn handle_numeric(ctx: &mut Context, fx: &mut Effects, resp: Response, args: &[S
                     ctx.state.isupport.chanmodes_d
                 ),
                 modes_per_line: ctx.state.isupport.modes,
+                monitor: ctx.state.isupport.monitor.is_some(),
+                monitor_limit: ctx.state.isupport.monitor.unwrap_or(0),
             });
         }
         Response::RPL_WHOISUSER
@@ -3883,6 +3989,118 @@ mod tests {
         );
         assert!(!fx.outgoing.iter().any(|l| l.starts_with("JOIN")));
         assert_eq!(s.nick, "me");
+    }
+
+    fn feed_line(line: &str) -> Effects {
+        let p = profile();
+        let mut s = SessionState::default();
+        let mut accum = Default::default();
+        let mut whois = Default::default();
+        let mut auth = AuthState::default();
+        let mut ctx = Context {
+            server_id: "s1",
+            profile: &p,
+            state: &mut s,
+            names_accum: &mut accum,
+            whois_accum: &mut whois,
+            auth: &mut auth,
+        };
+        process_message(&mut ctx, line, line.parse().unwrap())
+    }
+
+    /// IRCv3 typing notifications arrive as a client-only tag on TAGMSG, which
+    /// carries no text — it must never reach the message path, or every
+    /// keystroke of a peer's would append an empty line to the buffer.
+    #[test]
+    fn typing_tagmsg_becomes_a_typing_event_and_no_message() {
+        let fx = feed_line("@+typing=active :Bob!u@h TAGMSG #chan");
+        match fx.events.as_slice() {
+            [UiEvent::Typing {
+                target,
+                nick,
+                state,
+                ..
+            }] => {
+                assert_eq!(target, "#chan");
+                assert_eq!(nick, "Bob");
+                assert_eq!(state, "active");
+            }
+            other => panic!("expected one typing event, got {other:?}"),
+        }
+
+        // A direct TAGMSG is addressed to us, so it belongs in the *sender's*
+        // query buffer — keying it by the target would name the buffer after
+        // our own nick.
+        let fx = feed_line("@+typing=paused :Bob!u@h TAGMSG me");
+        assert!(
+            matches!(fx.events.as_slice(), [UiEvent::Typing { target, state, .. }]
+                if target == "Bob" && state == "paused"),
+            "got {:?}",
+            fx.events
+        );
+
+        // The older draft name is still emitted by some clients.
+        assert!(matches!(
+            feed_line("@+draft/typing=done :Bob!u@h TAGMSG #chan").events.as_slice(),
+            [UiEvent::Typing { state, .. }] if state == "done"
+        ));
+
+        // An unrelated TAGMSG produces nothing at all rather than a blank line.
+        assert!(feed_line("@+foo=bar :Bob!u@h TAGMSG #chan").events.is_empty());
+        // An unknown state is dropped, not passed through to the UI.
+        assert!(feed_line("@+typing=wat :Bob!u@h TAGMSG #chan")
+            .events
+            .is_empty());
+    }
+
+    #[test]
+    fn standard_replies_are_surfaced_with_their_command_and_code() {
+        match feed_line("FAIL JOIN CHANNEL_BAD :Channel does not exist")
+            .events
+            .as_slice()
+        {
+            [UiEvent::StandardReply {
+                severity,
+                command,
+                code,
+                text,
+                ..
+            }] => {
+                assert_eq!(severity, "fail");
+                assert_eq!(command, "JOIN");
+                assert_eq!(code, "CHANNEL_BAD");
+                assert_eq!(text, "Channel does not exist");
+            }
+            other => panic!("expected one standard reply, got {other:?}"),
+        }
+
+        // Context arguments sit between the code and the text; dropping them
+        // would lose the only indication of *which* thing failed.
+        assert!(matches!(
+            feed_line("FAIL JOIN CHANNEL_BAD #nope :Channel does not exist").events.as_slice(),
+            [UiEvent::StandardReply { text, .. }] if text == "#nope: Channel does not exist"
+        ));
+        assert!(matches!(
+            feed_line("WARN * ACCOUNT_REQUIRED :Log in for more").events.as_slice(),
+            [UiEvent::StandardReply { severity, command, .. }] if severity == "warn" && command == "*"
+        ));
+        assert!(matches!(
+            feed_line("NOTE NICK NICK_OK :Nice nick").events.as_slice(),
+            [UiEvent::StandardReply { severity, .. }] if severity == "note"
+        ));
+    }
+
+    #[test]
+    fn isupport_monitor_token_is_recognised() {
+        let mut s = crate::irc::state::Isupport::default();
+        assert_eq!(s.monitor, None);
+        s.parse_token("MONITOR=100");
+        assert_eq!(s.monitor, Some(100));
+        s.parse_token("-MONITOR");
+        assert_eq!(s.monitor, None);
+        // Advertised bare, i.e. supported with no published limit.
+        s.parse_token("MONITOR");
+        assert_eq!(s.monitor, Some(0));
     }
 
     /// IRCX `WHISPER` carries CTCP payloads, but unlike IRC it has no

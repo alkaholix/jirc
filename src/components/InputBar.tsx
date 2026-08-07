@@ -10,6 +10,7 @@ import {
   IRC_FORMAT,
 } from "../lib/inputFormatting";
 import { useSettings } from "../state/settings";
+import { sendTyping, typingLabel, typingSent, useTyping } from "../state/typing";
 import {
   EDITBOX_COMMAND_EVENT,
   EditboxCommand,
@@ -219,8 +220,20 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
     });
   };
 
+  /** Whether `+typing` applies here: a channel or a query, never the status
+   *  window or a script-owned @window. */
+  const conversational = buffer.kind === "channel" || buffer.kind === "query";
+
+  const noteTyping = (text: string) => {
+    if (!conversational) return;
+    // A leading `/` is a command, not conversation — announcing it would
+    // leak that you are about to run something.
+    sendTyping(buffer.serverId, buffer.name, text.trim().length > 0 && !text.startsWith("/"));
+  };
+
   const onInputChange = (event: ChangeEvent<HTMLInputElement>) => {
     const next = event.target.value;
+    noteTyping(next);
     const caret = event.target.selectionStart ?? next.length;
     const typed = next[caret - 1] ?? "";
     if (autoCorrect && /[\s.,!?;:]/.test(typed)) {
@@ -288,6 +301,7 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
     history.current.push(text);
     histIdx.current = history.current.length;
     setValue("");
+    if (conversational) typingSent(buffer.serverId, buffer.name);
     await handleInput(
       applyPersistentColor(
         text,
@@ -350,6 +364,7 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
 
   return (
     <div className="inputbar">
+      <TypingIndicator buffer={buffer} />
       {picker && (
         <>
           <div className="emoji-backdrop" onClick={() => setPicker(false)} />
@@ -650,6 +665,27 @@ export function InputBar({ buffer }: { buffer: Buffer }) {
           )}
         </ContextMenu>
       )}
+    </div>
+  );
+}
+
+/** "<nick> is typing..." above the editor, from IRCv3 `+typing` notifications.
+ *
+ *  Renders nothing at all when nobody is typing - the row must not reserve
+ *  height, or the input would jump every time someone starts and stops. */
+function TypingIndicator({ buffer }: { buffer: Buffer }) {
+  const names = useTyping(
+    (s) => s.byBuffer[buffer.key]?.map((t) => t.nick).join(" ") ?? ""
+  );
+  if (!names) return null;
+  return (
+    <div className="typing-indicator" aria-live="polite">
+      <span className="typing-dots" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </span>
+      {typingLabel(names.split(" "))}
     </div>
   );
 }
