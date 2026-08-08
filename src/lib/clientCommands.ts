@@ -1,12 +1,13 @@
 import { IrcEvent } from "./api";
 import { normalizeAppFontSize, useSettings } from "../state/settings";
-import { STATUS, useStore } from "../state/store";
+import { STATUS, serverBufferKey, useStore } from "../state/store";
 import { api } from "./api";
 import { useToolbar } from "../state/toolbar";
 import { useChannelCentral } from "../state/channelModes";
 import { useAddressBook } from "../state/addressBook";
 import { clearTips, routeTipCommand } from "../state/tips";
 import { playAlertSound } from "./sound";
+import { runIgnore, runNotify, runUnignore, runUrls } from "./clientLists";
 
 export interface ClientCommandActions {
   openConnect?: () => void;
@@ -211,12 +212,56 @@ function routeDelayedPrivilege(serverId: string, currentTarget: string, args: st
   }, delay * 1000);
 }
 
+/** Appends system lines to the buffer a client command was run from. */
+function echoLines(serverId: string, target: string, lines: string[]) {
+  if (!lines.length) return;
+  const store = useStore.getState();
+  const name = target || STATUS;
+  const chanTypes = useStore.getState().servers[serverId]?.chanTypes ?? "#&+!";
+  const kind =
+    name === STATUS ? "status" : chanTypes.includes(name[0]) ? "channel" : "query";
+  for (const text of lines) store.appendLine(serverId, name, kind, { kind: "system", text });
+}
+
 export function routeClientCommand(
   event: Extract<IrcEvent, { type: "clientCommand" }>,
   openSettings: () => void,
   actions: ClientCommandActions = {}
 ) {
   switch (event.command) {
+    // Client-side lists. Shared with the typed path in `lib/clientLists` so a
+    // script and the input bar cannot drift apart.
+    case "ignore":
+    case "unignore":
+    case "notify":
+    case "urls": {
+      const run = { ignore: runIgnore, unignore: runUnignore, notify: runNotify, urls: runUrls }[
+        event.command as "ignore" | "unignore" | "notify" | "urls"
+      ];
+      echoLines(event.serverId, event.currentTarget, run(event.args));
+      break;
+    }
+    case "url": {
+      const addr = words(event.args)
+        .filter((t) => !t.startsWith("-"))
+        .pop();
+      if (addr) void api.openUrl(addr).catch(() => {});
+      break;
+    }
+    case "query": {
+      const target = words(event.args)[0];
+      if (target) {
+        const store = useStore.getState();
+        store.setActive(store.ensureBuffer(event.serverId, target, "query"));
+      }
+      break;
+    }
+    case "wc": {
+      const store = useStore.getState();
+      const target = event.currentTarget || STATUS;
+      store.closeBuffer(serverBufferKey(event.serverId, target));
+      break;
+    }
     case "ajinvite": {
       const mode = words(event.args)[0]?.toLowerCase();
       if (mode === "on" || mode === "off") useSettings.getState().set("autoJoinInvites", mode === "on");

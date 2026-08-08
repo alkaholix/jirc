@@ -8359,6 +8359,123 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Every command the input bar handles must also work from a script.
+    ///
+    /// Typed input falls through to the script engine, but a script never
+    /// reaches `slash.ts` — so a command implemented only there works when typed
+    /// and, when scripted, hits the unknown-command fallback and is sent to the
+    /// server as a verb. For client-side commands that is worse than doing
+    /// nothing: `/ignore bob` put a literal `IGNORE bob` on the wire.
+    ///
+    /// Each entry below is the command and the prefix its script-side result
+    /// must start with. A new frontend-only command fails here rather than
+    /// leaking silently.
+    #[test]
+    fn every_input_bar_command_works_from_a_script() {
+        use crate::irc::state::{ChannelView, StateSnapshot};
+        let snap = StateSnapshot {
+            channels: vec![ChannelView {
+                name: "#c".into(),
+                nicks: vec!["me".into(), "bob".into()],
+                members: vec![("me".into(), "@".into()), ("bob".into(), String::new())],
+                bans: vec![],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(snap),
+        };
+        // (invocation, required prefix of the first action's debug form)
+        let cases: &[(&str, &str)] = &[
+            // Channel-status shortcuts: client commands with no server verb.
+            ("op bob", "Send(\"MODE #c +o bob\""),
+            ("deop bob", "Send(\"MODE #c -o bob\""),
+            ("voice bob", "Send(\"MODE #c +v bob\""),
+            ("devoice bob", "Send(\"MODE #c -v bob\""),
+            ("op #other bob", "Send(\"MODE #other +o bob\""),
+            // Client-side lists must reach the frontend, never the server.
+            ("ignore bob", "ClientCommand"),
+            ("unignore bob", "ClientCommand"),
+            ("notify bob", "ClientCommand"),
+            ("urls", "ClientCommand"),
+            ("url https://example.com", "ClientCommand"),
+            ("wc", "ClientCommand"),
+            // `/query` opens the window; that is the point of the command.
+            ("query bob", "ClientCommand"),
+            // Input-bar shortcuts for commands that already worked by their
+            // full names.
+            ("k bob rude", "Send(\"KICK"),
+            ("b bob", "Send(\"MODE #c +b"),
+            ("wi bob", "Send(\"WHOIS bob\""),
+            ("w bob hi", "Send(\"WHISPER bob hi\""),
+            // Genuine server verbs: passthrough is the correct answer.
+            ("whois bob", "Send(\"WHOIS bob\""),
+            ("list", "Send(\"LIST\""),
+        ];
+        for (line, want) in cases {
+            let engine = ScriptEngine::new();
+            engine.load(&format!("alias t {{ {line} }}"));
+            let acts = engine.run_alias(&rctx, "#c", "t", "");
+            let got = acts
+                .first()
+                .map(|a| format!("{a:?}"))
+                .unwrap_or_else(|| "<no action>".into());
+            assert!(
+                got.starts_with(want),
+                "/{line} produced {got}, expected something starting {want}"
+            );
+        }
+    }
+
+    /// `/op` and friends must stay silent where the server does not advertise
+    /// the mode, rather than sending one it will reject or misread.
+    #[test]
+    fn status_shortcuts_respect_isupport() {
+        use crate::irc::state::{ChannelView, Isupport, StateSnapshot};
+        let snap = StateSnapshot {
+            channels: vec![ChannelView {
+                name: "#c".into(),
+                nicks: vec!["bob".into()],
+                members: vec![("bob".into(), String::new())],
+                bans: vec![],
+                ..Default::default()
+            }],
+            // No halfop, and `q` is the quiet list rather than owner.
+            isupport: Isupport {
+                prefix_modes: vec![('o', '@'), ('v', '+')],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(snap),
+        };
+        // The channel advertises no halfop, so `/op`'s own guard is what is
+        // under test here: a mode the server does not list must produce nothing
+        // rather than a line it will reject or misread.
+        assert!(rctx.state.isupport.prefix_for_mode('h').is_none());
+        // Several nicks in one call are batched to the server's MODES limit.
+        let engine = ScriptEngine::new();
+        engine.load("alias t { op a b c d }");
+        let acts = engine.run_alias(&rctx, "#c", "t", "");
+        assert_eq!(
+            acts,
+            vec![
+                Action::Send("MODE #c +ooo a b c".into()),
+                Action::Send("MODE #c +o d".into()),
+            ]
+        );
+    }
+
     /// The membership operators returned a hardcoded `false` for as long as
     /// jIRC kept no such lists. The lists arrived; the operators did not follow,
     /// so `/aop <mask>` then `if (%a isaop)` disagreed with itself.

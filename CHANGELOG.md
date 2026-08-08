@@ -12,6 +12,51 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🔗 26.8.25 — Every input-bar command now works from scripts
+
+Typed input falls through to the script engine, but a script never reached the
+input bar's own handlers. A command implemented only there worked when typed
+and, when scripted, was **sent to the server as a verb** — `/ignore bob` put a
+literal `IGNORE bob` on the wire, silently doing nothing locally while telling
+the network what you meant. All 53 input-bar commands were tested through the
+engine; ten were broken:
+
+- **`/op` `/deop` `/voice` `/devoice`** sent `OP bob` to the server instead of
+  setting the mode. They now emit `MODE #chan +o bob`, accept an optional
+  leading channel (`/op #other bob`), take several nicks at once batched to the
+  server's `MODES` limit, and stay silent where the server has no such mode —
+  so nothing is sent on a network where `+q` means *quiet* rather than owner.
+- **`/ignore` `/unignore` `/notify` `/urls` `/url` `/wc`** now reach the client
+  instead of the server.
+- **`/query <nick>`** opens the query window. Previously a bare `/query` from a
+  script did nothing at all.
+- **`/k` `/b` `/w` `/wi`** work as the short forms they are.
+
+The shared bodies live in one module used by both paths, and a test pins the
+whole surface, so a future command added on one side only fails the build
+rather than leaking silently.
+
+### Help
+- **New "Access lists" section** covering `/aop`, `/avoice`, `/protect` and
+  `/aowner` — the forms they take, that switching a list off does not empty it,
+  and why jIRC declines to act when you could not set the mode yourself.
+- **New "Channel and list tests" section** for the `is…` operators, spelling out
+  the difference between asking the *server* about live status (`isowner`) and
+  asking your *saved lists* (`isaowner`) — the mix-up behind an earlier bug.
+- Identifier reference gained the access-list identifiers; typing notifications,
+  MONITOR and the newer commands are documented.
+
+### Housekeeping
+- `/halfop`, `/owner` and `/admin` are **removed**. They are in neither mIRC nor
+  jIRC's input bar and were added only because `/op` existed. `goodidea.md` now
+  records anything jIRC has that mIRC does not, for review rather than quiet
+  accumulation.
+- Fixed a test that asserted `$adate` and `$date` always differ. `$adate` is
+  MM/DD/YYYY and `$date` DD/MM/YYYY, so they match on the twelve days a year
+  where day equals month — it failed on 08/08.
+
+---
+
 ## 🧭 26.8.24 — One icon bar instead of text menus
 
 - **The File / View / Scripts / Commands / Tools / Help menus are gone.** The

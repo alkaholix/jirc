@@ -1402,6 +1402,33 @@ impl<'a> Runtime<'a> {
                     self.actions.push(Action::Send(format!("JOIN {ch}")));
                 }
             }
+            // `/w` and `/wi` are jIRC shortcuts the input bar already knew;
+            // scripts were sending literal `W` / `WI` verbs instead. The
+            // full names need no arm — `WHISPER` (IRCX) and `WHOIS` are real
+            // server commands and the passthrough handles them correctly.
+            "w" => {
+                let args = self.expand(raw_args);
+                if !args.trim().is_empty() {
+                    self.actions.push(Action::Send(format!("WHISPER {args}")));
+                }
+            }
+            "wi" => {
+                let args = self.expand(raw_args);
+                if !args.trim().is_empty() {
+                    self.actions.push(Action::Send(format!("WHOIS {args}")));
+                }
+            }
+            // Channel-status shortcuts. **Not mIRC commands** — mIRC documents
+            // `/mode $chan +o nick` and has no `/op`; this is the irssi/HexChat
+            // convention, which jIRC's input bar has always offered. Kept
+            // because removing it would break users' habits, and implemented
+            // here because the input bar had it and scripts did not: there is no
+            // `OP` verb in IRC, so a scripted `/op bob` fell through the
+            // unknown-command fallback and put a literal `OP bob` on the wire,
+            // silently doing nothing while telling the network what you meant.
+            "op" | "deop" | "voice" | "devoice" => {
+                self.cmd_status_mode(lname, raw_args);
+            }
             // `/leave` is mIRC's synonym for `/part`.
             "part" | "leave" => {
                 let ch = self.expand(raw_args);
@@ -1437,7 +1464,7 @@ impl<'a> Runtime<'a> {
                 self.actions
                     .push(Action::Send(format!("TOPIC {target} :{text}")));
             }
-            "kick" => {
+            "kick" | "k" => {
                 // /kick <#channel> <nick> [reason]
                 let s = self.expand(raw_args);
                 let mut it = s.splitn(3, char::is_whitespace);
@@ -1978,7 +2005,7 @@ impl<'a> Runtime<'a> {
             "protect" => self.cmd_autolist(crate::script::users::AutoKind::Protect, raw_args),
             // jIRC extension — mIRC has no owner list. See `AutoKind::Aowner`.
             "aowner" => self.cmd_autolist(crate::script::users::AutoKind::Aowner, raw_args),
-            "ban" => self.cmd_ban(raw_args, true),
+            "ban" | "b" => self.cmd_ban(raw_args, true),
             "unban" => self.cmd_ban(raw_args, false),
             "query" => self.cmd_query(raw_args),
             "play" => self.cmd_play(raw_args),
@@ -2184,9 +2211,15 @@ impl<'a> Runtime<'a> {
                     }
                 }
             }
+            // `ignore`/`unignore`/`notify`/`urls`/`url`/`wc`/`query` edit state
+            // that lives only in the frontend. They were reachable from the
+            // input bar and nowhere else, so a script calling them fell through
+            // to the unknown-command fallback and sent `IGNORE bob` — a verb no
+            // IRCd implements — to the server.
             "abook" | "channel" | "clearall" | "close" | "editbox" | "findtext" | "font"
             | "timestamp" | "switchbar" | "treebar" | "linesep" | "help" | "log" | "logview"
-            | "queryrn" | "markasread" | "strip" | "pop" | "pvoice" | "qmsg" | "qme" => {
+            | "queryrn" | "markasread" | "strip" | "pop" | "pvoice" | "qmsg" | "qme"
+            | "ignore" | "unignore" | "notify" | "urls" | "url" | "wc" => {
                 let args = self.expand(raw_args);
                 let current_target = self.reply_target();
                 self.actions.push(Action::ClientCommand {
@@ -2502,7 +2535,7 @@ impl<'a> Runtime<'a> {
             // a stored profile would be a surprising side effect, so this stays
             // inert until we decide which profile it should target. Recognising
             // it still matters — otherwise it reaches the server as `USERNAME`.
-            "fline" | "renwin" | "run" | "url" | "maximize" | "minimize" | "username" => {
+            "fline" | "renwin" | "run" | "maximize" | "minimize" | "username" => {
                 let _ = self.expand(raw_args);
             }
             _ => {
@@ -5575,9 +5608,63 @@ impl<'a> Runtime<'a> {
     /// `/query <nick> [message]` — open a query; if a message is given, send it
     /// (which opens the query window on the echo). Without a message this is a
     /// no-op rather than a stray QUERY line to the server.
+    /// `/op [#channel] <nick> [nick2 …]` and its siblings — a jIRC convenience
+    /// for a channel-status MODE, following the irssi/HexChat convention rather
+    /// than mIRC, which has no such command. The channel is optional and
+    /// defaults to the current one, and several nicks may be given, so
+    /// `/op bob sue` sets both.
+    ///
+    /// Modes are batched into groups the server will accept in one line
+    /// (ISUPPORT `MODES`, default 3), matching how mIRC splits them.
+    fn cmd_status_mode(&mut self, name: &str, raw: &str) {
+        let (adding, letter) = match name {
+            "op" => (true, 'o'),
+            "deop" => (false, 'o'),
+            "voice" => (true, 'v'),
+            _ => (false, 'v'),
+        };
+        // A mode the server does not advertise cannot be set. Staying silent
+        // beats sending `+q` to a network where `q` means a quiet list.
+        if self.state.isupport.prefix_for_mode(letter).is_none() {
+            return;
+        }
+        let expanded = self.expand(raw);
+        let mut toks: Vec<&str> = expanded.split_whitespace().collect();
+        if toks.is_empty() {
+            return;
+        }
+        let chan = match self.state.isupport.channel_target(toks[0]) {
+            Some(_) => toks.remove(0).to_string(),
+            None => self.event.chan.clone(),
+        };
+        if chan.is_empty() || toks.is_empty() {
+            return;
+        }
+        let sign = if adding { '+' } else { '-' };
+        let per_line = self.state.isupport.modes.max(1) as usize;
+        for group in toks.chunks(per_line) {
+            let flags: String = std::iter::repeat_n(letter, group.len()).collect();
+            self.actions.push(Action::Send(format!(
+                "MODE {chan} {sign}{flags} {}",
+                group.join(" ")
+            )));
+        }
+    }
+
+    /// `/query <nick> [message]` — open the query window, and send `message`
+    /// when one is given. Opening it is the whole point of the command in mIRC;
+    /// without that half a bare `/query bob` from a script did nothing at all.
     fn cmd_query(&mut self, raw: &str) {
         let (target, text) = self.split_target(raw);
-        if !target.is_empty() && !text.is_empty() {
+        if target.is_empty() {
+            return;
+        }
+        self.actions.push(Action::ClientCommand {
+            command: "query".into(),
+            args: target.clone(),
+            current_target: self.reply_target(),
+        });
+        if !text.is_empty() {
             self.send_privmsg(&target, &text);
         }
     }

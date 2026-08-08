@@ -64,6 +64,7 @@
   <a href="#format">Formatting &amp; emoji</a>
   <a href="#find">Find in buffer</a>
   <a href="#people">People &amp; away</a>
+  <a href="#access-lists">Access lists</a>
   <a href="#channels">Channels</a>
   <a href="#customise">Customising</a>
   <a href="#settings">Settings overview</a>
@@ -170,11 +171,51 @@ are commands. Common ones:</p>
   <tr><td><code>/list</code> · <code>/listx</code></td><td>browse the channel list (IRCX <code>/listx</code>)</td></tr>
   <tr><td><code>/away [msg]</code></td><td>set / clear away (or use the Away button)</td></tr>
   <tr><td><code>/ignore nick</code> · <code>/unignore</code></td><td>hide / unhide someone</td></tr>
+  <tr><td><code>/notify [-r] nick</code></td><td>add to / remove from the watch list (no nick lists it)</td></tr>
+  <tr><td><code>/op nick</code> · <code>/deop</code> · <code>/voice</code> · <code>/devoice</code></td><td>set channel status. A jIRC convenience, not an mIRC command — mIRC uses <code>/mode #chan +o nick</code>. Takes an optional leading channel and several nicks: <code>/op #other bob sue</code></td></tr>
+  <tr><td><code>/aop</code> · <code>/avoice</code> · <code>/protect</code> · <code>/aowner</code></td><td>automatic op / voice / re-op / owner lists — see <a href="#access-lists">Access lists</a></td></tr>
+  <tr><td><code>/urls [clear]</code></td><td>list or clear captured URLs</td></tr>
   <tr><td><code>/dcc chat nick</code> · <code>/dcc send nick file</code></td><td>start DCC chat / send a file</td></tr>
   <tr><td><code>/raw line</code></td><td>send a raw IRC line</td></tr>
 </table>
 <p>Anything jIRC doesn't recognise is passed to your scripts (an alias) and then to
 the server, so your own <code>/commands</code> work here too.</p>
+<p>Every command above also works <strong>from a script</strong>, not just from the
+input box. <code>/k</code>, <code>/b</code>, <code>/w</code> and <code>/wi</code> are
+short forms of <code>/kick</code>, <code>/ban</code>, <code>/whisper</code> and
+<code>/whois</code>.</p>
+
+<h2 id="access-lists">Access lists — automatic op, voice, owner</h2>
+<p>Four lists of address masks. When someone matching one joins, jIRC gives them
+that status automatically. They are saved with your user list and shown in
+<strong>Settings → Users</strong>.</p>
+<table>
+  <tr><th>List</th><th>Does</th></tr>
+  <tr><td><code>/aop</code></td><td>op (<code>+o</code>) them on join</td></tr>
+  <tr><td><code>/avoice</code></td><td>voice (<code>+v</code>) them on join</td></tr>
+  <tr><td><code>/protect</code></td><td>re-op them if someone takes their ops away</td></tr>
+  <tr><td><code>/aowner</code></td><td>owner (<code>+q</code>) on join. <strong>A jIRC extension</strong> —
+    mIRC has the other three but no owner list</td></tr>
+</table>
+<p>All four take the same forms:</p>
+<table>
+  <tr><td><code>/aop on</code> · <code>/aop off</code></td><td>turn the automatic behaviour on or off</td></tr>
+  <tr><td><code>/aop *!*@some.host</code></td><td>add a mask — applies on every channel</td></tr>
+  <tr><td><code>/aop *!*@some.host #staff</code></td><td>…or only on the channels you name</td></tr>
+  <tr><td><code>/aop -r *!*@some.host</code></td><td>remove a mask</td></tr>
+  <tr><td><code>/aop</code> (bare, in a script)</td><td><code>$aop</code> reads the list — see the identifier reference</td></tr>
+</table>
+<p><strong>Switching a list off does not empty it.</strong> <code>/aop off</code> stops
+the automatic op; the masks stay, and <code>isaop</code> keeps reporting them.</p>
+<p>Two things hold jIRC back from acting, both deliberate:</p>
+<ul>
+  <li>It only sets a status <strong>you could set yourself</strong> — auto-owner needs you
+    to be an owner, since an op cannot grant <code>+q</code>.</li>
+  <li>It only uses modes <strong>the server actually has</strong>. On some networks
+    <code>+q</code> means <em>quiet</em>, not owner; there the owner list stays inert rather
+    than silencing the person it was meant to promote.</li>
+</ul>
+<p>Owner outranks op: someone on both lists gets <code>+q</code>, not both.</p>
 
 <h2 id="format">Formatting, colours &amp; emoji</h2>
 <ul>
@@ -232,9 +273,15 @@ highlighted with a count; Enter / Shift+Enter jump to the next / previous; Esc c
     kick / ban / ignore (this menu is script-customisable, see Popups).</li>
   <li><strong>Away:</strong> the topic bar's <strong>Away</strong> button sets/clears your
     away state (with a message) and lights up while you're away.</li>
-  <li><strong>Notify / watch list:</strong> add friends' nicks in Settings → Alerts. jIRC
-    checks who's online and alerts you when they come/go, and lists who's around in the
-    sidebar's <strong>Online</strong> panel.</li>
+  <li><strong>Notify / watch list:</strong> add friends' nicks in Settings → Alerts, or with
+    <code>/notify nick</code> (<code>/notify -r nick</code> to remove, bare <code>/notify</code>
+    to list). jIRC alerts you when they come and go, and lists who's around in the
+    sidebar's <strong>Online</strong> panel. Where the server supports <strong>MONITOR</strong>
+    this is instant; elsewhere jIRC checks periodically.</li>
+  <li><strong>Typing indicators:</strong> "<em>Bob is typing…</em>" appears above the input
+    box when someone is composing, on servers that carry IRCv3 message tags. Both halves are
+    optional — Settings → General has <em>Show when others are typing</em> and <em>Let others
+    see when you are typing</em>. Nothing is sent while you type a <code>/command</code>.</li>
   <li><strong>Notification sounds:</strong> Settings → Alerts has separate sounds for
     mentions, private messages, invites, and watched users coming online. Choose any
     supported audio file installed on the device, use the built-in tones, set the
@@ -529,6 +576,26 @@ end of the line or the next <code>|</code>).</p>
   <tr><td><code>!</code></td><td>prefix negation, e.g. <code>if (!%x)</code> (x is empty/zero)</td></tr>
   <tr><td><code>&amp;&amp;</code> / <code>||</code></td><td>logical and / or</td></tr>
 </table>
+<h3>Channel and list tests</h3>
+<p>Two different kinds, easily confused. The first group asks the <strong>server</strong>
+what someone's status is right now; the second asks your <strong>own saved lists</strong>
+whether an address is on them.</p>
+<table>
+  <tr><th>Operator</th><th>True when…</th></tr>
+  <tr><td><code>ison</code> · <code>isreg</code></td><td><code>nick ison #chan</code> — is a member · is a member with no status</td></tr>
+  <tr><td><code>isop</code> · <code>ishop</code> · <code>isvoice</code></td><td><code>nick isop #chan</code> — holds that status on the channel now</td></tr>
+  <tr><td><code>isowner</code> · <code>isadmin</code></td><td>holds owner / admin status on the channel now. Only where the
+    server advertises the mode — on networks where <code>+q</code> is the quiet list rather than owner,
+    <code>isowner</code> is correctly false</td></tr>
+  <tr><td><code>ischan</code> · <code>isban</code></td><td><code>#chan ischan</code> — you are on it · <code>mask isban #chan</code></td></tr>
+  <tr><td><code>isaop</code> · <code>isavoice</code> · <code>isprotect</code> · <code>isaowner</code></td>
+    <td>the address is on that <strong>saved list</strong> (<code>/aop</code>, <code>/avoice</code>,
+    <code>/protect</code>, <code>/aowner</code>). Membership only — turning a list off with
+    <code>/aop off</code> stops the automatic op but does not empty the list, so this stays true</td></tr>
+  <tr><td><code>isignore</code> · <code>isnotify</code></td><td>on your ignore / notify list</td></tr>
+</table>
+<p><code>isowner</code> is the live channel test; <code>isaowner</code> is the saved list.
+Mixing them up is the usual bug.</p>
 <h3>goto / labels</h3>
 <p>A line <code>:name</code> is a label; <code>/goto name</code> jumps to it (it can jump
 out of <code>if</code>/<code>while</code> blocks). A safety cap stops runaway loops.</p>
@@ -1093,6 +1160,20 @@ people who've been seen/active. Handy for bans:</p>
   <tr><td><code>$duration(secs)</code></td><td>e.g. <code>$duration(3661)</code> → <code>1hr1min1sec</code></td></tr>
   <tr><td><code>$iif(cond, a, b)</code></td><td>inline if: returns a if cond else b</td></tr>
 </table>
+<h3>Access lists</h3>
+<table>
+  <tr><th>Identifier</th><th>Returns</th></tr>
+  <tr><td><code>$aop</code> · <code>$avoice</code> · <code>$protect</code></td>
+    <td>bare — is that automatic behaviour switched on. With an argument,
+    <code>$aop(address)</code> or <code>$aop(N)</code> looks up an entry
+    (<code>$aop(0)</code> is the count); <code>.type</code> and <code>.network</code>
+    give the entry's scope</td></tr>
+  <tr><td><code>$aowner</code></td><td>the same, for jIRC's auto-owner list. Not an mIRC
+    identifier — mIRC has no owner list</td></tr>
+  <tr><td><code>$ignore</code> · <code>$notify</code></td><td>your ignore / notify list entries</td></tr>
+</table>
+<p>Use the <code>is…</code> operators above to test membership; these read the lists.</p>
+
 <h3>Token lists</h3>
 <p>"Tokens" are pieces of text separated by a character given as its <strong>code</strong>
 (<code>32</code> = space, <code>44</code> = comma, <code>46</code> = dot). Positions are 1-based.</p>
@@ -1401,7 +1482,9 @@ Also supported: DCC chat/send/get/resume/passive transfers and DCC Server,
 <code>/play</code>,
 PARSELINE, UDP/STARTTLS script sockets, IRCv3 account tags/batches/labeled
 responses/chat history negotiation, and SASL
-EXTERNAL/SCRAM-SHA-256/OAUTHBEARER.
+EXTERNAL/SCRAM-SHA-256/OAUTHBEARER, IRCv3 <strong>typing notifications</strong>,
+<strong>MONITOR</strong>, <strong>standard-replies</strong> (FAIL/WARN/NOTE) and
+<strong>STS</strong>.
 </div>
 
 <h3>Not yet (may come later)</h3>

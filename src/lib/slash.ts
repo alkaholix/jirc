@@ -1,7 +1,7 @@
 import { api } from "./api";
 import { serverBufferKey, Buffer, useStore } from "../state/store";
 import { useSettings } from "../state/settings";
-import { useUrlGrabber } from "../state/urlGrabber";
+import { runIgnore, runNotify, runUnignore, runUrls } from "./clientLists";
 import { useChannelCentral } from "../state/channelModes";
 import { dccOffers } from "../state/dcc";
 import { expandEmoji } from "./emoji";
@@ -204,48 +204,17 @@ export async function handleInput(input: string, buffer: Buffer, fromPlugin = fa
     case "wi":
       if (args) await api.whois(serverId, args.split(" ")[0]);
       break;
-    case "ignore": {
-      const st = useSettings.getState();
-      const remove = rest[0] === "-r";
-      const who = remove ? rest[1] : rest[0];
-      if (!who) {
-        const list = st.ignores.length ? st.ignores.join(", ") : "(none)";
-        store.appendLine(serverId, name, kind, { kind: "system", text: `Ignore list: ${list}` });
-      } else if (remove) {
-        st.set("ignores", st.ignores.filter((i) => i.toLowerCase() !== who.toLowerCase()));
-        store.appendLine(serverId, name, kind, { kind: "system", text: `No longer ignoring ${who}` });
-      } else {
-        if (!st.ignores.some((i) => i.toLowerCase() === who.toLowerCase())) {
-          st.set("ignores", [...st.ignores, who]);
-        }
-        store.appendLine(serverId, name, kind, { kind: "system", text: `Ignoring ${who}` });
-      }
-      break;
-    }
-    case "unignore": {
-      const who = rest[0];
-      if (who) {
-        const st = useSettings.getState();
-        st.set("ignores", st.ignores.filter((i) => i !== who));
-        store.appendLine(serverId, name, kind, { kind: "system", text: `No longer ignoring ${who}` });
-      }
-      break;
-    }
-    case "notify": {
-      const st = useSettings.getState();
-      const remove = rest[0] === "-r";
-      const who = remove ? rest[1] : rest[0];
-      if (!who) {
-        const list = st.notifyList.length ? st.notifyList.join(", ") : "(none)";
-        store.appendLine(serverId, name, kind, { kind: "system", text: `Notify list: ${list}` });
-      } else if (remove) {
-        st.set("notifyList", st.notifyList.filter((n) => n.toLowerCase() !== who.toLowerCase()));
-        store.appendLine(serverId, name, kind, { kind: "system", text: `${who} removed from notify` });
-      } else {
-        if (!st.notifyList.some((n) => n.toLowerCase() === who.toLowerCase())) {
-          st.set("notifyList", [...st.notifyList, who]);
-        }
-        store.appendLine(serverId, name, kind, { kind: "system", text: `${who} added to notify` });
+    // The bodies live in `lib/clientLists` so the script path runs the same
+    // code — see the note there.
+    case "ignore":
+    case "unignore":
+    case "notify":
+    case "urls": {
+      const run = { ignore: runIgnore, unignore: runUnignore, notify: runNotify, urls: runUrls }[
+        command as "ignore" | "unignore" | "notify" | "urls"
+      ];
+      for (const line of run(args)) {
+        store.appendLine(serverId, name, kind, { kind: "system", text: line });
       }
       break;
     }
@@ -435,27 +404,6 @@ export async function handleInput(input: string, buffer: Buffer, fromPlugin = fa
           });
         })
         .catch((e) => store.appendLine(serverId, name, kind, { kind: "error", text: `DNS lookup failed: ${e}` }));
-      break;
-    }
-    case "urls": {
-      const grabber = useUrlGrabber.getState();
-      if (args.trim().toLowerCase() === "clear") {
-        grabber.clear();
-        store.appendLine(serverId, name, kind, { kind: "system", text: "URL list cleared." });
-        break;
-      }
-      const urls = grabber.urls;
-      if (!urls.length) {
-        store.appendLine(serverId, name, kind, { kind: "system", text: "No URLs captured yet." });
-      } else {
-        store.appendLine(serverId, name, kind, {
-          kind: "system",
-          text: `Captured URLs (${urls.length}, newest last) — /urls clear to reset:`,
-        });
-        for (const u of urls.slice(-25)) {
-          store.appendLine(serverId, name, kind, { kind: "system", text: `  ${u.url}  — ${u.from} in ${u.buffer}` });
-        }
-      }
       break;
     }
     case "partall":
