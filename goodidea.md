@@ -72,6 +72,38 @@ Help text menus. You asked for the icon bar directly.
 
 ## Proposed but not built
 
+### Discord as a second protocol inside jIRC
+Asked 2026-08-09. Not a bridge — jIRC hosting **two kinds of connection**, so a
+user adds either an IRC/IRCX server or a Discord account, multi-protocol client
+style (Pidgin, Trillian).
+
+**The architecture would take it.** `Buffer` is `{ name, kind, lines, members,
+topic }` with nothing IRC-specific in it, `ConnectionManager` already supervises
+N independent connections, and `UiEvent` is a clean seam — a `discord/` module
+beside `irc/` would only need a handful of the 58 variants (connected,
+disconnected, message, members, topic). The IRC-only ones simply never fire.
+
+**What stops it is not technical.** Logging into a *user* account from a
+third-party client is self-botting: against Discord's ToS, and enforced with
+bans. So the version worth having — chat as yourself, in your own servers —
+cannot be built safely. The legitimate route is a **bot token**, which is fully
+supported but means jIRC appears as a bot, in servers where someone invited that
+bot, posting as the bot. A different and much less useful product.
+
+Two further costs if the auth were ever fine:
+- **Discord messages are mutable.** Edit and delete after the fact; jIRC's
+  virtualized `MessageList` is append-only. `Line` does carry an `id`, so it is
+  possible, but it means real surgery on the store and the renderer.
+- **mSL does not map.** The engine is IRC-shaped throughout — `$chan`, `$nick`,
+  `on TEXT`, `/mode`. What is `/mode` on Discord? Either hide Discord from
+  scripts, invent a mapping, or build a second scripting surface. Expanding mSL
+  for a non-mIRC protocol is exactly the growth working rule 2 exists to stop.
+
+*Recommend not building.* Recorded so the idea is not re-derived and started
+before hitting the ToS wall. Anyone wanting Discord and IRC in one window today
+can run a bridge (e.g. matterbridge), which needs nothing from jIRC — at the
+cost of messages arriving as `<DiscordUser> text` from a relay bot.
+
 ### jIRC-to-jIRC typing over servers without `message-tags`
 Discussed 2026-08-08. Real tags cannot work — the server must relay them — but
 the same effect is reachable via CTCP between two jIRC clients, gated on
