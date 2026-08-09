@@ -3570,11 +3570,12 @@ impl<'a> Runtime<'a> {
         let mut rest = expanded.trim_start();
         let mut switches = String::new();
         if let Some(body) = rest.strip_prefix('-') {
-            let end = body.find(char::is_whitespace).unwrap_or(body.len());
+            let end = write_switch_token_end(body);
             switches = body[..end].to_string();
             rest = body[end..].trim_start();
         }
-        let control_switches = write_control_switches(&switches);
+        let control_switches = write_control_switches(&switches).to_ascii_lowercase();
+        let control_switches = control_switches.as_str();
         let Some((file, text)) = take_file_arg(rest) else {
             return;
         };
@@ -3601,17 +3602,21 @@ impl<'a> Runtime<'a> {
                 line_number = lines
                     .iter()
                     .position(|line| match mode {
-                        's' => line
-                            .get(..pattern.len())
-                            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(pattern)),
+                        's' => line_starts_with_words(line, pattern),
                         'w' => wildcard_match(pattern, line),
-                        'W' => wildcard_match(line, pattern),
                         'r' => ident::mirc_regex_is_match(line, pattern),
-                        'R' => ident::mirc_regex_is_match(pattern, line),
                         _ => false,
                     })
                     .map(|index| index + 1);
             }
+        }
+
+        // `/write -c <file>` with nothing to write is the documented way to
+        // clear a file (data_storage.rst, "Clearing A File"), so it empties the
+        // file rather than leaving a blank line in it.
+        if control_switches.contains('c') && text.is_empty() && line_number.is_none() {
+            let _ = std::fs::write(&path, "");
+            return;
         }
 
         let writes_line = !control_switches.contains('d');
@@ -3636,18 +3641,29 @@ impl<'a> Runtime<'a> {
                 lines.push(text.to_string());
             }
         } else {
-            lines.push(text.to_string());
+            // Appending to the end of the file. `-mN` governs the $crlf that
+            // separates the new text from a last line that has none: plain
+            // /write always writes one, the search forms do not, `-m1` always
+            // does and `-m2` never does (`-m0` is the default behaviour).
+            let separate = if had_final_newline || lines.is_empty() {
+                true
+            } else {
+                match write_numeric_switch(control_switches, 'm') {
+                    Some(1) => true,
+                    Some(2) => false,
+                    _ => search.is_none(),
+                }
+            };
+            match lines.last_mut() {
+                Some(last) if !separate => last.push_str(text),
+                _ => lines.push(text.to_string()),
+            }
         }
 
         content = lines.join("\r\n");
-        let no_final_newline = control_switches.contains('n')
-            || write_numeric_switch(control_switches, 'm') == Some(2);
-        let force_separator = write_numeric_switch(control_switches, 'm') == Some(1);
+        let no_final_newline = control_switches.contains('n');
         let add_final_newline = if writes_line {
-            content.is_empty()
-                || force_separator
-                || had_final_newline
-                || !control_switches.contains('a')
+            content.is_empty() || had_final_newline || !control_switches.contains('a')
         } else {
             had_final_newline && !content.is_empty()
         };
@@ -7858,29 +7874,70 @@ fn write_numeric_switch(switches: &str, wanted: char) -> Option<u32> {
     (!digits.is_empty()).then(|| digits.parse().ok()).flatten()
 }
 
+/// End of `/write`'s switch token. The search pattern is embedded in it
+/// (`-dstest`), and write.rst allows that pattern to hold spaces as long as it
+/// is quoted, so whitespace only ends the token outside a pair of quotes.
+fn write_switch_token_end(body: &str) -> usize {
+    let mut quoted = false;
+    for (offset, ch) in body.char_indices() {
+        match ch {
+            '"' => quoted = !quoted,
+            ch if ch.is_whitespace() && !quoted => return offset,
+            _ => {}
+        }
+    }
+    body.len()
+}
+
+/// The search-mode letter, if the switch token carries one. write.rst documents
+/// `s`, `w` and `r`; the letter is matched either case, as switch letters are
+/// throughout the engine.
+fn write_search_mode(ch: char) -> Option<char> {
+    let lower = ch.to_ascii_lowercase();
+    matches!(lower, 's' | 'w' | 'r').then_some(lower)
+}
+
 /// `/write` embeds the search text in the switch token (`-dstest`). Characters
 /// after the first search-mode letter are data, not more switches.
 fn write_control_switches(switches: &str) -> &str {
     let end = switches
         .char_indices()
-        .find(|(_, ch)| matches!(ch, 's' | 'w' | 'W' | 'r' | 'R'))
+        .find(|(_, ch)| write_search_mode(*ch).is_some())
         .map(|(offset, ch)| offset + ch.len_utf8())
         .unwrap_or(switches.len());
     &switches[..end]
 }
 
-/// Search mode and its attached pattern from `/write -sText`, `-w*mask*`,
-/// `-r/regex/`, and their reverse-pattern uppercase variants.
+/// Search mode and its attached pattern from `/write -sText`, `-w*mask*` and
+/// `-r/regex/`. A pattern holding spaces arrives wrapped in quotes, which are
+/// the argument's delimiters rather than part of the text to match.
 fn write_search_switch(switches: &str) -> Option<(char, String)> {
     for (offset, ch) in switches.char_indices() {
-        if matches!(ch, 's' | 'w' | 'W' | 'r' | 'R') {
-            let pattern = switches[offset + ch.len_utf8()..].to_string();
+        if let Some(mode) = write_search_mode(ch) {
+            let raw = &switches[offset + ch.len_utf8()..];
+            let pattern = raw
+                .strip_prefix('"')
+                .and_then(|inner| inner.strip_suffix('"'))
+                .unwrap_or(raw);
             if !pattern.is_empty() {
-                return Some((ch, pattern));
+                return Some((mode, pattern.to_string()));
             }
         }
     }
     None
+}
+
+/// mIRC's `<words>` file search — `/write -s` and `$read`'s `s` switch. The line
+/// must begin with the whole of `<words>` at a word boundary, so `yes` matches
+/// "yes sir" but not "yesterday news". Case-insensitive, like mIRC's file
+/// searches generally.
+pub(super) fn line_starts_with_words(line: &str, words: &str) -> bool {
+    let line = line.to_lowercase();
+    let words = words.to_lowercase();
+    match line.strip_prefix(&words) {
+        Some(rest) => rest.is_empty() || rest.starts_with(' '),
+        None => false,
+    }
 }
 
 fn hash_text_format(flags: &str) -> super::hash::TextFormat {

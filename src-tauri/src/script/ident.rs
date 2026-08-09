@@ -6460,13 +6460,10 @@ fn eval_read(rt: &mut Runtime, args: &[String]) -> String {
             return String::new();
         }
         if sw.contains('s') {
-            let ml = matchtext.to_lowercase();
-            let ml_sp = format!("{ml} ");
             for (i, line) in data_lines.iter().enumerate().skip(from) {
-                let ll = line.to_lowercase();
                 // Whole-token match: the line equals matchtext or begins with
                 // "matchtext " — so `s,yes` matches "yes ..." but not "yesterday".
-                if ll == ml || ll.starts_with(&ml_sp) {
+                if super::eval::line_starts_with_words(line, &matchtext) {
                     rt.vars.insert(READN_KEY.into(), (i + 1).to_string());
                     let char_count = matchtext.chars().count();
                     let rest = line

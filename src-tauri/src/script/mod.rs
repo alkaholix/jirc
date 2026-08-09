@@ -6390,6 +6390,84 @@ mod tests {
     }
 
     #[test]
+    fn write_switches_match_the_kb() {
+        let dir = std::env::temp_dir().join(format!("jirc-write-kb-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: dir.clone(),
+            state: std::sync::Arc::new(Default::default()),
+        };
+        let engine = ScriptEngine::new();
+        let run = |line: &str| {
+            engine.run_command(&rctx, "#c", line, &[]);
+        };
+        let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap();
+
+        // write.rst's worked example: three lines, an insert before the line
+        // starting with "Hello", then a delete of line 1.
+        run("/write -c Example.txt this is a cool line");
+        run("/write Example.txt hello there!");
+        run("/write Example.txt text files are cool");
+        run("/write -is\"Hello\" Example.txt This will become line 2!");
+        run("/write -dl1 Example.txt");
+        assert_eq!(
+            read("Example.txt"),
+            "This will become line 2!\r\nhello there!\r\ntext files are cool\r\n"
+        );
+
+        // "If <words>, <wildcard>, or <regex> contains spaces, they must be
+        // enclosed by a pair of quotes" — the quotes delimit the pattern and
+        // are not matched against the line.
+        run("/write -c q.txt alpha one");
+        run("/write q.txt beta two");
+        run("/write -s\"beta two\" q.txt REPLACED");
+        assert_eq!(read("q.txt"), "alpha one\r\nREPLACED\r\n");
+
+        // -s scans for <words>, matching whole words as $read's `s` switch
+        // does: `yes` passes over "yesterday news".
+        run("/write -c w.txt yesterday news");
+        run("/write w.txt yes sir");
+        run("/write -syes w.txt REPLACED");
+        assert_eq!(read("w.txt"), "yesterday news\r\nREPLACED\r\n");
+
+        // -c with nothing to write clears the file (data_storage.rst's
+        // "Clearing A File" is `/write -c file.txt`, and crc.rst relies on it
+        // leaving no bytes before /bwrite fills the file).
+        run("/write -c w.txt");
+        assert_eq!(read("w.txt"), "");
+
+        // -mN handles the $crlf *before* a line appended to a file whose last
+        // line lacks one: "/write will always put the $crlf, whereas /write -ws
+        // won't", -m1 adds one if it isn't there and -m2 never adds one.
+        let unterminated = |name: &str| std::fs::write(dir.join(name), "tail").unwrap();
+        unterminated("m0.txt");
+        run("/write m0.txt more");
+        assert_eq!(read("m0.txt"), "tail\r\nmore\r\n");
+        unterminated("ms.txt");
+        run("/write -s\"no such line\" ms.txt more");
+        assert_eq!(read("ms.txt"), "tailmore\r\n");
+        unterminated("m1.txt");
+        run("/write -m1s\"no such line\" m1.txt more");
+        assert_eq!(read("m1.txt"), "tail\r\nmore\r\n");
+        unterminated("m2.txt");
+        run("/write -m2 m2.txt more");
+        assert_eq!(read("m2.txt"), "tailmore\r\n");
+        // A file that already ends in a $crlf is unaffected by any of it.
+        std::fs::write(dir.join("m3.txt"), "tail\r\n").unwrap();
+        run("/write -m2 m3.txt more");
+        assert_eq!(read("m3.txt"), "tail\r\nmore\r\n");
+
+        // -n prevents the $crlf at the end of the written text.
+        run("/write -cn n.txt solo");
+        assert_eq!(read("n.txt"), "solo");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn filter_handles_files_windows_regex_ranges_and_filtered_count() {
         let dir = std::env::temp_dir().join(format!("jirc-filter-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
