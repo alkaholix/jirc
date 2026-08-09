@@ -1702,8 +1702,24 @@ impl<'a> Runtime<'a> {
                 let m = self.expand(raw_args);
                 self.actions.push(Action::Send(format!("MODE {m}")));
             }
+            // `/topic [-r] [#channel] <text>` — `-r` clears the topic instead
+            // of setting one. Unparsed it became part of the channel name.
             "topic" => {
-                let (target, text) = self.split_target(raw_args);
+                let (flags, rest) = split_switches(raw_args);
+                if flags.contains('r') {
+                    let chan = self.expand(rest);
+                    let chan = if chan.trim().is_empty() {
+                        self.event.chan.clone()
+                    } else {
+                        chan.trim().to_string()
+                    };
+                    if !chan.is_empty() {
+                        // An empty trailing parameter is how a topic is removed.
+                        self.actions.push(Action::Send(format!("TOPIC {chan} :")));
+                    }
+                    return;
+                }
+                let (target, text) = self.split_target(rest);
                 self.actions
                     .push(Action::Send(format!("TOPIC {target} :{text}")));
             }
@@ -1728,15 +1744,19 @@ impl<'a> Runtime<'a> {
                         .push(Action::Send(format!("INVITE {nick} {chan}")));
                 }
             }
+            // `/hop [-cnxm] [#channel] [message]`. `-c` names the cycle this
+            // command already does; `-nxm` ask for MDI window states jIRC has no
+            // equivalent of. Both must be consumed — unparsed, `-c` became the
+            // channel name and jIRC sent `PART -c`.
             "hop" => {
-                // /hop [#channel] — cycle the channel (part then rejoin).
-                let ch = self.expand(raw_args);
-                let ch = if ch.is_empty() {
+                let (_flags, rest) = split_switches(raw_args);
+                let ch = self.expand(rest);
+                let ch = if ch.trim().is_empty() {
                     self.event.chan.clone()
                 } else {
                     ch
                 };
-                if !ch.is_empty() {
+                if !ch.trim().is_empty() {
                     self.actions.push(Action::Send(format!("PART {ch}")));
                     self.actions.push(Action::Send(format!("JOIN {ch}")));
                 }
@@ -3074,18 +3094,41 @@ impl<'a> Runtime<'a> {
         }
     }
 
+    /// `/echo [switches] [colour] [target] <text>`.
+    ///
+    /// The switches that change *where* the line goes had been collapsed into
+    /// "any switch means the status window", so `/echo -a` — the most common
+    /// line in mSL — printed to the status window instead of the active one.
     fn cmd_echo(&mut self, raw: &str) {
         let raw = raw.trim();
         let mut rest = raw;
         let mut target = self.reply_target();
-        // Skip a leading switch like -a / -s / -ti.
         if rest.starts_with('-') {
-            if let Some((_, after)) = rest.split_once(char::is_whitespace) {
-                rest = after.trim();
-            } else {
-                rest = "";
+            let (flags, after) = split_switches(rest);
+            rest = after;
+            // `-q` honours `$show`: silent when the alias was called with the
+            // `.` prefix, exactly as mIRC documents it.
+            if flags.contains('q') && !self.show {
+                return;
             }
-            target = STATUS.to_string();
+            // `-a` is the active window, `-s` the status window. `-d` targets
+            // mIRC's dedicated-query window, which jIRC does not have and is
+            // not adding — it belongs with the MDI window-state switches, so it
+            // is consumed and the default target stands.
+            if flags.contains('a') {
+                target = crate::irc::event::ACTIVE_TARGET.to_string();
+            } else if flags.contains('s') {
+                target = STATUS.to_string();
+            }
+            // `-c` says the *next* parameter names a colour, not text. Without
+            // consuming it the colour name was printed as part of the message.
+            if flags.contains('c') {
+                if let Some((_colour, after_colour)) = rest.split_once(char::is_whitespace) {
+                    rest = after_colour.trim();
+                } else {
+                    rest = "";
+                }
+            }
         }
         // An explicit channel or custom-window target.
         if let Some((maybe_target, after)) = rest.split_once(char::is_whitespace) {

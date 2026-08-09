@@ -12,6 +12,49 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🎯 26.8.29 — `/echo -a` goes where you're looking
+
+### The big one
+**`/echo -a` was printing to the status window.** mIRC sends it to the *active*
+window, and `-a` is the most common line in all of mSL — every script that
+reports anything uses it. jIRC treated every switch as if it were `-s`, so all
+of it landed in the console instead of the window you were looking at.
+
+`/echo`'s switches are now read properly:
+- **`-a`** → the active window · **`-s`** → the status window (server console).
+- **`-c <colour>`** consumes the colour name instead of printing it, so
+  `/echo -c red hi` shows `hi` rather than `red hi`.
+- **`-q`** honours `$show`, staying silent when the alias was called with a `.`
+  prefix, as documented.
+
+### Switches that were reaching the server
+A sweep drove every command with documented switches and checked whether any
+reached the wire. Six did; two were real:
+- **`/hop -c`** sent `PART -c` — the switch became the channel name.
+- **`/topic -r`** sent `TOPIC -r :text` instead of clearing the topic, which is
+  what `-r` means.
+
+`/quote` and `/raw` send their line verbatim by design and `/add` was removed
+from mIRC in v3.8, so those three are excluded by name. A test now drives all
+128 remaining commands, so a switch can never quietly reach the server again.
+
+### The dedicated-query window is a non-goal, and was wrong
+mIRC's DQ window puts every private message in one window. It only makes sense
+in a client that spawns a window per conversation, so jIRC will not have one —
+it joins the MDI window-state switches as a window-model non-goal. `/echo -d`,
+`/close -d`, `/filter -d` and `/background -d` are consumed rather than acted on.
+
+Deciding that turned up two things that were **actively wrong** rather than
+merely missing:
+- **`/dqwindow` opened the DCC Transfers window** — an unrelated feature.
+- **`$dqwindow` returned the string `"DCC Transfers"`**, which made the
+  documented `$dqwindow & 1` state test meaningless.
+
+Both are now inert and honest: the command does nothing, the identifier returns
+`0`. A script gets "not enabled" instead of a plausible-looking wrong answer.
+
+---
+
 ## 🗂️ 26.8.28 — The menu bar is back, as a choice
 
 - **Settings → Appearance → Menu bar** switches the top bar between **Icons**

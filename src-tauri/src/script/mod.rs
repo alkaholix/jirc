@@ -4827,7 +4827,7 @@ mod tests {
         assert_eq!(
             engine.run_alias(&ctx(), "", "inspect", ""),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "$true maximized $false $true on on off on on $true $false $true 2 Alice 2 $false $true 1 Bad!*@* 1 1 jIRC 2 Verdana hello world 2 7".into(),
             }]
         );
@@ -4838,7 +4838,7 @@ mod tests {
         assert_eq!(
             engine.run_alias(&ctx(), "", "active", ""),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "$true normal".into(),
             }]
         );
@@ -4846,7 +4846,7 @@ mod tests {
         assert_eq!(
             engine.run_alias(&ctx(), "", "active", ""),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "$false normal".into(),
             }]
         );
@@ -4864,7 +4864,7 @@ mod tests {
         assert_eq!(
             actions,
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "[97 40 98 93 99 ]".into()
             }]
         );
@@ -4881,7 +4881,7 @@ mod tests {
         assert_eq!(
             actions,
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "[97 ESC 98 ]".into()
             }]
         );
@@ -4898,7 +4898,7 @@ mod tests {
         assert_eq!(
             actions,
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "[thedefault]".into()
             }]
         );
@@ -5652,7 +5652,7 @@ mod tests {
         assert_eq!(
             key,
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "key A ctrl A 65 $true".into()
             }]
         );
@@ -5672,7 +5672,7 @@ mod tests {
                     }
                 ),
                 vec![Action::Echo {
-                    target: "(status)".into(),
+                    target: "(active)".into(),
                     text: expected.into()
                 }]
             );
@@ -5733,7 +5733,7 @@ mod tests {
                     }
                 ),
                 vec![Action::Echo {
-                    target: "(status)".into(),
+                    target: "(active)".into(),
                     text: expected.into()
                 }]
             );
@@ -5763,7 +5763,7 @@ mod tests {
                 }
             ),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "sockwrite sock".into()
             }]
         );
@@ -6173,7 +6173,7 @@ mod tests {
         assert_eq!(
             incoming.actions,
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "in $true $false :nick PRIVMSG #c :cafÃ©".into(),
             }]
         );
@@ -6287,7 +6287,7 @@ mod tests {
         assert_eq!(
             engine.run_alias(&ctx(), "", "show", ""),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "one.mrc 4 2 two.mrc".into(),
             }]
         );
@@ -6307,7 +6307,7 @@ mod tests {
         assert_eq!(
             engine.run_alias(&ctx(), "", "show", ""),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "2 one.mrc Two.mrc Two.mrc".into(),
             }]
         );
@@ -6854,7 +6854,7 @@ mod tests {
         assert_eq!(
             inspect,
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "debug output".into(),
             }]
         );
@@ -7134,7 +7134,7 @@ mod tests {
         assert_eq!(
             actions,
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "example.test 1 192.0.2.1".into()
             }]
         );
@@ -7176,7 +7176,7 @@ mod tests {
                 }
             ),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "active #chan".into()
             }]
         );
@@ -7195,7 +7195,7 @@ mod tests {
         assert_eq!(
             actions,
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "tab hello al".into()
             }]
         );
@@ -8630,6 +8630,224 @@ mod tests {
             run("msg bob hello"),
             vec![Action::Send("PRIVMSG bob :hello".into())]
         );
+    }
+
+    /// A documented switch must never reach the server.
+    ///
+    /// `/join -i` once put a literal `JOIN -i` on the wire, and `/hop -c` a
+    /// `PART -c`: the command never parsed its switches, so the switch became
+    /// part of the channel name. This drives every command that has documented
+    /// switches and fails if one shows up in an outgoing line.
+    ///
+    /// `/quote` and `/raw` are excluded because sending the line verbatim is
+    /// their whole purpose, and `/add` because mIRC removed it in v3.8 — the
+    /// unknown-command passthrough is the right answer there.
+    #[test]
+    fn documented_switches_never_reach_the_server() {
+        let cases: &[(&str, &str)] = &[
+            ("abook", "abook -c zzz"),
+            ("alias", "alias -s zzz"),
+            ("aline", "aline -a zzz"),
+            ("aop", "aop -a zzz"),
+            ("auser", "auser -a zzz"),
+            ("autojoin", "autojoin -n zzz"),
+            ("avoice", "avoice -a zzz"),
+            ("background", "background -a zzz"),
+            ("ban", "ban -k zzz"),
+            ("bcopy", "bcopy -c zzz"),
+            ("bread", "bread -a zzz"),
+            ("bset", "bset -a zzz"),
+            ("bwrite", "bwrite -a zzz"),
+            ("clear", "clear -c zzz"),
+            ("clearall", "clearall -a zzz"),
+            ("cline", "cline -h zzz"),
+            ("clipboard", "clipboard -a zzz"),
+            ("close", "close -c zzz"),
+            ("cnick", "cnick -a zzz"),
+            ("color", "color -l zzz"),
+            ("colour", "colour -l zzz"),
+            ("copy", "copy -a zzz"),
+            ("creq", "creq -m zzz"),
+            ("dcc", "dcc -c zzz"),
+            ("dccserver", "dccserver -c zzz"),
+            ("debug", "debug -c zzz"),
+            ("dec", "dec -c zzz"),
+            ("dialog", "dialog -a zzz"),
+            ("did", "did -a zzz"),
+            ("dline", "dline -h zzz"),
+            ("dns", "dns -c zzz"),
+            ("drawcopy", "drawcopy -h zzz"),
+            ("drawdot", "drawdot -h zzz"),
+            ("drawfill", "drawfill -h zzz"),
+            ("drawline", "drawline -h zzz"),
+            ("drawpic", "drawpic -c zzz"),
+            ("drawrect", "drawrect -c zzz"),
+            ("drawreplace", "drawreplace -n zzz"),
+            ("drawrot", "drawrot -b zzz"),
+            ("drawsave", "drawsave -a zzz"),
+            ("drawscroll", "drawscroll -h zzz"),
+            ("drawtext", "drawtext -b zzz"),
+            ("echo", "echo -a zzz"),
+            ("editbox", "editbox -a zzz"),
+            ("exit", "exit -n zzz"),
+            ("filter", "filter -L zzz"),
+            ("findtext", "findtext -n zzz"),
+            ("firewall", "firewall -c zzz"),
+            ("flush", "flush -l zzz"),
+            ("font", "font -a zzz"),
+            ("fopen", "fopen -n zzz"),
+            ("fseek", "fseek -l zzz"),
+            ("fwrite", "fwrite -b zzz"),
+            ("ghide", "ghide -h zzz"),
+            ("gload", "gload -h zzz"),
+            ("gmove", "gmove -h zzz"),
+            ("gopts", "gopts -b zzz"),
+            ("gplay", "gplay -h zzz"),
+            ("gpoint", "gpoint -h zzz"),
+            ("groups", "groups -d zzz"),
+            ("gshow", "gshow -h zzz"),
+            ("gsize", "gsize -h zzz"),
+            ("gstop", "gstop -c zzz"),
+            ("gtalk", "gtalk -h zzz"),
+            ("guser", "guser -a zzz"),
+            ("hadd", "hadd -b zzz"),
+            ("hdec", "hdec -b zzz"),
+            ("hdel", "hdel -s zzz"),
+            ("hfree", "hfree -s zzz"),
+            ("hinc", "hinc -b zzz"),
+            ("hload", "hload -B zzz"),
+            ("hmake", "hmake -s zzz"),
+            ("hop", "hop -c zzz"),
+            ("hsave", "hsave -B zzz"),
+            ("ialfill", "ialfill -f zzz"),
+            ("ialmark", "ialmark -n zzz"),
+            ("ignore", "ignore -a zzz"),
+            ("iline", "iline -a zzz"),
+            ("inc", "inc -c zzz"),
+            ("join", "join -d zzz"),
+            ("linesep", "linesep -a zzz"),
+            ("links", "links -n zzz"),
+            ("load", "load -N zzz"),
+            ("loadbuf", "loadbuf -a zzz"),
+            ("localinfo", "localinfo -h zzz"),
+            ("log", "log -f zzz"),
+            ("mdi", "mdi -a zzz"),
+            ("msg", "msg -d zzz"),
+            ("notify", "notify -h zzz"),
+            ("parseline", "parseline -a zzz"),
+            ("play", "play -a zzz"),
+            ("protect", "protect -a zzz"),
+            ("proxy", "proxy -c zzz"),
+            ("reload", "reload -a zzz"),
+            ("remove", "remove -b zzz"),
+            ("rename", "rename -f zzz"),
+            ("rlevel", "rlevel -r zzz"),
+            ("rline", "rline -a zzz"),
+            ("run", "run -a zzz"),
+            ("savebuf", "savebuf -a zzz"),
+            ("scid", "scid -a zzz"),
+            ("scon", "scon -a zzz"),
+            ("server", "server -a zzz"),
+            ("set", "set -e zzz"),
+            ("showmirc", "showmirc -f zzz"),
+            ("signal", "signal -n zzz"),
+            ("sline", "sline -a zzz"),
+            ("sockaccept", "sockaccept -n zzz"),
+            ("sockopen", "sockopen -d zzz"),
+            ("sockudp", "sockudp -b zzz"),
+            ("sockwrite", "sockwrite -a zzz"),
+            ("sreq", "sreq -m zzz"),
+            ("timer", "timer -P zzz"),
+            ("timestamp", "timestamp -a zzz"),
+            ("tip", "tip -c zzz"),
+            ("titlebar", "titlebar -m zzz"),
+            ("toolbar", "toolbar -a zzz"),
+            ("topic", "topic -r zzz"),
+            ("unload", "unload -a zzz"),
+            ("unset", "unset -g zzz"),
+            ("url", "url -a zzz"),
+            ("var", "var -g zzz"),
+            ("vcmd", "vcmd -a zzz"),
+            ("vcrem", "vcrem -a zzz"),
+            ("vol", "vol -m zzz"),
+            ("window", "window -B zzz"),
+            ("write", "write -a zzz"),
+            ("writeini", "writeini -n zzz"),
+        ];
+        let mut leaked = Vec::new();
+        for (name, line) in cases {
+            let engine = ScriptEngine::new();
+            engine.load(&format!("alias t {{ {line} }}"));
+            for action in engine.run_alias(&ctx(), "#c", "t", "") {
+                if let Action::Send(sent) = action {
+                    if sent
+                        .split_whitespace()
+                        .any(|word| word.len() == 2 && word.starts_with('-'))
+                    {
+                        leaked.push(format!("/{name} -> {sent}"));
+                    }
+                }
+            }
+        }
+        assert!(leaked.is_empty(), "switches reached the server: {leaked:#?}");
+    }
+
+    /// `/echo`'s switches decide *where* the line goes. They had been collapsed
+    /// into "any switch means the status window", so `/echo -a` — the most
+    /// common line in mSL — printed to the status window rather than the active
+    /// one, and `/echo -c red hi` printed "red hi".
+    ///
+    /// Switch meanings from `mirckb-master/docs/source/commands/echo.rst`.
+    #[test]
+    fn echo_switches_choose_the_window() {
+        let run = |body: &str| {
+            let engine = ScriptEngine::new();
+            engine.load(&format!("alias t {{ {body} }}"));
+            engine
+                .run_alias(&ctx(), "#c", "t", "")
+                .into_iter()
+                .find_map(|a| match a {
+                    Action::Echo { target, text } => Some((target, text)),
+                    _ => None,
+                })
+        };
+
+        // No switch: the reply target, as before.
+        assert_eq!(run("echo hello"), Some(("#c".into(), "hello".into())));
+        // `-a` is the active window. `(active)` is the sentinel the frontend
+        // resolves, since only it knows which window has focus.
+        assert_eq!(run("echo -a hello"), Some(("(active)".into(), "hello".into())));
+        assert_eq!(run("echo -s hello"), Some(("(status)".into(), "hello".into())));
+        // `-d` targets mIRC's dedicated-query window, which jIRC does not have
+        // and is not adding — it is consumed like the MDI window-state
+        // switches, leaving the default target in place.
+        assert_eq!(run("echo -d hello"), Some(("#c".into(), "hello".into())));
+        // Combined switches still resolve the window one.
+        assert_eq!(run("echo -at hello"), Some(("(active)".into(), "hello".into())));
+
+        // `-c` means the next parameter names a colour; it must be consumed
+        // rather than printed.
+        assert_eq!(run("echo -c red hello"), Some(("#c".into(), "hello".into())));
+
+        // An explicit target still wins over the switch.
+        assert_eq!(run("echo #chan hello"), Some(("#chan".into(), "hello".into())));
+        assert_eq!(run("echo -a #chan hello"), Some(("#chan".into(), "hello".into())));
+
+        // `-q` honours `$show`, which is false when *the alias* was invoked
+        // with a `.` prefix — not when the echo itself is. So the same alias is
+        // silent one way and not the other.
+        let engine = ScriptEngine::new();
+        engine.load("alias say { echo -q $1 }
+alias t { .say hidden | say shown }");
+        let shown: Vec<String> = engine
+            .run_alias(&ctx(), "#c", "t", "")
+            .into_iter()
+            .filter_map(|a| match a {
+                Action::Echo { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(shown, vec!["shown".to_string()]);
     }
 
     #[test]
@@ -11087,7 +11305,7 @@ mod tests {
                     reservation_id: 77,
                 },
                 Action::Echo {
-                    target: "(status)".into(),
+                    target: "(active)".into(),
                     text: "ex=pending mark=hello".into(),
                 },
             ]
@@ -11161,11 +11379,11 @@ mod tests {
             engine.run_alias(&ctx(), "", "t", ""),
             vec![
                 Action::Echo {
-                    target: "(status)".into(),
+                    target: "(active)".into(),
                     text: "first=10022".into(),
                 },
                 Action::Echo {
-                    target: "(status)".into(),
+                    target: "(active)".into(),
                     text: "second=0".into(),
                 },
             ]
@@ -11224,7 +11442,7 @@ mod tests {
         assert_eq!(
             engine.run_alias(&ctx(), "", "send", ""),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "sq=3 err=0".into(),
             }]
         );
@@ -11245,7 +11463,7 @@ mod tests {
         assert_eq!(
             engine.run_alias(&ctx(), "", "send", ""),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "sq=3 err=0".into(),
             }]
         );
@@ -11263,7 +11481,7 @@ mod tests {
                     error: MISSING_SOCKET,
                 },
                 Action::Echo {
-                    target: "(status)".into(),
+                    target: "(active)".into(),
                     text: format!("sq=3 err={MISSING_SOCKET}"),
                 },
             ]
@@ -11300,7 +11518,7 @@ mod tests {
                     error: CONNECTION_RESET,
                 },
                 Action::Echo {
-                    target: "(status)".into(),
+                    target: "(active)".into(),
                     text: format!("err={MISSING_SOCKET}"),
                 },
             ]
@@ -11321,7 +11539,7 @@ mod tests {
         assert_eq!(
             engine.run_alias(&ctx(), "", "read", ""),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: format!("dest=keep br=0 err={CONNECTION_RESET}"),
             }]
         );
@@ -11598,7 +11816,7 @@ mod tests {
                 &[],
             ),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "value=global local=$false".into(),
             }]
         );
@@ -11610,7 +11828,7 @@ mod tests {
         assert_eq!(
             engine.run_command(&ctx(), "#c", "/echo -a only=[ $+ %only $+ ]", &[]),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "only=[]".into()
             }]
         );
@@ -11646,7 +11864,7 @@ mod tests {
         assert_eq!(
             engine.run_command(&ctx(), "#c", "/echo -a $var(%temp,1).secs", &[]),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "30".into()
             }]
         );
@@ -11677,7 +11895,7 @@ mod tests {
         assert_eq!(
             engine.run_command(&ctx(), "#c", "/echo -a [ $+ %temp $+ ]", &[]),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "[]".into()
             }]
         );
@@ -11727,7 +11945,7 @@ mod tests {
         assert_eq!(
             engine.run_command(&ctx(), "#c", "/echo -a $hget(cache,item).unset", &[]),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "30".into()
             }]
         );
@@ -11766,7 +11984,7 @@ mod tests {
         assert_eq!(
             engine.run_command(&ctx(), "#c", "/echo -a [ $+ $hget(cache,count) $+ ]", &[]),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "[]".into()
             }]
         );
@@ -12033,7 +12251,7 @@ mod tests {
             assert_eq!(
                 engine.dispatch_event(&ctx(), kind, EventVars::default()),
                 vec![Action::Echo {
-                    target: "(status)".into(),
+                    target: "(active)".into(),
                     text: format!("fired {kind}")
                 }],
                 "braceless `on *:{kind}:<command>` was dropped"
@@ -12044,7 +12262,7 @@ mod tests {
             assert_eq!(
                 legacy.dispatch_event(&ctx(), kind, EventVars::default()),
                 vec![Action::Echo {
-                    target: "(status)".into(),
+                    target: "(active)".into(),
                     text: format!("fired {kind}")
                 }],
                 "legacy `on *:{kind}:*:<command>` regressed"
@@ -12067,7 +12285,7 @@ mod tests {
                 }
             ),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "example.org 198.51.100.7 example.org".into()
             }]
         );
@@ -12366,11 +12584,11 @@ mod tests {
             engine.run_alias(&ctx(), "", "def", ""),
             vec![
                 Action::Echo {
-                    target: "(status)".into(),
+                    target: "(active)".into(),
                     text: "before".into()
                 },
                 Action::Echo {
-                    target: "(status)".into(),
+                    target: "(active)".into(),
                     text: "after".into()
                 },
             ]
@@ -12378,7 +12596,7 @@ mod tests {
         assert_eq!(
             engine.run_alias(&ctx(), "", "hard", ""),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "before".into()
             }]
         );
@@ -13073,14 +13291,14 @@ mod tests {
         assert_eq!(
             engine.run_alias(&ctx(), "#current", "inspect", ""),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "3 #a 2 paused b.txt".into(),
             }]
         );
         assert_eq!(
             engine.run_play_command(&ctx(), "#current", "echo -a $pnick", "", "#dest"),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "#dest".into(),
             }]
         );
@@ -13162,7 +13380,7 @@ menu nicklist {
         assert_eq!(
             engine.dispatch_event(&ctx(), "APPACTIVE", EventVars::default()),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "app-$false".into()
             }]
         );
@@ -13179,7 +13397,7 @@ menu nicklist {
                 },
             ),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "char-65-A-$true".into()
             }]
         );
@@ -13199,7 +13417,7 @@ menu nicklist {
                 },
             ),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "hot food dclick 3 7".into()
             }]
         );
@@ -13215,7 +13433,7 @@ menu nicklist {
                 },
             ),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "logon-Net-irc.example.org".into()
             }]
         );
@@ -13233,7 +13451,7 @@ menu nicklist {
                 },
             ),
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "serv-guest-root/-dir files".into()
             }]
         );
@@ -13257,7 +13475,7 @@ menu nicklist {
         assert_eq!(
             early,
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "early".into()
             }]
         );
@@ -13267,7 +13485,7 @@ menu nicklist {
                 .dispatch_event_status(&ctx(), "LOGON", vars, None, Some(false))
                 .0,
             vec![Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "normal".into()
             }]
         );
@@ -13293,11 +13511,11 @@ menu nicklist {
         );
         let actions = drive_event_halt_raw(&engine, &ctx(), &mode, Some(&raw)).0;
         assert!(actions.contains(&Action::Echo {
-            target: "(status)".into(),
+            target: "(active)".into(),
             text: "servermode-irc.example.org-#c-+o bob".into()
         }));
         assert!(actions.contains(&Action::Echo {
-            target: "(status)".into(),
+            target: "(active)".into(),
             text: "serverop-irc.example.org-bob".into()
         }));
 
@@ -13311,7 +13529,7 @@ menu nicklist {
         };
         assert!(
             drive_event(&engine, &ctx(), &sound).contains(&Action::Echo {
-                target: "(status)".into(),
+                target: "(active)".into(),
                 text: "nosound-alice-missing-event-test.wav".into(),
             })
         );

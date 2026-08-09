@@ -327,9 +327,15 @@ export function routeClientCommand(
       useSettings.getState().set("trace", mode === "on" || mode === "1");
       break;
     }
-    case "dqwindow":
     case "flist":
       useStore.getState().setActive(useStore.getState().ensureBuffer(event.serverId, "DCC Transfers", "window"));
+      break;
+    // mIRC's dedicated-query window puts every private message in one window.
+    // jIRC has no equivalent and is not adding one — it belongs with the MDI
+    // window-state features the single-window layout has no place for. Kept
+    // recognised so a script calling it is silently inert rather than opening
+    // the DCC Transfers window, which is what it used to do.
+    case "dqwindow":
       break;
     case "firewall":
     case "proxy":

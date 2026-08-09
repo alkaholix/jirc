@@ -1280,7 +1280,12 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             .get(super::eval::CLIENT_DESKTOP_HEIGHT_KEY)
             .cloned()
             .unwrap_or_else(|| "0".into()),
-        "dqwindow" => "DCC Transfers".into(),
+        // mIRC's dedicated-query window redirects every private message into
+        // one window. jIRC has no such window and is not adding one, so the
+        // honest answer is the bitfield with nothing set: not enabled, not
+        // open. It previously reported the string "DCC Transfers", which is an
+        // unrelated window and made `$dqwindow & 1` nonsense.
+        "dqwindow" => "0".into(),
         "emailaddr" => rt
             .vars
             .get(super::eval::CLIENT_EMAIL_KEY)
