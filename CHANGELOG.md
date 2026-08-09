@@ -12,6 +12,18 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## ✨ 26.8.26 — Tidier tree, and a proper welcome
+
+- **The welcome screen shows the app icon and the version.** The `#` mark sits
+  beside the wordmark with the version underneath, so which build you are running
+  is visible without opening About.
+- **Removed the "jIRC" bar above the tree.** It was left over from when that row
+  held the toolbar icons; once those moved to the top bar in 26.8.24 it was a
+  full-width strip containing nothing but the app's own name. The tree now starts
+  at the top, matching the switchbar layout, which never had one.
+
+---
+
 ## 🔗 26.8.25 — Every input-bar command now works from scripts
 
 Typed input falls through to the script engine, but a script never reached the

@@ -56,6 +56,30 @@ import { checkForUpdateOnStartup, updateNotificationBody } from "./lib/updater";
 import { DockLayout, type DockPane } from "./components/DockLayout";
 import { TipOverlay } from "./components/TipOverlay";
 import { ScriptMenubarMenu } from "./components/ScriptMenubarMenu";
+import { version as appVersion } from "../package.json";
+
+/** The app icon, inline so it scales with the heading and needs no asset path.
+ *  Mirrors `src-tauri/icons/icon-source.svg` — keep the two in step. */
+function JircLogo() {
+  return (
+    <svg className="welcome-logo" viewBox="0 0 1024 1024" role="img" aria-label="jIRC">
+      <defs>
+        <linearGradient id="jircBg" gradientUnits="userSpaceOnUse" x1="150" y1="110" x2="900" y2="930">
+          <stop offset="0" stopColor="#93b7ff" />
+          <stop offset="0.5" stopColor="#7aa2f7" />
+          <stop offset="1" stopColor="#5677d8" />
+        </linearGradient>
+      </defs>
+      <rect x="0" y="0" width="1024" height="1024" rx="224" fill="url(#jircBg)" />
+      <g fill="#ffffff">
+        <rect x="404" y="297" width="68" height="430" rx="30" />
+        <rect x="552" y="297" width="68" height="430" rx="30" />
+        <rect x="322" y="396" width="380" height="68" rx="30" />
+        <rect x="322" y="560" width="380" height="68" rx="30" />
+      </g>
+    </svg>
+  );
+}
 
 const ScriptDialog = lazy(() =>
   import("./components/ScriptDialog").then((module) => ({ default: module.ScriptDialog }))
@@ -609,7 +633,11 @@ function MainApp() {
           )
         ) : (
           <div className="welcome">
-            <h1>jIRC</h1>
+            <div className="welcome-title">
+              <JircLogo />
+              <h1>jIRC</h1>
+            </div>
+            <p className="welcome-version">Version {appVersion}</p>
             <p>A modern IRC client with mIRC-style power — standard IRC &amp; IRCX.</p>
             <div className="welcome-actions">
               <button onClick={() => setDialogOpen(true)}>

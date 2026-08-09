@@ -99,9 +99,6 @@ export function Sidebar() {
 
   return (
     <nav className="sidebar">
-      <div className="sidebar-header">
-        <span>jIRC</span>
-      </div>
       <div className="sidebar-body">
         {Object.values(servers).map((srv) => (
           <ServerGroup key={srv.id} server={srv} buffers={byServer[srv.id] ?? []} />

@@ -311,16 +311,6 @@ input:focus {
   flex-direction: column;
   overflow: hidden;
 }
-.sidebar-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.6rem 0.8rem;
-  font-weight: 700;
-  color: var(--accent);
-  letter-spacing: 0.05em;
-  border-bottom: 1px solid var(--border);
-}
 .icon-btn {
   background: transparent;
   border: 1px solid var(--border);
@@ -1364,10 +1354,29 @@ img.nick-icon {
   gap: 0.8rem;
   align-items: center;
 }
+.welcome-title {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+/* Sized in `em` so the mark tracks the heading rather than needing its own
+   breakpoints. */
+.welcome-logo {
+  width: 1.15em;
+  height: 1.15em;
+  font-size: 3rem;
+  flex: 0 0 auto;
+}
 .welcome h1 {
   font-size: 3rem;
   color: var(--accent);
   margin: 0;
+}
+.welcome-version {
+  margin: -0.5rem 0 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  letter-spacing: 0.03em;
 }
 .welcome p {
   color: var(--muted);
