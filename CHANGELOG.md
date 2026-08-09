@@ -12,6 +12,53 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## ⏳ 26.8.30 — Countdown variables, and `/write` does what its page says
+
+### `/set -z` — a variable that counts itself down
+`set -z %launch 3` now reads 3, then 2, then 1, and unsets itself at zero. The
+switch was parsed and thrown away before, so the value just sat there.
+
+It works like `-u<value>` with the value *being* the seconds left, so reading
+`%launch` always gives the right number without a timer running behind every
+variable. One difference from mIRC: `-zs` there prints every step as it ticks,
+and jIRC prints only the first line, because there is no per-second tick to
+print from.
+
+A value mIRC documents no countdown for — a negative, a decimal, plain text —
+stays an ordinary assignment instead of jIRC guessing what counting it down
+would mean.
+
+### `/write` — four switches were wrong, including in mIRC's own example
+The example on mIRC's `/write` page did not work:
+
+```
+write -is"Hello" Example.txt This will become line 2!
+```
+
+The switch ended at the first space and the quotes were treated as part of the
+text to find, so this matched nothing and appended to the end of the file
+instead of inserting at line 2. With a space inside the quotes it was worse —
+`/write -s"beta two" notes.txt REPLACED` wrote to a file called `two"`. **A
+quoted pattern now works, with or without spaces in it.**
+
+- **`-s` matches whole words.** `-syes` was matching `yesterday news`; it now
+  finds `yes sir` and skips `yesterday`, the way `$read`'s `s` switch already
+  did. Use `-w` for partial matches (`-wyes*`).
+- **`/write -c file` with no text empties the file.** It was leaving a blank
+  line behind, which is the difference between an empty file and a 2-byte one
+  if you then write binary into it.
+- **`-mN` was working on the wrong end of the line.** It controls the line
+  break *before* text appended to a file whose last line hasn't got one —
+  `-m1` always adds it, `-m2` never does. `-n` remains the switch for the line
+  break after your text, and `-m2` no longer eats it.
+- **`-W` and `-R` are gone.** They matched in reverse, treating the line as the
+  pattern, which is `$hfind`'s behaviour and not something `/write` has. They
+  now read as `-w` and `-r`.
+
+Help → Variables and Help → Files document all of this.
+
+---
+
 ## 🎯 26.8.29 — `/echo -a` goes where you're looking
 
 ### The big one

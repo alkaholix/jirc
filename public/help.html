@@ -527,6 +527,25 @@ for the words the user typed after it.</p>
   <span class="k">/while</span> (<span class="v">%i</span> &lt; 3) { <span class="k">/inc</span> <span class="v">%i</span> | <span class="k">/echo</span> tick <span class="v">%i</span> }
 }
 </code></pre>
+<h3>Switches on <code>/set</code></h3>
+<table>
+  <tr><th>Switch</th><th>Effect</th></tr>
+  <tr><td><code>/set -u&lt;n&gt; %x value</code></td><td>Unset it after <em>n</em> seconds. <code>-u0</code> unsets it when the script finishes.</td></tr>
+  <tr><td><code>/set -z %x &lt;n&gt;</code></td><td>Count <em>n</em> down by one a second, then unset it. Reading the variable gives the seconds left.</td></tr>
+  <tr><td><code>/set -k %x value</code></td><td>Keep the timer already on the variable instead of clearing it.</td></tr>
+  <tr><td><code>/set -i %x value</code></td><td>Only set it if it has no value yet — the usual way to initialise.</td></tr>
+  <tr><td><code>/set -s %x value</code></td><td>Also echo <code>* Set %x to value</code>.</td></tr>
+  <tr><td><code>/set -l %x value</code> · <code>-g</code></td><td>Force local · force global.</td></tr>
+  <tr><td><code>/set -n %x 1 + 1</code> · <code>-p</code></td><td>Keep the value literal instead of working out the one sum <code>/set</code> normally does.</td></tr>
+</table>
+<pre><code><span class="c">; a 10-second cooldown, and a countdown you can read</span>
+<span class="k">/set</span> -u10 <span class="v">%cooldown</span> 1
+<span class="k">/set</span> -z <span class="v">%launch</span> 3
+<span class="k">/echo</span> lift-off in <span class="v">%launch</span>   <span class="c">; 3, then 2, then 1 — gone at zero</span>
+</code></pre>
+<p>A <code>-z</code> countdown is worked out when you read it, so <code>%launch</code> is always
+the right number. mIRC's <code>-zs</code> also prints each step as it ticks; jIRC prints
+only the first line, since it has no per-second tick to print from.</p>
 <h3>Dynamic variables</h3>
 <p>You can build a variable name on the fly with
 <code><span class="v">%name.</span> [ $+ [ &lt;value&gt; ] ]</code> — the part in brackets is
@@ -1269,7 +1288,14 @@ write anywhere else on your disk.</p>
 <table>
   <tr><th>Command / Identifier</th><th>Effect</th></tr>
   <tr><td><code>/write file text</code></td><td>append <em>text</em> as a new line</td></tr>
-  <tr><td><code>/write -c file [text]</code></td><td>clear the file first, then optionally write</td></tr>
+  <tr><td><code>/write -c file [text]</code></td><td>clear the file first, then optionally write. <code>/write -c file</code> on its own empties it</td></tr>
+  <tr><td><code>/write -l&lt;n&gt; file text</code></td><td>replace line <em>n</em></td></tr>
+  <tr><td><code>/write -il&lt;n&gt; file text</code></td><td>insert <em>before</em> line <em>n</em></td></tr>
+  <tr><td><code>/write -dl&lt;n&gt; file</code></td><td>delete line <em>n</em></td></tr>
+  <tr><td><code>/write -s&lt;words&gt; file text</code></td><td>act on the first line <em>starting with</em> those words instead of a line number</td></tr>
+  <tr><td><code>/write -w&lt;wildcard&gt; file text</code> · <code>-r/regex/</code></td><td>the same, choosing the line by wildcard or regex</td></tr>
+  <tr><td><code>/write -a file text</code></td><td>add the text to the end of the chosen line instead of replacing it</td></tr>
+  <tr><td><code>/write -n file text</code></td><td>don't put a line break after the text</td></tr>
   <tr><td><code>$read(file)</code></td><td>a random line</td></tr>
   <tr><td><code>$read(file, n)</code></td><td>line number n</td></tr>
   <tr><td><code>$read(file, w, *pattern*)</code></td><td>first line matching a wildcard (whole line)</td></tr>
@@ -1282,10 +1308,27 @@ write anywhere else on your disk.</p>
   <tr><td><code>$file(name).size</code> · <code>.mtime</code> · <code>.ctime</code> · <code>.name</code> · <code>.ext</code></td><td>file info: size in bytes, modified / created unix time, leaf name, extension</td></tr>
   <tr><td><code>$scriptdir</code></td><td>the sandbox folder path (with trailing separator)</td></tr>
 </table>
+<p>The switches combine, and the line-picking ones go in the same block:
+<code>-dl1</code> deletes line 1, <code>-is"Hello"</code> inserts before the first line that
+starts with <em>Hello</em>. Two things worth knowing:</p>
+<ul>
+  <li><strong>A pattern with spaces must be quoted</strong> — <code>-s"two words"</code>.
+      The quotes mark where the pattern ends; they aren't matched against the line.</li>
+  <li><strong><code>-s</code> matches whole words</strong>, so <code>-syes</code> finds
+      <code>yes sir</code> but skips <code>yesterday news</code>. Use <code>-w</code> for
+      <code>-wyes*</code>-style partial matches.</li>
+</ul>
 <pre><code><span class="c">; a simple quotes database</span>
 <span class="k">alias</span> addquote { <span class="k">/write</span> quotes.txt <span class="i">$1-</span> }
 <span class="k">alias</span> quote    { <span class="k">/msg</span> <span class="i">$chan</span> <span class="i">$read</span>(quotes.txt) }
+
+<span class="c">; edit a config file in place</span>
+<span class="k">/write</span> -s"server host" config.txt server host irc.example.org
+<span class="k">/write</span> -dsnickname config.txt          <span class="c">; drop the nickname line</span>
 </code></pre>
+<p>If the last line of a file doesn't end in a line break, plain <code>/write</code> starts
+a new line anyway while the <code>-s</code>/<code>-w</code>/<code>-r</code> forms carry on at the end
+of it. <code>-m1</code> always starts a new line, <code>-m2</code> never does.</p>
 
 <h2 id="hash">Hash tables</h2>
 <p>Key/value storage. Tables live for the session, but can be saved to / loaded
