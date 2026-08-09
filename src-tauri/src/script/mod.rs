@@ -8520,6 +8520,118 @@ mod tests {
         assert_eq!(run("/msg #c [ $+ hi $+ ]"), "[hi]");
     }
 
+    /// `$mode(N)` reports who a mode change affected. It was absent entirely —
+    /// a name-scan missed that, because `.op`/`.deop`/`.ban` matched unrelated
+    /// code elsewhere in the engine.
+    #[test]
+    fn mode_identifier_reports_affected_nicks() {
+        use crate::irc::state::{ChannelView, StateSnapshot};
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(StateSnapshot {
+                channels: vec![ChannelView {
+                    name: "#c".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        };
+        // Drive `on RAWMODE`, whose $1- is the whole change.
+        let run = |modes: &str, expr: &str| {
+            let engine = ScriptEngine::new();
+            engine.load(&format!("on *:RAWMODE:#:{{ /msg #c [{expr}] }}"));
+            engine
+                .dispatch_event(
+                    &rctx,
+                    "RAWMODE",
+                    EventVars {
+                        nick: "op".into(),
+                        chan: "#c".into(),
+                        target: "#c".into(),
+                        params: modes.split(' ').map(String::from).collect(),
+                        text: modes.into(),
+                        ..Default::default()
+                    },
+                )
+                .into_iter()
+                .find_map(|a| match a {
+                    Action::Send(l) => l.split_once(" :[").map(|(_, r)| r.trim_end_matches(']').to_string()),
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+
+        // Every affected nick, in order, with N=0 as the count.
+        assert_eq!(run("+ooo a b c", "$mode(0)"), "3");
+        assert_eq!(run("+ooo a b c", "$mode(2)"), "b");
+        assert_eq!(run("+ooo a b c", "$mode(4)"), "");
+
+        // A property narrows it to one mode and direction.
+        assert_eq!(run("+o-o a b", "$mode(1).op"), "a");
+        assert_eq!(run("+o-o a b", "$mode(1).deop"), "b");
+        assert_eq!(run("+o-o a b", "$mode(0).op"), "1");
+        assert_eq!(run("+v bob", "$mode(1).voice"), "bob");
+        assert_eq!(run("-v bob", "$mode(1).devoice"), "bob");
+        assert_eq!(run("+b *!*@bad", "$mode(1).ban"), "*!*@bad");
+        assert_eq!(run("-b *!*@bad", "$mode(1).unban"), "*!*@bad");
+        // mIRC calls halfop "help" in this identifier.
+        assert_eq!(run("+h bob", "$mode(1).help"), "bob");
+
+        // Modes that carry no argument affect nobody and are skipped, so the
+        // nicks after them still line up with their own letters.
+        assert_eq!(run("+nto bob", "$mode(0)"), "1");
+        assert_eq!(run("+nto bob", "$mode(1).op"), "bob");
+
+        // An unrecognised property matches nothing rather than falling back to
+        // "no property at all".
+        assert_eq!(run("+o bob", "$mode(1).bogus"), "");
+    }
+
+    /// `/join` and `/msg` never parsed their switches, so `/join -i` sent a
+    /// literal `JOIN -i` to the server and `/msg -s bob hi` messaged `-s`.
+    #[test]
+    fn join_and_msg_consume_their_switches() {
+        use crate::irc::state::StateSnapshot;
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(StateSnapshot {
+                last_invite: "#invited".into(),
+                ..Default::default()
+            }),
+        };
+        let run = |body: &str| {
+            let engine = ScriptEngine::new();
+            engine.load(&format!("alias t {{ {body} }}"));
+            engine.run_alias(&rctx, "#c", "t", "")
+        };
+
+        // `-i` joins the channel of the last invite.
+        assert_eq!(run("join -i"), vec![Action::Send("JOIN #invited".into())]);
+        // An explicit channel still wins.
+        assert_eq!(run("join -i #other"), vec![Action::Send("JOIN #other".into())]);
+        // The MDI window-state switches have no jIRC equivalent, but must be
+        // consumed rather than sent on as part of the channel name.
+        assert_eq!(run("join -nx #c"), vec![Action::Send("JOIN #c".into())]);
+        assert_eq!(run("join #c key"), vec![Action::Send("JOIN #c key".into())]);
+
+        // `/msg`'s switches are window states too; without parsing, `-s` was
+        // taken as the target.
+        assert_eq!(
+            run("msg -s bob hello"),
+            vec![Action::Send("PRIVMSG bob :hello".into())]
+        );
+        assert_eq!(
+            run("msg bob hello"),
+            vec![Action::Send("PRIVMSG bob :hello".into())]
+        );
+    }
+
     #[test]
     fn input_options_parse() {
         use crate::script::eval::{

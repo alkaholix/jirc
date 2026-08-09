@@ -12,6 +12,34 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🗂️ 26.8.28 — The menu bar is back, as a choice
+
+- **Settings → Appearance → Menu bar** switches the top bar between **Icons**
+  and **Menus**. Icons stay the default; nobody's bar changes unless they ask.
+- The text row is **File · Settings · Scripts · Tools · Channels · Help**. Two
+  labels differ from the old bar, both because the originals did not say what
+  they did: *View* opened the Settings dialog and is now **Settings**, and
+  **Channels** (auto-join) was missing from the text bar entirely even though
+  the icon row had it. Every entry opens exactly what its icon does, so the two
+  styles differ in appearance and nothing else.
+- **Commands** still appears only when a script defines menubar items, and
+  shows as `≡` in icon mode so it matches whichever style the bar is in.
+
+### Scripting
+- **`$mode(N)` now exists.** It reports the Nth nick a mode change affected —
+  `$mode(0)` for the count — with all ten properties: `.owner` `.deowner` `.op`
+  `.deop` `.help` `.dehelp` `.voice` `.devoice` `.ban` `.unban`. It reads the
+  event's own mode string, and ISUPPORT decides which letters carry an argument,
+  so on a network where `+q` is the quiet list you get the mask rather than a
+  nick.
+- **Fixed: `/join` and `/msg` ignored their switches.** `/join -i` sent a literal
+  `JOIN -i` to the server and `/msg -s bob hi` messaged a target called `-s`.
+  Both now parse them: `-i` joins the channel you were last invited to, and the
+  window-state switches — which ask for an MDI layout jIRC has no equivalent of
+  — are consumed rather than passed to the network.
+
+---
+
 ## 🧮 26.8.27 — `$input` options, and evaluation brackets that count
 
 ### `$input` finally reads its options

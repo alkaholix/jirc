@@ -4,6 +4,8 @@ export type Theme = "dark" | "light" | "system";
 export type ScriptTheme = "vscode-dark" | "vscode-light" | "monokai" | "solarized-dark";
 export type TimestampMode = "inline" | "divider" | "off";
 export type Layout = "tree" | "switchbar";
+/** Whether the top bar shows icon buttons or the classic text menus. */
+export type MenubarStyle = "icons" | "text";
 export type DockPaneId = "treebar" | "nicklist" | "panels";
 export type DockSide = "left" | "right";
 export type UrlPreviewStyle = "compact" | "rich" | "image";
@@ -14,6 +16,7 @@ export interface Settings {
   scriptTheme: ScriptTheme;
   layout: Layout;
   menubarVisible: boolean;
+  menubarStyle: MenubarStyle;
   tipsEnabled: boolean;
   /** Use OS-level script popup menus; WebView menus remain the fallback. */
   nativePopupMenus: boolean;
@@ -106,6 +109,7 @@ const DEFAULTS: Settings = {
   scriptTheme: "vscode-dark",
   layout: "tree",
   menubarVisible: true,
+  menubarStyle: "icons",
   tipsEnabled: true,
   nativePopupMenus: false,
   treebarWidth: 220,

@@ -178,6 +178,49 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         // The secondary nick/target: kicked user (on KICK), new nick (on NICK),
         // or the affected nick/mask in per-mode events (on OP/BAN/VOICE/…).
         "knick" | "newnick" | "opnick" | "vnick" | "hnick" => rt.event.knick.clone(),
+        // `$mode(N)` — the Nth nick a mode change affected, for `on OP`,
+        // `on MODE`, `on RAWMODE` and friends. `$mode(0)` is the count, and a
+        // property narrows it to one mode: `$mode(1).deop` is the first nick
+        // that lost ops. mIRC calls halfop "help" here.
+        //
+        // Derived from the event's mode string rather than stored separately —
+        // which letters carry an argument is an ISUPPORT question, and
+        // `mode_takes_arg` already answers it.
+        "mode" if !args.is_empty() => {
+            let changes = mode_changes(rt);
+            let wanted: Option<(bool, char)> = match prop.to_ascii_lowercase().as_str() {
+                "" => None,
+                "owner" => Some((true, 'q')),
+                "deowner" => Some((false, 'q')),
+                "op" => Some((true, 'o')),
+                "deop" => Some((false, 'o')),
+                "help" => Some((true, 'h')),
+                "dehelp" => Some((false, 'h')),
+                "voice" => Some((true, 'v')),
+                "devoice" => Some((false, 'v')),
+                "ban" => Some((true, 'b')),
+                "unban" => Some((false, 'b')),
+                // An unrecognised property matches nothing rather than
+                // silently behaving like no property at all.
+                _ => return String::new(),
+            };
+            let matching: Vec<&String> = changes
+                .iter()
+                .filter(|(adding, letter, _)| match wanted {
+                    Some((want_adding, want_letter)) => {
+                        *adding == want_adding && *letter == want_letter
+                    }
+                    None => true,
+                })
+                .map(|(_, _, value)| value)
+                .collect();
+            let n = a(0).trim().parse::<usize>().unwrap_or(0);
+            if n == 0 {
+                matching.len().to_string()
+            } else {
+                matching.get(n - 1).map(|v| v.to_string()).unwrap_or_default()
+            }
+        }
         // In on BAN/UNBAN the affected value is a mask. $banmask is the whole mask;
         // $bnick is just its nick part — and, like mIRC, $null when the mask carries
         // no real nick (e.g. *!*@host).
@@ -4201,6 +4244,39 @@ fn nick_value(
 /// Formats the default value and currently representable properties of an IAL
 /// entry. Rich WHOX-only fields (account/away/gecos/id) remain empty until the
 /// connection state stores them.
+/// Splits the current event's mode change into `(adding, letter, argument)`.
+///
+/// Only modes that take an argument produce an entry, since `$mode(N)` reports
+/// *who* was affected. Which those are depends on the server: `ISUPPORT`
+/// decides, so a network where `q` is the quiet list yields a mask there and a
+/// nick where it means owner.
+fn mode_changes(rt: &Runtime) -> Vec<(bool, char, String)> {
+    let mut out = Vec::new();
+    let mut args = rt.event.params.iter().skip(1);
+    let mut adding = true;
+    for letter in rt
+        .event
+        .params
+        .first()
+        .map(String::as_str)
+        .unwrap_or_default()
+        .chars()
+    {
+        match letter {
+            '+' => adding = true,
+            '-' => adding = false,
+            _ => {
+                if rt.state.isupport.mode_takes_arg(letter, adding) {
+                    if let Some(value) = args.next() {
+                        out.push((adding, letter, value.clone()));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 fn find_ial_info<'a>(
     state: &'a crate::irc::state::StateSnapshot,
     nick: &str,

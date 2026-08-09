@@ -1576,6 +1576,9 @@ pub fn process_message(ctx: &mut Context, raw: &str, msg: Message) -> Effects {
             handle_mode(ctx, &mut fx, &server_id, raw, source.clone());
         }
         Command::INVITE(ref _invited, ref channel) => {
+            // Remembered for `/join -i`, which joins the channel you were last
+            // invited to.
+            ctx.state.last_invite = channel.clone();
             fx.events.push(UiEvent::Invite {
                 server_id,
                 from: source,

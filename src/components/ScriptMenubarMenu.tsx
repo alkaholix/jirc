@@ -14,6 +14,7 @@ import { ContextMenu, PopupItems } from "./popupMenu";
 /// `$style` states still evaluate fresh.
 export function ScriptMenubarMenu({ buffer, server }: { buffer: Buffer | null; server?: Server }) {
   const native = useSettings((state) => state.nativePopupMenus);
+  const style = useSettings((state) => state.menubarStyle);
   const [menu, setMenu] = useState<{ x: number; y: number; items: PopupItem[] } | null>(null);
   const [available, setAvailable] = useState(false);
 
@@ -63,10 +64,16 @@ export function ScriptMenubarMenu({ buffer, server }: { buffer: Buffer | null; s
     setMenu({ x: rect.left, y: rect.bottom, items });
   };
 
+  // Matches whichever style the bar is in: a word among words, an icon among
+  // icons.
   return <>
-    <button className="icon-btn" onClick={open} title="Script menu">
-      ≡
-    </button>
+    {style === "text" ? (
+      <button onClick={open}>Commands</button>
+    ) : (
+      <button className="icon-btn" onClick={open} title="Script menu">
+        ≡
+      </button>
+    )}
     {menu && <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
       <PopupItems items={menu.items} onRun={run} />
     </ContextMenu>}

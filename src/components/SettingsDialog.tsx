@@ -6,6 +6,7 @@ import {
   useSettings,
   type TimestampMode,
   type UrlPreviewStyle,
+  type MenubarStyle,
 } from "../state/settings";
 import { api, DataLocation, type PluginInfo } from "../lib/api";
 import { dccDetect } from "../state/dcc";
@@ -41,6 +42,7 @@ const TAB_GROUPS: {
         label: "Appearance",
         keywords:
           "theme dark light system layout tree sidebar switchbar tabs dockable panes " +
+          "menubar top bar icons menus file view " +
           "nick colour color font size timestamps compact spacing toolbar formatting " +
           "url previews emoji",
       },
@@ -306,6 +308,16 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   >
                     <option value="tree">Tree (sidebar)</option>
                     <option value="switchbar">Switchbar (tabs)</option>
+                  </select>
+                </label>
+                <label className="grow">
+                  Menu bar
+                  <select
+                    value={settings.menubarStyle}
+                    onChange={(e) => settings.set("menubarStyle", e.target.value as MenubarStyle)}
+                  >
+                    <option value="icons">Icons</option>
+                    <option value="text">Menus (File, View, …)</option>
                   </select>
                 </label>
               </div>

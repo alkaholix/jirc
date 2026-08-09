@@ -1590,8 +1590,13 @@ impl<'a> Runtime<'a> {
                     self.send_privmsg(&target, &text);
                 }
             }
+            // `/msg [-sxnd] <target> <text>`. The switches only ask for a window
+            // state (show, maximise, minimise, desktop) that jIRC's single-window
+            // layout has no equivalent of, but they must still be *consumed* —
+            // unparsed, `-s` became the message target.
             "msg" | "m" => {
-                let (target, text) = self.split_target(raw_args);
+                let (_flags, rest) = split_switches(raw_args);
+                let (target, text) = self.split_target(rest);
                 if !target.is_empty() {
                     self.send_privmsg(&target, &text);
                 }
@@ -1622,9 +1627,21 @@ impl<'a> Runtime<'a> {
                     )));
                 }
             }
+            // `/join [-inxmd] <#channel> [key]`. Without this the switches were
+            // never parsed, so `/join -i` sent a literal `JOIN -i` to the
+            // server. `-i` joins the channel you were last invited to; the rest
+            // ask for an MDI window state jIRC has no equivalent of, and are
+            // consumed rather than passed on.
             "join" | "j" => {
-                let ch = self.expand(raw_args);
-                if !ch.is_empty() {
+                let (flags, rest) = split_switches(raw_args);
+                let invited = flags.contains('i');
+                let ch = self.expand(rest);
+                let ch = if invited && ch.trim().is_empty() {
+                    self.state.last_invite.clone()
+                } else {
+                    ch
+                };
+                if !ch.trim().is_empty() {
                     self.actions.push(Action::Send(format!("JOIN {ch}")));
                 }
             }

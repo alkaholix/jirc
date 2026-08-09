@@ -496,6 +496,8 @@ pub struct SessionState {
     pub realname: String,
     /// Our own user modes (e.g. "iwx"), tracked from MODE messages on our nick.
     pub user_mode: String,
+    /// The channel of the most recent INVITE, for `/join -i`.
+    pub last_invite: String,
     /// IRCv3 capabilities the server acknowledged this session, lowercase.
     /// Mirrored from `AuthState` so commands and scripts can see them
     /// without reaching into the connection task.
@@ -1018,6 +1020,8 @@ pub struct StateSnapshot {
     pub realname: String,
     /// Our own user modes (e.g. "iwx") for `$usermode`.
     pub user_mode: String,
+    /// The channel of the most recent INVITE, for `/join -i`.
+    pub last_invite: String,
     /// IRCv3 capabilities acknowledged this session, lowercase.
     pub caps: Vec<String>,
     /// Whether we are marked away, for `$away`.
@@ -1070,6 +1074,7 @@ impl Default for StateSnapshot {
             ial_enabled: true,
             ial_info: Vec::new(),
             isupport: Isupport::default(),
+            last_invite: String::new(),
             caps: Vec::new(),
             server_port: 0,
             tls: false,
@@ -1162,6 +1167,7 @@ impl SessionState {
             main_nick: self.main_nick.clone(),
             realname: self.realname.clone(),
             user_mode: self.user_mode.clone(),
+            last_invite: self.last_invite.clone(),
             caps: self.caps.clone(),
             away: self.away,
             connect_time: self.connect_time,

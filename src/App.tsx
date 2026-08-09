@@ -159,6 +159,7 @@ function MainApp() {
   const customCss = useSettings((s) => s.customCss);
   const layout = useSettings((s) => s.layout);
   const menubarVisible = useSettings((s) => s.menubarVisible);
+  const menubarStyle = useSettings((s) => s.menubarStyle);
   const tipsEnabled = useSettings((s) => s.tipsEnabled);
   const scriptToolbarVisible = useToolbar((s) => s.visible);
   const panels = usePanels((s) => s.panels);
@@ -587,30 +588,49 @@ function MainApp() {
     <div className={`app layout-${layout}`}>
       {menubarVisible && (
         <nav className="app-menubar" aria-label="Application menu">
-          <button className="icon-btn" onClick={actions.onOpenAbout} title="About jIRC">
-            ?
-          </button>
-          <button className="icon-btn" onClick={actions.onOpenScripts} title="Scripts">
-            ⟨⟩
-          </button>
-          <button className="icon-btn" onClick={actions.onOpenAddressBook} title="Address book">
-            ♙
-          </button>
-          <button className="icon-btn" onClick={actions.onOpenAutoJoin} title="Auto-join channels">
-            #
-          </button>
-          <button className="icon-btn" onClick={actions.onOpenSettings} title="Settings">
-            ⚙
-          </button>
-          <button className="icon-btn" onClick={actions.onAddServer} title="Add a connection">
-            +
-          </button>
-          {/* Script-defined menubar menus (`/menubar`). Renders nothing until a
-              script actually defines items, so the bar stays icons-only. */}
-          <ScriptMenubarMenu
-            buffer={active}
-            server={active ? useStore.getState().servers[active.serverId] : undefined}
-          />
+          {menubarStyle === "text" ? (
+            <>
+              {/* The classic text menus. Every entry opens the same dialog as
+                  its icon, so the two styles differ only in presentation. */}
+              <button onClick={actions.onAddServer}>File</button>
+              <button onClick={actions.onOpenSettings}>Settings</button>
+              <button onClick={actions.onOpenScripts}>Scripts</button>
+              <ScriptMenubarMenu
+                buffer={active}
+                server={active ? useStore.getState().servers[active.serverId] : undefined}
+              />
+              <button onClick={actions.onOpenAddressBook}>Tools</button>
+              <button onClick={actions.onOpenAutoJoin}>Channels</button>
+              <button onClick={actions.onOpenAbout}>Help</button>
+            </>
+          ) : (
+            <>
+              <button className="icon-btn" onClick={actions.onOpenAbout} title="About jIRC">
+                ?
+              </button>
+              <button className="icon-btn" onClick={actions.onOpenScripts} title="Scripts">
+                &#10216;&#10217;
+              </button>
+              <button className="icon-btn" onClick={actions.onOpenAddressBook} title="Address book">
+                &#9817;
+              </button>
+              <button className="icon-btn" onClick={actions.onOpenAutoJoin} title="Auto-join channels">
+                #
+              </button>
+              <button className="icon-btn" onClick={actions.onOpenSettings} title="Settings">
+                &#9881;
+              </button>
+              <button className="icon-btn" onClick={actions.onAddServer} title="Add a connection">
+                +
+              </button>
+              {/* Script-defined menubar menus (`/menubar`). Renders nothing until a
+                  script actually defines items, so the bar stays icons-only. */}
+              <ScriptMenubarMenu
+                buffer={active}
+                server={active ? useStore.getState().servers[active.serverId] : undefined}
+              />
+            </>
+          )}
         </nav>
       )}
       {layout === "switchbar" && <SwitchBar />}

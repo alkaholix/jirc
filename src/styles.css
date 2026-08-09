@@ -2340,10 +2340,24 @@ label.inline {
 
 /* Deliberately targets `.icon-btn` rather than a bare `button`: an element
    selector here (0,1,1) outranks `.icon-btn` (0,1,0) and would silently strip
-   the borders and padding that give these buttons their shape. */
+   the borders and padding that give these buttons their shape. The text-menu
+   rule below is safe alongside it because `.app-menubar .icon-btn` (0,2,0)
+   outranks `.app-menubar button` (0,1,1) in turn. */
 .app-menubar .icon-btn {
   min-width: 30px;
   text-align: center;
+}
+
+/* Classic text menus, when Appearance is set to words. */
+.app-menubar button {
+  padding: 3px 9px;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font-weight: 400;
+}
+.app-menubar button:hover {
+  background: var(--panel2);
 }
 .tip-overlay {
   position: fixed;
