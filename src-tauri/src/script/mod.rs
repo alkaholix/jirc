@@ -8850,6 +8850,48 @@ alias t { .say hidden | say shown }");
         assert_eq!(shown, vec!["shown".to_string()]);
     }
 
+    /// `/set`'s switches, per `mirckb-master/docs/source/commands/set.rst`.
+    ///
+    /// `-i` and `-s` were both ignored: `set -i %x v` overwrote an existing
+    /// value, breaking the standard initialisation idiom, and `-s` printed
+    /// nothing at all.
+    #[test]
+    fn set_switches_behave() {
+        let run = |body: &str| {
+            let engine = ScriptEngine::new();
+            engine.load(&format!("alias t {{ {body} }}"));
+            engine
+                .run_alias(&ctx(), "#c", "t", "")
+                .into_iter()
+                .filter_map(|a| match a {
+                    Action::Echo { text, .. } => Some(text),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // One arithmetic operation is applied by default; `-n` and `-p` keep
+        // the value literal.
+        assert_eq!(run("set %a 2 + 3 | echo %a"), vec!["5"]);
+        assert_eq!(run("set -n %a 2 + 3 | echo %a"), vec!["2 + 3"]);
+        assert_eq!(run("set -p %a 2 + 3 | echo %a"), vec!["2 + 3"]);
+
+        // `-i` assigns only when there is nothing there yet.
+        assert_eq!(run("set %a first | set -i %a second | echo %a"), vec!["first"]);
+        assert_eq!(run("set -i %b only | echo %b"), vec!["only"]);
+        // An empty existing value is not a value, so `-i` still assigns.
+        assert_eq!(run("set %a | set -i %a filled | echo %a"), vec!["filled"]);
+
+        // `-s` reports the assignment.
+        assert_eq!(run("set -s %a shown"), vec!["* Set %a to shown"]);
+
+        // Scope switches still work as before.
+        assert_eq!(run("set -l %a local | echo %a"), vec!["local"]);
+        assert_eq!(run("set -g %a glob | echo %a"), vec!["glob"]);
+        // `-u` sets an expiry without disturbing the value.
+        assert_eq!(run("set -u60 %a temp | echo %a"), vec!["temp"]);
+    }
+
     #[test]
     fn input_options_parse() {
         use crate::script::eval::{

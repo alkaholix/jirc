@@ -3239,6 +3239,11 @@ impl<'a> Runtime<'a> {
         let no_math = flags_lower.contains('n') || flags_lower.contains('p');
         let force_global = flags_lower.contains('g');
         let force_local = !force_global && flags_lower.contains('l');
+        // `-i` initialises: leave an existing value alone. Without it the
+        // idiom `set -i %first_run 1` overwrote on every call.
+        let init_only = flags_lower.contains('i');
+        // `-s` echoes the assignment, as mIRC does.
+        let show_assignment = flags_lower.contains('s');
         if is_var {
             for decl in split_top_commas(rest) {
                 let decl = decl.trim();
@@ -3275,6 +3280,17 @@ impl<'a> Runtime<'a> {
             let mut value = self.expand(value.trim());
             if !no_math {
                 value = try_var_math(&value).unwrap_or(value);
+            }
+            // `-i` only assigns when there is nothing there yet.
+            if init_only && self.var_value(&key).is_some_and(|v| !v.is_empty()) {
+                return;
+            }
+            if show_assignment {
+                let target = self.reply_target();
+                self.actions.push(Action::Echo {
+                    target,
+                    text: format!("* Set %{key} to {value}"),
+                });
             }
             let is_local = if force_global {
                 self.vars.insert(key.clone(), value);
