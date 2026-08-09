@@ -1566,12 +1566,97 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             .unwrap_or_default(),
         // $input(message, type, title, default, …) — a modal text prompt. We
         // drive the edit form; returns the entered text, or empty if cancelled.
+        // `$input(prompt,options,[window,]title,text…)`. Argument 1 is mIRC's
+        // option field; ignoring it used to mean `$input(msg,y)` showed a plain
+        // text box instead of Yes/No, and `$yes`/`$no` had nothing to report.
         "input" => {
-            let v = rt.input.prompt(&a(0), &a(2), &a(3)).unwrap_or_default();
+            use super::eval::{
+                input_has_window_arg, input_returns_buttons, parse_input_options, InputAnswer,
+                InputButtons, InputField,
+            };
+            let options = a(1);
+            let mut spec = parse_input_options(&options);
+            let (verbose, force) = input_returns_buttons(&options);
+            // `s` inserts a window name before the title, shifting the rest.
+            let base = if input_has_window_arg(&options) { 3 } else { 2 };
+            spec.message = a(0);
+            spec.title = a(base);
+            spec.default = a(base + 1);
+            if spec.field == InputField::Combo {
+                // The first text argument is the default selection; the rest are
+                // the list. `$input(pick,m,Title,two,one,two,three)` preselects
+                // "two" from one/two/three.
+                spec.items = args
+                    .iter()
+                    .skip(base + 2)
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .collect();
+            }
+            // A field with no explicit button set gets a lone OK, as mIRC does.
+            let answer = rt
+                .input
+                .prompt_spec(&spec)
+                .unwrap_or(InputAnswer::Cancel);
+
+            let has_field = spec.field != InputField::None;
+            // Without a field the answer is the button: `$true`/`$false`, or the
+            // named values with `v`. With a field it is the text, and only `f`
+            // turns a dismissal into a named value rather than `$null`.
+            let named = if has_field { force } else { verbose };
+            let value = match answer {
+                InputAnswer::Text(text) => text,
+                InputAnswer::Timeout => {
+                    // `$timeout` needs `v` throughout, and `f` as well when a
+                    // field is in play.
+                    if verbose && (!has_field || force) {
+                        "$timeout".to_string()
+                    } else if has_field {
+                        String::new()
+                    } else {
+                        "$false".to_string()
+                    }
+                }
+                other => {
+                    let affirmative = matches!(
+                        other,
+                        InputAnswer::Ok | InputAnswer::Yes | InputAnswer::Retry
+                    );
+                    if named {
+                        match other {
+                            InputAnswer::Ok => "$ok",
+                            InputAnswer::Yes => "$yes",
+                            InputAnswer::No => "$no",
+                            InputAnswer::Retry => "$retry",
+                            _ => "$cancel",
+                        }
+                        .to_string()
+                    } else if has_field {
+                        String::new()
+                    } else if affirmative {
+                        "$true".to_string()
+                    } else {
+                        "$false".to_string()
+                    }
+                }
+            };
+            // Keep the unused-variant warning honest: `InputButtons` is read by
+            // the backend, not here.
+            let _ = InputButtons::default();
             rt.vars
-                .insert(super::eval::LASTINPUT_KEY.to_string(), v.clone());
-            v
+                .insert(super::eval::LASTINPUT_KEY.to_string(), value.clone());
+            value
         }
+        // The values `$input`'s `v`/`f` switches return, so a script can compare
+        // against them: `if ($input(ok?,y v) == $yes)`. `$retry` has no KB page
+        // of its own but is named in `$input`'s, and the `r` button set would be
+        // unusable without it.
+        "yes" => "$yes".into(),
+        "no" => "$no".into(),
+        "ok" => "$ok".into(),
+        "cancel" => "$cancel".into(),
+        "retry" => "$retry".into(),
+        "timeout" => "$timeout".into(),
         // $hfile once laid the file dialog out horizontally; current mIRC makes
         // it a straight synonym for $sfile.
         "sfile" | "hfile" => {

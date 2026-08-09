@@ -560,6 +560,12 @@ const WSA_INVALID_ARGUMENT: i32 = 10_022;
 // Unicode scalar, including the old U+E101..U+E106 sentinels, to pass through.
 const DELAY_PREFIX: &str = "\0jirc-unsafe:";
 const PIPE_PREFIX: &str = "\0jirc-read-pipe:";
+/// Wraps a value an evaluation-bracket group has already produced, so the
+/// ordinary token pass does not evaluate it a second time.
+const EVALUATED_PREFIX: &str = "\0jirc-evaluated:";
+/// As [`EVALUATED_PREFIX`], but also opaque to an enclosing bracket pair —
+/// mIRC ignores extra pairs once the segment contains an unjoined space.
+const SEALED_PREFIX: &str = "\0jirc-sealed:";
 const ENVELOPE_END: char = '\0';
 
 /// Synchronous socket operations the engine can call *during* a run, so
@@ -718,6 +724,65 @@ impl ScriptSockets for NoSockets {
     }
 }
 
+/// Which buttons `$input` shows — the `o`, `y`, `n` and `r` option letters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InputButtons {
+    /// `o` — a lone OK. Also the default when a field is shown.
+    #[default]
+    Ok,
+    /// `y` — Yes / No.
+    YesNo,
+    /// `n` — Yes / No / Cancel.
+    YesNoCancel,
+    /// `r` — Retry / Cancel.
+    RetryCancel,
+}
+
+/// Which entry field `$input` shows — the `e`, `p` and `m` option letters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InputField {
+    /// No field: the answer is which button was pressed.
+    #[default]
+    None,
+    /// `e` — a plain edit box.
+    Text,
+    /// `p` — a password edit box.
+    Password,
+    /// `m` — a dropdown built from the trailing text parameters.
+    Combo,
+}
+
+/// A parsed `$input(prompt,options,…)` request.
+#[derive(Debug, Clone, Default)]
+pub struct InputSpec {
+    pub message: String,
+    pub title: String,
+    /// Pre-filled text, or for [`InputField::Combo`] the default selection.
+    pub default: String,
+    /// Dropdown items for [`InputField::Combo`].
+    pub items: Vec<String>,
+    pub buttons: InputButtons,
+    pub field: InputField,
+    /// `t c i q w h` — goldstar, recycle, info, question, warning, halt.
+    pub icon: Option<char>,
+    /// `kN` — give up after N seconds.
+    pub timeout_secs: Option<u64>,
+}
+
+/// Which button the user pressed, or that the dialog timed out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputAnswer {
+    /// A field's contents, submitted with the leftmost button.
+    Text(String),
+    Ok,
+    Yes,
+    No,
+    Cancel,
+    Retry,
+    /// The `kN` timeout elapsed.
+    Timeout,
+}
+
 /// A text prompt the engine shows *during* a run for `$input`, blocking until
 /// the user answers (like mIRC's modal prompt). The production backend drives
 /// the UI dialog; tests use [`NoInput`].
@@ -726,6 +791,26 @@ pub trait ScriptInput: Send + Sync {
     /// `None` if cancelled.
     fn prompt(&self, message: &str, title: &str, default: &str) -> Option<String>;
 
+    /// Shows a prompt with mIRC's full option set. The default implementation
+    /// falls back to [`ScriptInput::prompt`], so a backend that only does text
+    /// (tests, older callers) still behaves sensibly.
+    fn prompt_spec(&self, spec: &InputSpec) -> Option<InputAnswer> {
+        let answered = self.prompt(&spec.message, &spec.title, &spec.default);
+        Some(match (answered, spec.field) {
+            (None, _) => InputAnswer::Cancel,
+            (Some(text), InputField::None) => {
+                // No field: a plain backend can only say "confirmed".
+                let _ = text;
+                match spec.buttons {
+                    InputButtons::YesNo | InputButtons::YesNoCancel => InputAnswer::Yes,
+                    InputButtons::RetryCancel => InputAnswer::Retry,
+                    InputButtons::Ok => InputAnswer::Ok,
+                }
+            }
+            (Some(text), _) => InputAnswer::Text(text),
+        })
+    }
+
     fn pick_files(&self, _directory: &str, _title: &str, _multiple: bool) -> Vec<String> {
         Vec::new()
     }
@@ -733,6 +818,147 @@ pub trait ScriptInput: Send + Sync {
     fn pick_folder(&self, _directory: &str, _title: &str) -> Option<String> {
         None
     }
+}
+
+/// Parses `$input`'s options argument into a spec.
+///
+/// Options are either letters (`eoy`, `pk10`) or, historically, a sum of bit
+/// values (`5` == `eo`). Both forms are documented and both appear in the wild,
+/// so both are accepted.
+pub fn parse_input_options(raw: &str) -> InputSpec {
+    let mut spec = InputSpec::default();
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return spec;
+    }
+
+    // The numeric form is only valid with no letters at all, so a bare number
+    // is unambiguous — `k10` is a timeout, `10` is a bit sum.
+    if let Ok(bits) = trimmed.parse::<u64>() {
+        if bits & 1 != 0 {
+            spec.field = InputField::Text;
+        }
+        if bits & 2 != 0 {
+            spec.field = InputField::Password;
+        }
+        if bits & 131_072 != 0 {
+            spec.field = InputField::Combo;
+        }
+        if bits & 4 != 0 {
+            spec.buttons = InputButtons::Ok;
+        }
+        if bits & 8 != 0 {
+            spec.buttons = InputButtons::YesNo;
+        }
+        if bits & 16 != 0 {
+            spec.buttons = InputButtons::YesNoCancel;
+        }
+        if bits & 8192 != 0 {
+            spec.buttons = InputButtons::RetryCancel;
+        }
+        for (bit, icon) in [
+            (64u64, 'i'),
+            (128, 'q'),
+            (256, 'w'),
+            (512, 'h'),
+            (4096, 't'),
+            (32768, 'c'),
+        ] {
+            if bits & bit != 0 {
+                spec.icon = Some(icon);
+            }
+        }
+        return spec;
+    }
+
+    let chars: Vec<char> = trimmed.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i].to_ascii_lowercase();
+        i += 1;
+        match c {
+            'e' => spec.field = InputField::Text,
+            'p' => spec.field = InputField::Password,
+            'm' => spec.field = InputField::Combo,
+            'o' => spec.buttons = InputButtons::Ok,
+            'y' => spec.buttons = InputButtons::YesNo,
+            'n' => spec.buttons = InputButtons::YesNoCancel,
+            'r' => spec.buttons = InputButtons::RetryCancel,
+            't' | 'c' | 'i' | 'q' | 'w' | 'h' => spec.icon = Some(c),
+            // `kN` — the digits belong to the switch, not to another option.
+            'k' => {
+                let start = i;
+                while i < chars.len() && chars[i].is_ascii_digit() {
+                    i += 1;
+                }
+                let digits: String = chars[start..i].iter().collect();
+                spec.timeout_secs = digits.parse().ok();
+            }
+            // `v`/`f` change the *return value*, handled by the caller; the
+            // rest (`g` align, `b` disable, `d` sound, `a` activate, `s`/`u`
+            // parent window) are presentation details this dialog does not
+            // model. Recognised so they never land in another field.
+            _ => {}
+        }
+    }
+    spec
+}
+
+/// Whether the options ask for mIRC's `$yes`/`$no`/… return values rather than
+/// `$true`/`$false` — the `v` switch, or `f` which does the same for the field
+/// forms. Letters only; the numeric form spells `v` as bit 32.
+pub fn input_returns_buttons(raw: &str) -> (bool, bool) {
+    let trimmed = raw.trim();
+    if let Ok(bits) = trimmed.parse::<u64>() {
+        return (bits & 32 != 0, false);
+    }
+    let mut verbose = false;
+    let mut force = false;
+    let chars: Vec<char> = trimmed.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i].to_ascii_lowercase() {
+            'v' => verbose = true,
+            'f' => force = true,
+            // Skip a `kN` timeout's digits so they cannot be read as options.
+            'k' => {
+                i += 1;
+                while i < chars.len() && chars[i].is_ascii_digit() {
+                    i += 1;
+                }
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    (verbose, force)
+}
+
+/// Whether the options include `s`, which inserts a `window` parameter before
+/// `title` and so shifts every later argument along one.
+pub fn input_has_window_arg(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    if let Ok(bits) = trimmed.parse::<u64>() {
+        return bits & 1024 != 0;
+    }
+    let chars: Vec<char> = trimmed.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i].to_ascii_lowercase() {
+            's' => return true,
+            'k' => {
+                i += 1;
+                while i < chars.len() && chars[i].is_ascii_digit() {
+                    i += 1;
+                }
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
 }
 
 /// A no-op input backend (tests / before a real one is installed): returns the
@@ -5973,7 +6199,18 @@ impl<'a> Runtime<'a> {
                 }
             }
 
-            let mut value = self.expand_inner(&inner.join(" "));
+            // mIRC's rule: extra bracket pairs each add an evaluation, *unless*
+            // the segment contains a space that no `$+` closes — then every
+            // enclosing pair beyond the first is ignored. So `[ [ a $!me ] ]`
+            // prints `a $me`, not the nick.
+            // Once a space has nullified the extra pairs, every pair further
+            // out is nullified too — so the seal has to propagate outward, not
+            // just apply to the pair that first saw the space.
+            let multi_word = (inner.iter().filter(|t| !t.is_empty()).count() > 1
+                && !inner.iter().any(|t| t == "$+"))
+                || inner.iter().any(|t| t.starts_with(SEALED_PREFIX));
+            let content: Vec<String> = inner.iter().map(|t| decode_evaluated(t)).collect();
+            let mut value = self.expand_inner(&content.join(" "));
             let mut replace_start = span.open;
             let mut replace_end = span.close;
 
@@ -5995,6 +6232,19 @@ impl<'a> Runtime<'a> {
                 }
             }
 
+            // A `$+` join builds a new token — `% [ $+ [ %k ] ]` becomes
+            // `%a` — which the token pass must still dereference. Anything else
+            // is finished, and sealing it stops that pass evaluating it again.
+            let joined = span.join_left || span.join_right;
+            let value = if joined {
+                value
+            } else if multi_word {
+                // Sealed against the token pass *and* against any outer pair,
+                // which the space has nullified.
+                encode_sealed(&value)
+            } else {
+                encode_evaluated(&value)
+            };
             tokens.splice(replace_start..=replace_end, [value]);
         }
         tokens
@@ -6002,6 +6252,15 @@ impl<'a> Runtime<'a> {
 
     /// Expands identifiers/vars within a single (space-free) token.
     fn eval_token(&mut self, tok: &str) -> String {
+        // An evaluation-bracket group has already been evaluated the number of
+        // times its brackets called for; hand its result straight back rather
+        // than evaluating it once more.
+        if tok.starts_with(EVALUATED_PREFIX) {
+            return decode_evaluated(tok);
+        }
+        if tok.starts_with(SEALED_PREFIX) {
+            return decode_sealed(tok);
+        }
         // `$input` and other synchronous identifiers can keep a run open long
         // enough for timed values to expire between tokens.
         self.purge_expired();
@@ -6591,6 +6850,45 @@ pub(super) fn encode_command_pipes(value: &str) -> String {
         encode_envelope(PIPE_PREFIX, value)
     } else {
         value.to_string()
+    }
+}
+
+/// Wraps a value produced by an evaluation-bracket group.
+///
+/// mIRC evaluates a bracket group once per enclosing pair. jIRC's bracket pass
+/// runs before the token pass, so without this the token pass would evaluate the
+/// group's *result* as well and every group would get one evaluation too many —
+/// `[ $!me ]` printed the nick when the KB says it prints `$me`.
+fn encode_evaluated(value: &str) -> String {
+    encode_envelope(EVALUATED_PREFIX, value)
+}
+
+/// Unwraps a bracket result so an enclosing pair can evaluate it again — which
+/// is exactly what the extra pair means.
+fn decode_evaluated(value: &str) -> String {
+    let Some(rest) = value.strip_prefix(EVALUATED_PREFIX) else {
+        return value.to_string();
+    };
+    match rest.strip_suffix(ENVELOPE_END) {
+        Some(payload) => decode_payload(payload).unwrap_or_else(|| value.to_string()),
+        None => value.to_string(),
+    }
+}
+
+/// Seals a bracket result that a space has made final: the token pass must not
+/// evaluate it, and neither may an enclosing bracket pair, because mIRC ignores
+/// extra pairs once the segment contains an unjoined space.
+fn encode_sealed(value: &str) -> String {
+    encode_envelope(SEALED_PREFIX, value)
+}
+
+fn decode_sealed(value: &str) -> String {
+    let Some(rest) = value.strip_prefix(SEALED_PREFIX) else {
+        return value.to_string();
+    };
+    match rest.strip_suffix(ENVELOPE_END) {
+        Some(payload) => decode_payload(payload).unwrap_or_else(|| value.to_string()),
+        None => value.to_string(),
     }
 }
 

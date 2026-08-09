@@ -25,7 +25,7 @@ import { UserDialogs } from "./components/UserDialogs";
 import { DetachedView } from "./components/DetachedView";
 import { thisWindowBufferKey, popOutBuffer, dockBackBuffer, detachedLabel } from "./lib/detach";
 import { confirmDialog } from "./state/confirm";
-import { promptDialog } from "./state/prompt";
+import { promptDialog, type PromptButtons, type PromptField } from "./state/prompt";
 import { routeDialogEvent } from "./state/dialogs";
 import { routeNickIconEvent } from "./state/nickIcons";
 import { routeAwayEvent } from "./state/away";
@@ -349,12 +349,31 @@ function MainApp() {
   // A script called $input: show the prompt dialog and send the answer back so
   // the blocked script can resume. Handled only in the main window (avoid dupes).
   useEffect(() => {
-    const unlisten = listen<{ id: number; message: string; title: string; default: string }>(
+    const unlisten = listen<{
+      id: number;
+      message: string;
+      title: string;
+      default: string;
+      // mIRC's `$input` options, parsed backend-side.
+      buttons: PromptButtons;
+      field: PromptField;
+      icon: string;
+      timeoutSecs: number;
+      items: string[];
+    }>(
       "script-prompt",
       async (e) => {
         if (detachedKey !== null) return;
         const { id, message, title, default: initial } = e.payload;
-        const value = await promptDialog(message, { title, initial });
+        const value = await promptDialog(message, {
+          title,
+          initial,
+          buttons: e.payload.buttons,
+          field: e.payload.field,
+          icon: e.payload.icon,
+          timeoutSecs: e.payload.timeoutSecs,
+          items: e.payload.items,
+        });
         invoke("script_prompt_reply", { id, value }).catch(() => {});
       }
     );

@@ -17,7 +17,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_dialog::DialogExt;
 
-use super::eval::ScriptInput;
+use super::eval::{InputAnswer, InputButtons, InputField, InputSpec, ScriptInput};
 
 /// How long a `$input` waits for a reply before giving up (returns cancelled).
 const PROMPT_TIMEOUT: Duration = Duration::from_secs(600);
@@ -50,11 +50,22 @@ impl PromptRegistry {
 }
 
 #[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct PromptReq {
     id: u64,
     message: String,
     title: String,
     default: String,
+    /// "ok" | "yesno" | "yesnocancel" | "retrycancel"
+    buttons: &'static str,
+    /// "none" | "text" | "password" | "combo"
+    field: &'static str,
+    /// One of `t c i q w h`, or empty.
+    icon: String,
+    /// `kN` seconds, or 0 for none.
+    timeout_secs: u64,
+    /// Dropdown entries for the combo field.
+    items: Vec<String>,
 }
 
 /// Production `$input` backend: emit the request, block for the reply.
@@ -71,28 +82,72 @@ impl EngineInput {
 
 impl ScriptInput for EngineInput {
     fn prompt(&self, message: &str, title: &str, default: &str) -> Option<String> {
+        let spec = InputSpec {
+            message: message.to_string(),
+            title: title.to_string(),
+            default: default.to_string(),
+            field: InputField::Text,
+            ..Default::default()
+        };
+        match self.prompt_spec(&spec)? {
+            InputAnswer::Text(text) => Some(text),
+            InputAnswer::Cancel | InputAnswer::No | InputAnswer::Timeout => None,
+            _ => Some(String::new()),
+        }
+    }
+
+    fn prompt_spec(&self, spec: &InputSpec) -> Option<InputAnswer> {
         let (id, rx) = self.registry.register();
         let _ = self.app.emit(
             "script-prompt",
             PromptReq {
                 id,
-                message: message.to_string(),
-                title: if title.is_empty() {
+                message: spec.message.clone(),
+                title: if spec.title.is_empty() {
                     "Input".to_string()
                 } else {
-                    title.to_string()
+                    spec.title.clone()
                 },
-                default: default.to_string(),
+                default: spec.default.clone(),
+                buttons: match spec.buttons {
+                    InputButtons::Ok => "ok",
+                    InputButtons::YesNo => "yesno",
+                    InputButtons::YesNoCancel => "yesnocancel",
+                    InputButtons::RetryCancel => "retrycancel",
+                },
+                field: match spec.field {
+                    InputField::None => "none",
+                    InputField::Text => "text",
+                    InputField::Password => "password",
+                    InputField::Combo => "combo",
+                },
+                icon: spec.icon.map(String::from).unwrap_or_default(),
+                timeout_secs: spec.timeout_secs.unwrap_or(0),
+                items: spec.items.clone(),
             },
         );
-        match rx.recv_timeout(PROMPT_TIMEOUT) {
-            Ok(v) => v,
+        // The script's own `kN` timeout is enforced by the dialog, which replies
+        // with a timeout marker. This longer wait is the backstop for a dialog
+        // that never answers at all (window closed, frontend gone).
+        let reply = match rx.recv_timeout(PROMPT_TIMEOUT) {
+            Ok(value) => value,
             Err(_) => {
-                // Timed out / dialog never answered — clean up and cancel.
                 self.registry.reply(id, None);
                 None
             }
-        }
+        };
+        Some(match reply.as_deref() {
+            None => InputAnswer::Cancel,
+            // The dialog reports which button was pressed with a marker the
+            // user's own text can never be mistaken for.
+            Some("\u{0}ok") => InputAnswer::Ok,
+            Some("\u{0}yes") => InputAnswer::Yes,
+            Some("\u{0}no") => InputAnswer::No,
+            Some("\u{0}cancel") => InputAnswer::Cancel,
+            Some("\u{0}retry") => InputAnswer::Retry,
+            Some("\u{0}timeout") => InputAnswer::Timeout,
+            Some(text) => InputAnswer::Text(text.to_string()),
+        })
     }
 
     fn pick_files(&self, directory: &str, title: &str, multiple: bool) -> Vec<String> {

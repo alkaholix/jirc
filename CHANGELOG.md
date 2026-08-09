@@ -12,6 +12,45 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🧮 26.8.27 — `$input` options, and evaluation brackets that count
+
+### `$input` finally reads its options
+The second argument — mIRC's option field — was ignored outright, so
+`$input(msg,y)` showed a text box instead of Yes/No and the identifiers that
+report which button was pressed had nothing to report.
+
+- **Buttons** `o` `y` `n` `r`, **fields** `e` (text) `p` (password) `m`
+  (dropdown), **icons** `t c i q w h`, and **`kN`** for an N-second timeout with
+  a visible countdown. The `s` switch correctly shifts the later arguments.
+- **Both return conventions.** With buttons only you get `$true`/`$false`, or the
+  named values with `v`. With a field you get the text, and `f` turns a
+  dismissal into a name rather than nothing. `$timeout` needs `v`, plus `f` when
+  a field is in play.
+- **`$yes` `$no` `$ok` `$cancel` `$retry` `$timeout`** now exist, so
+  `if ($input(Save first?,nv) == $cancel)` can tell Cancel from No.
+- The older numeric option form works too: `$input(hi,5)` is `$input(hi,eo)`.
+
+### Evaluation brackets evaluate the right number of times
+`[ ]` already reordered evaluation correctly, but every group was evaluated
+**once too often**: the bracket pass runs before the token pass, which then
+evaluated each group's *result* as well. `[ $!me ]` printed your nick where mIRC
+prints `$me`.
+
+- One pair is one evaluation; each further pair adds another, so
+  `[ [ $!me ] ]` reaches the nick.
+- **A space stops the counting**, as in mIRC: if the contents contain a space
+  that no `$+` closes, every enclosing pair beyond the first is ignored, and
+  `[ [ a $!me ] ]` gives `a $me`.
+- The `$+` join form is untouched — `% [ $+ [ %k ] ]` still builds a name and
+  dereferences it, which is why that extra evaluation existed at all.
+
+### Help
+Two new sections: **Asking the user — $input**, covering the options and what
+each returns, and **Evaluation brackets**, including the space rule that catches
+people out.
+
+---
+
 ## ✨ 26.8.26 — Tidier tree, and a proper welcome
 
 - **The welcome screen shows the app icon and the version.** The `#` mark sits

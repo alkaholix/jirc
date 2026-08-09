@@ -8476,6 +8476,150 @@ mod tests {
         );
     }
 
+    /// `$input`'s options argument was ignored entirely, so `$input(msg,y)`
+    /// showed a text box instead of Yes/No and the values it is supposed to
+    /// return had nothing to report.
+    /// mIRC's evaluation brackets do two things: they reorder evaluation, and
+    /// each enclosing pair evaluates the contents once more. jIRC had the
+    /// ordering but not the count — its bracket pass ran before the token pass,
+    /// which then evaluated the group's *result* as well, giving every group one
+    /// evaluation too many. `[ $!me ]` printed the nick where the KB says `$me`.
+    ///
+    /// Cases are taken from `mirckb-master/docs/source/advanced/eval_brackets.rst`.
+    #[test]
+    fn evaluation_brackets_count_evaluations() {
+        let run = |body: &str| {
+            let engine = ScriptEngine::new();
+            engine.load(&format!("alias t {{ {body} }}"));
+            engine
+                .run_alias(&ctx(), "#c", "t", "")
+                .into_iter()
+                .find_map(|a| match a {
+                    Action::Send(l) => l.split_once(" :").map(|(_, rest)| rest.to_string()),
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+
+        // One pair == one evaluation, so `$!me` resolves to the literal `$me`.
+        assert_eq!(run("/msg #c [ $!me ]"), "$me");
+        // A second pair evaluates once more, reaching the nick itself.
+        assert_eq!(run("/msg #c [ [ $!me ] ]"), "me");
+
+        // "A space in the code segment ... nullifies the behavior of the rest of
+        // the enclosing brackets" — so the outer pair here does nothing.
+        assert_eq!(run("/msg #c [ [ a $!me ] ]"), "a $me");
+        assert_eq!(run("/msg #c [ [ [ a $!me ] ] ]"), "a $me");
+
+        // Ordering is unaffected: a group is evaluated before the rest of the
+        // line, innermost first, and the line still reads left to right.
+        assert_eq!(run("/msg #c $upper(a) [ $upper(b) ] $upper(c)"), "A B C");
+        assert_eq!(run("/msg #c [ $upper( [ $lower(AB) ] ) ]"), "AB");
+
+        // `[ $+ x $+ ]` is mIRC's way of writing literal brackets, not a group.
+        assert_eq!(run("/msg #c [ $+ hi $+ ]"), "[hi]");
+    }
+
+    #[test]
+    fn input_options_parse() {
+        use crate::script::eval::{
+            input_has_window_arg, input_returns_buttons, parse_input_options, InputButtons,
+            InputField,
+        };
+        let spec = parse_input_options("y");
+        assert_eq!(spec.buttons, InputButtons::YesNo);
+        assert_eq!(spec.field, InputField::None);
+
+        let spec = parse_input_options("pk30q");
+        assert_eq!(spec.field, InputField::Password);
+        assert_eq!(spec.timeout_secs, Some(30));
+        assert_eq!(spec.icon, Some('q'));
+        // The timeout's digits must not be read as further option letters.
+        assert_eq!(spec.buttons, InputButtons::Ok);
+
+        assert_eq!(parse_input_options("n").buttons, InputButtons::YesNoCancel);
+        assert_eq!(parse_input_options("r").buttons, InputButtons::RetryCancel);
+        assert_eq!(parse_input_options("m").field, InputField::Combo);
+
+        // The KB's own example: the numeric form 5 == `eo`.
+        let numeric = parse_input_options("5");
+        let letters = parse_input_options("eo");
+        assert_eq!(numeric.field, letters.field);
+        assert_eq!(numeric.buttons, letters.buttons);
+        assert_eq!(parse_input_options("8").buttons, InputButtons::YesNo);
+
+        // `v`/`f` change the return value; `s` shifts the later arguments.
+        assert_eq!(input_returns_buttons("yv"), (true, false));
+        assert_eq!(input_returns_buttons("ef"), (false, true));
+        assert_eq!(input_returns_buttons("32"), (true, false));
+        // A `kN` timeout must not be mistaken for those letters.
+        assert_eq!(input_returns_buttons("ek15"), (false, false));
+        assert!(input_has_window_arg("ys"));
+        assert!(input_has_window_arg("1024"));
+        assert!(!input_has_window_arg("yk5"));
+    }
+
+    /// The button forms return `$true`/`$false` by default and the named values
+    /// with `v`; the field forms return the text, and only `f` turns a
+    /// dismissal into a name rather than `$null`.
+    #[test]
+    fn input_returns_the_right_shape() {
+        use crate::script::eval::{InputAnswer, InputSpec, ScriptInput};
+
+        /// Answers every prompt with one fixed reply.
+        struct Fixed(InputAnswer);
+        impl ScriptInput for Fixed {
+            fn prompt(&self, _: &str, _: &str, _: &str) -> Option<String> {
+                None
+            }
+            fn prompt_spec(&self, _: &InputSpec) -> Option<InputAnswer> {
+                Some(self.0.clone())
+            }
+        }
+
+        let run = |answer: InputAnswer, expr: &str| {
+            let engine = ScriptEngine::new();
+            engine.set_input(std::sync::Arc::new(Fixed(answer)));
+            engine.load(&format!("alias t {{ /msg #c [{expr}] }}"));
+            match engine.run_alias(&ctx(), "#c", "t", "").into_iter().next() {
+                Some(Action::Send(line)) => line
+                    .split_once(" :[")
+                    .map(|(_, rest)| rest.trim_end_matches(']').to_string())
+                    .unwrap_or_default(),
+                other => panic!("expected a send, got {other:?}"),
+            }
+        };
+
+        // No field: buttons are booleans unless `v` is given.
+        assert_eq!(run(InputAnswer::Yes, "$input(ok?,y)"), "$true");
+        assert_eq!(run(InputAnswer::No, "$input(ok?,y)"), "$false");
+        assert_eq!(run(InputAnswer::Yes, "$input(ok?,yv)"), "$yes");
+        assert_eq!(run(InputAnswer::No, "$input(ok?,yv)"), "$no");
+        assert_eq!(run(InputAnswer::Retry, "$input(ok?,rv)"), "$retry");
+        assert_eq!(run(InputAnswer::Cancel, "$input(ok?,nv)"), "$cancel");
+
+        // A field returns its text; a dismissal is empty unless `f` is given.
+        assert_eq!(run(InputAnswer::Text("hi".into()), "$input(name,e)"), "hi");
+        assert_eq!(run(InputAnswer::Cancel, "$input(name,e)"), "");
+        assert_eq!(run(InputAnswer::Cancel, "$input(name,ef)"), "$cancel");
+
+        // `$timeout` needs `v`, and `f` as well when a field is in play.
+        assert_eq!(run(InputAnswer::Timeout, "$input(ok?,yk5)"), "$false");
+        assert_eq!(run(InputAnswer::Timeout, "$input(ok?,yvk5)"), "$timeout");
+        assert_eq!(run(InputAnswer::Timeout, "$input(name,ek5)"), "");
+        assert_eq!(run(InputAnswer::Timeout, "$input(name,evfk5)"), "$timeout");
+
+        // The identifiers a script compares against.
+        let engine = ScriptEngine::new();
+        engine.load("alias t { /msg #c $yes $no $ok $cancel $retry $timeout }");
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send(
+                "PRIVMSG #c :$yes $no $ok $cancel $retry $timeout".into()
+            )]
+        );
+    }
+
     /// The membership operators returned a hardcoded `false` for as long as
     /// jIRC kept no such lists. The lists arrived; the operators did not follow,
     /// so `/aop <mask>` then `if (%a isaop)` disagreed with itself.

@@ -576,6 +576,18 @@ end of the line or the next <code>|</code>).</p>
   <tr><td><code>!</code></td><td>prefix negation, e.g. <code>if (!%x)</code> (x is empty/zero)</td></tr>
   <tr><td><code>&amp;&amp;</code> / <code>||</code></td><td>logical and / or</td></tr>
 </table>
+<h3>Evaluation brackets</h3>
+<p><code>[ ]</code> does two things. It <strong>reorders</strong> &mdash; whatever is
+inside is worked out before the rest of the line, innermost first &mdash; and each
+extra pair <strong>evaluates the contents one more time</strong>.</p>
+<pre><code>echo -a [ $!me ]        ; once  -&gt; $me
+echo -a [ [ $!me ] ]    ; twice -&gt; your nick</code></pre>
+<p>The catch: <strong>a space stops the counting.</strong> If what is inside the
+brackets contains a space that no <code>$+</code> closes up, every pair beyond the
+first is ignored &mdash; so <code>[ [ a $!me ] ]</code> gives <code>a $me</code>, not
+your nick. Use <code>$+(...)</code> to close the gap when you need the extra pass.</p>
+<p><code>[ $+ text $+ ]</code> is not a group at all &mdash; it is how you write
+literal square brackets.</p>
 <h3>Channel and list tests</h3>
 <p>Two different kinds, easily confused. The first group asks the <strong>server</strong>
 what someone's status is right now; the second asks your <strong>own saved lists</strong>
@@ -1160,6 +1172,36 @@ people who've been seen/active. Handy for bans:</p>
   <tr><td><code>$duration(secs)</code></td><td>e.g. <code>$duration(3661)</code> → <code>1hr1min1sec</code></td></tr>
   <tr><td><code>$iif(cond, a, b)</code></td><td>inline if: returns a if cond else b</td></tr>
 </table>
+<h3>Asking the user &mdash; $input</h3>
+<p><code>$input(prompt,options,title,text)</code> shows a dialog and waits for the
+answer. The <strong>options</strong> field decides what the dialog looks like and
+what comes back.</p>
+<table>
+  <tr><th>Option</th><th>Gives you</th></tr>
+  <tr><td><code>e</code> · <code>p</code></td><td>a text box · a password box</td></tr>
+  <tr><td><code>m</code></td><td>a dropdown; the first text argument is the default, the rest are the list</td></tr>
+  <tr><td><code>o</code> · <code>y</code> · <code>n</code> · <code>r</code></td><td>OK · Yes/No · Yes/No/Cancel · Retry/Cancel</td></tr>
+  <tr><td><code>t c i q w h</code></td><td>an icon: star, recycle, info, question, warning, halt</td></tr>
+  <tr><td><code>kN</code></td><td>give up after N seconds</td></tr>
+  <tr><td><code>v</code> · <code>f</code></td><td>return the button name instead of true/false (<code>f</code> is the same for the text forms)</td></tr>
+</table>
+<p><strong>What comes back</strong> depends on whether there is a box to type in:</p>
+<ul>
+  <li><strong>Buttons only</strong> &mdash; <code>$true</code> from OK/Yes/Retry and
+    <code>$false</code> from No/Cancel. Add <code>v</code> and you get
+    <code>$yes</code>, <code>$no</code>, <code>$ok</code>, <code>$cancel</code>,
+    <code>$retry</code> instead, so you can tell Cancel from No.</li>
+  <li><strong>With a box</strong> &mdash; what was typed, or nothing if the dialog was
+    dismissed. Add <code>f</code> to get the button name for a dismissal too.</li>
+  <li><strong>Timed out</strong> &mdash; <code>$timeout</code>, but only with
+    <code>v</code> (and <code>f</code> as well when there is a box).</li>
+</ul>
+<pre><code>if ($input(Delete everything?,yq) == $true) { ... }
+var %name = $input(Your name?,e,Setup,guest)
+if ($input(Save first?,nv) == $cancel) { halt }</code></pre>
+<p>Options can also be the older numeric form &mdash; <code>$input(hi,5)</code> is the
+same as <code>$input(hi,eo)</code>.</p>
+
 <h3>Access lists</h3>
 <table>
   <tr><th>Identifier</th><th>Returns</th></tr>

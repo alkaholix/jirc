@@ -2514,7 +2514,7 @@ dependencies = [
 
 [[package]]
 name = "jirc"
-version = "26.8.26"
+version = "26.8.27"
 dependencies = [
  "arboard",
  "argon2",
