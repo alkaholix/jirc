@@ -8891,6 +8891,22 @@ alias t { .say hidden | say shown }");
         assert_eq!(run("set -g %a glob | echo %a"), vec!["glob"]);
         // `-u` sets an expiry without disturbing the value.
         assert_eq!(run("set -u60 %a temp | echo %a"), vec!["temp"]);
+
+        // `-z` counts down from the assigned value, which reads unchanged until
+        // a second has passed (set.rst's example prints 3 before it prints 2),
+        // and carries the matching lifetime: `.secs` is the value itself.
+        assert_eq!(run("set -z %a 3 | echo %a"), vec!["3"]);
+        assert_eq!(run("set -z %a 3 | echo $var(%a,1).secs"), vec!["3"]);
+        // `-zs` reports the assignment like plain `-s`. mIRC also echoes each
+        // decrement from its per-second tick; the lazy countdown has none.
+        assert_eq!(run("set -zs %a 3"), vec!["* Set %a to 3"]);
+        // "At zero the variable will be unset", so a countdown that starts
+        // there is already due.
+        assert_eq!(run("set -z %a 0 | echo [ $+ %a $+ ]"), vec!["[]"]);
+        // A value mIRC does not document a countdown for is an ordinary
+        // assignment, not a guess at what decrementing it would mean.
+        assert_eq!(run("set -z %a later | echo %a"), vec!["later"]);
+        assert_eq!(run("set -z %a -5 | echo %a"), vec!["-5"]);
     }
 
     #[test]
@@ -11943,6 +11959,28 @@ alias t { .say hidden | say shown }");
             }]
         );
         assert!(!engine.inner.lock().unwrap().vars.contains_key("temp"));
+
+        // `/set -z` decrements once a second and unsets at zero. The countdown
+        // is lazy in the same way: one real second into a two-second countdown
+        // the value reads 1, and past the end the variable is gone.
+        engine.run_command(&ctx(), "#c", "/set -z %count 2", &[]);
+        std::thread::sleep(std::time::Duration::from_millis(1_100));
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", "/echo -a %count", &[]),
+            vec![Action::Echo {
+                target: "(active)".into(),
+                text: "1".into()
+            }]
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1_100));
+        assert_eq!(
+            engine.run_command(&ctx(), "#c", "/echo -a [ $+ %count $+ ]", &[]),
+            vec![Action::Echo {
+                target: "(active)".into(),
+                text: "[]".into()
+            }]
+        );
+        assert!(!engine.inner.lock().unwrap().vars.contains_key("count"));
 
         // Other assignment commands follow the same overwrite rule. A socket
         // read must not leave an older timer attached to the newly-read value.

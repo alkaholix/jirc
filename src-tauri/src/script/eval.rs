@@ -373,6 +373,10 @@ pub const CLIENT_TIP_PREFIX: &str = "\u{0}client-tip\u{0}";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TimedExpiry {
     At(std::time::Instant),
+    /// `/set -z` — the same deadline as an `-u<value>` lifetime, but the value
+    /// *is* the seconds left: reads report the countdown and it is unset at
+    /// zero. `purge_expired` keeps the stored value up to date.
+    Countdown(std::time::Instant),
     EndOfRun,
 }
 
@@ -385,15 +389,23 @@ impl TimedExpiry {
         }
     }
 
+    /// `-z <seconds>`. Unlike `-u0`, a zero here is not the end-of-run form:
+    /// mIRC unsets the variable when the countdown reaches zero, so a value
+    /// that starts there is already due.
+    fn counting_down(seconds: u64) -> Self {
+        Self::Countdown(std::time::Instant::now() + std::time::Duration::from_secs(seconds))
+    }
+
     fn expired(self, now: std::time::Instant) -> bool {
-        matches!(self, Self::At(deadline) if deadline <= now)
+        matches!(self, Self::At(deadline) | Self::Countdown(deadline) if deadline <= now)
     }
 
     /// Whole seconds remaining, rounded up like mIRC's `.secs`/`.unset`
     /// properties so a newly-created `-u10` value reports 10 rather than 9.
+    /// `-z` reads the same way: a `-z 3` value shows 3 until a second has gone.
     pub(crate) fn seconds_remaining(self, now: std::time::Instant) -> u64 {
         match self {
-            Self::At(deadline) => {
+            Self::At(deadline) | Self::Countdown(deadline) => {
                 let remaining = deadline.saturating_duration_since(now);
                 remaining.as_secs() + u64::from(remaining.subsec_nanos() != 0)
             }
@@ -1358,6 +1370,22 @@ impl<'a> Runtime<'a> {
         for name in expired_vars {
             self.var_expiry.remove(&name);
             self.vars.remove(&name);
+        }
+
+        // A `/set -z` value is its own remaining seconds, so bring the survivors
+        // up to date here rather than ticking them from a background task: every
+        // read passes through this point (statement start and token expansion),
+        // which is where mIRC's once-a-second decrement becomes visible.
+        let counting: Vec<(String, u64)> = self
+            .var_expiry
+            .iter()
+            .filter(|(_, expiry)| matches!(expiry, TimedExpiry::Countdown(_)))
+            .map(|(name, expiry)| (name.clone(), expiry.seconds_remaining(now)))
+            .collect();
+        for (name, left) in counting {
+            if let Some(value) = self.vars.get_mut(&name) {
+                *value = left.to_string();
+            }
         }
 
         let expired_items: Vec<(String, String)> = self
@@ -3242,8 +3270,15 @@ impl<'a> Runtime<'a> {
         // `-i` initialises: leave an existing value alone. Without it the
         // idiom `set -i %first_run 1` overwrote on every call.
         let init_only = flags_lower.contains('i');
-        // `-s` echoes the assignment, as mIRC does.
+        // `-s` echoes the assignment, as mIRC does. With `-z` mIRC also echoes
+        // each decrement and the final unset; those come from its once-a-second
+        // tick, which the lazy countdown below has no equivalent of, so only the
+        // assignment is reported.
         let show_assignment = flags_lower.contains('s');
+        // `-z` counts the value down to zero and unsets it there. mIRC documents
+        // it only for a whole number, so anything else (a negative, a float, or
+        // text) stays an ordinary assignment rather than a guessed countdown.
+        let countdown = flags_lower.contains('z');
         if is_var {
             for decl in split_top_commas(rest) {
                 let decl = decl.trim();
@@ -3285,6 +3320,11 @@ impl<'a> Runtime<'a> {
             if init_only && self.var_value(&key).is_some_and(|v| !v.is_empty()) {
                 return;
             }
+            let countdown_secs = if countdown {
+                value.trim().parse::<u64>().ok()
+            } else {
+                None
+            };
             if show_assignment {
                 let target = self.reply_target();
                 self.actions.push(Action::Echo {
@@ -3304,7 +3344,14 @@ impl<'a> Runtime<'a> {
                 self.set_visible_var(key.clone(), value)
             };
             if !is_local {
-                update_timed_expiry(self.var_expiry, key, flags);
+                // `-z` is its own lifetime (`-u<value>`), so it replaces any
+                // `-uN`/`-k` handling rather than running alongside it.
+                match countdown_secs {
+                    Some(seconds) => {
+                        self.var_expiry.insert(key, TimedExpiry::counting_down(seconds));
+                    }
+                    None => update_timed_expiry(self.var_expiry, key, flags),
+                }
             }
         } else if !rest.is_empty() {
             let key = rest.trim_start_matches('%').to_string();
