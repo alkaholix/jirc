@@ -8882,7 +8882,8 @@ alias t { .say hidden | say shown }");
         // An empty existing value is not a value, so `-i` still assigns.
         assert_eq!(run("set %a | set -i %a filled | echo %a"), vec!["filled"]);
 
-        // `-s` reports the assignment.
+        // `-s` reports the assignment. The exact wording is mIRC's, from the
+        // worked example in set.rst: `* Set %var to 3`.
         assert_eq!(run("set -s %a shown"), vec!["* Set %a to shown"]);
 
         // Scope switches still work as before.
