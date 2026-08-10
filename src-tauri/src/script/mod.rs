@@ -12677,6 +12677,42 @@ alias t { .say hidden | say shown }");
     }
 
     #[test]
+    fn finger_auto_and_hotlink_stay_off_the_wire() {
+        let engine = ScriptEngine::new();
+
+        // `/finger <nick>` fingers a nick, which on IRC is a CTCP FINGER. It
+        // used to leave as a literal `FINGER bob`, which no server has.
+        engine.load("alias t { finger bob }");
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![
+                Action::Send("PRIVMSG bob :\u{1}FINGER\u{1}".into()),
+                Action::Echo {
+                    target: "#c".into(),
+                    text: "-> [bob] FINGER".into()
+                },
+            ]
+        );
+
+        // `/auto` is the superseded name for `/aop` and drives the same list,
+        // rather than sending `AUTO on`.
+        engine.load("alias t { auto on | auto bob | msg #c $aop $aop(bob,1) }");
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :$true bob".into())]
+        );
+
+        // `/hotlink` only means something inside an `on HOTLINK` handler, whose
+        // result jIRC discards; it is recognised and inert so that `HOTLINK`
+        // never reaches the server.
+        engine.load("alias t { hotlink -m @helppop | msg #c after }");
+        assert_eq!(
+            engine.run_alias(&ctx(), "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :after".into())]
+        );
+    }
+
+    #[test]
     fn input_halt_suppresses_line() {
         let engine = ScriptEngine::new();
         engine.load("on *:INPUT:*:{ if (spam isin $1-) { /halt } }");

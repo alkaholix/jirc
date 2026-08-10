@@ -1872,6 +1872,23 @@ impl<'a> Runtime<'a> {
                         .push(Action::Send(format!("NOTICE {nick} :\u{1}{body}\u{1}")));
                 }
             }
+            // `/finger <nick>` fingers a nick, which on IRC means a CTCP FINGER
+            // — the same wire form and local echo as `/ctcp <nick> FINGER`.
+            // Unrecognised it became a literal `FINGER bob` server command,
+            // which no IRC server has.
+            "finger" => {
+                let nick = self.expand(raw_args);
+                let nick = nick.trim();
+                if !nick.is_empty() {
+                    self.actions
+                        .push(Action::Send(format!("PRIVMSG {nick} :\u{1}FINGER\u{1}")));
+                    let target = self.reply_target();
+                    self.actions.push(Action::Echo {
+                        target,
+                        text: format!("-> [{nick}] FINGER"),
+                    });
+                }
+            }
             "nickserv" | "ns" => self.send_service("NickServ", raw_args),
             "chanserv" | "cs" => self.send_service("ChanServ", raw_args),
             "memoserv" | "ms" => self.send_service("MemoServ", raw_args),
@@ -2291,7 +2308,11 @@ impl<'a> Runtime<'a> {
                 self.users.remove_levels(levels.trim());
             }
             "iuser" => self.cmd_iuser(raw_args),
-            "aop" => self.cmd_autolist(crate::script::users::AutoKind::Aop, raw_args),
+            // `/auto` is the original auto-op command. mIRC's page says `/aop`
+            // supersedes it and the two take the same arguments (`/aop` adds
+            // `-a` and `-l`), so it routes to the same list rather than
+            // reaching the server as `AUTO on`.
+            "auto" | "aop" => self.cmd_autolist(crate::script::users::AutoKind::Aop, raw_args),
             "avoice" => self.cmd_autolist(crate::script::users::AutoKind::Avoice, raw_args),
             "protect" => self.cmd_autolist(crate::script::users::AutoKind::Protect, raw_args),
             // jIRC extension — mIRC has no owner list. See `AutoKind::Aowner`.
@@ -2826,7 +2847,16 @@ impl<'a> Runtime<'a> {
             // a stored profile would be a surprising side effect, so this stays
             // inert until we decide which profile it should target. Recognising
             // it still matters — otherwise it reaches the server as `USERNAME`.
-            "fline" | "renwin" | "run" | "maximize" | "minimize" | "username" => {
+            //
+            // `/hotlink -md [@menu]` swaps the popup menu for the word under
+            // the pointer, and only means anything inside an `on HOTLINK`
+            // handler. jIRC dispatches that event and fills `$hotlink`,
+            // `$hotline` and `$hotlinepos`, but `script_run_hotlink`'s result
+            // is discarded by the caller, so a handler's decision — this menu,
+            // or `/halt` — has nowhere to travel to. Until that return trip
+            // exists the command has nothing to act on; recognising it keeps
+            // `HOTLINK` off the wire.
+            "fline" | "renwin" | "run" | "maximize" | "minimize" | "username" | "hotlink" => {
                 let _ = self.expand(raw_args);
             }
             _ => {
