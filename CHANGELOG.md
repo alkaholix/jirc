@@ -12,6 +12,54 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🔌 26.8.31 — Three commands that were telling the server your business
+
+`/finger`, `/auto` and `/hotlink` are all client-side commands. jIRC recognised
+none of them, so each fell through to the "unknown command, send it as a verb"
+fallback and went out over the network:
+
+```
+/finger bob   →  FINGER bob
+/auto on      →  AUTO on
+/hotlink -m   →  HOTLINK
+```
+
+No IRC server has those commands. Each did nothing useful locally *and* told the
+network what you were trying to do.
+
+- **`/finger <nick>`** now sends a **CTCP FINGER** — the same line and local
+  echo as `/ctcp <nick> FINGER`, which is what fingering a nick means on IRC.
+- **`/auto`** now drives the **same auto-op list as `/aop`**. mIRC's page says
+  `/aop` supersedes it and the two take the same arguments, so nothing new was
+  built — a legacy script's `/auto bob` fills the list that Settings → Users
+  edits. Superseded is not removed: `/auto` is still in mIRC 7.84.
+- **`/hotlink`** is recognised and inert. See below.
+
+### `on HOTLINK` reports the click, and that's all
+
+`/hotlink -md [@menu]` replaces the right-click menu for the word under the
+pointer, and only means anything inside an `on HOTLINK` handler. jIRC fires that
+event and fills `$hotlink`, `$hotline` and `$hotlinepos` — but throws the
+handler's result away, so nothing it decides can reach the UI. That means
+`/hotlink -m` has nothing to act on, and **`/halt` in an `on HOTLINK` handler
+does nothing** either, where mIRC uses it to suppress the default action.
+
+Rather than half-build it, Help's `HOTLINK` row now says the event reports the
+click only. Wiring that return trip would fix `/halt` and is the prerequisite
+for `-m`; it changes the right-click path for every buffer, so it gets its own
+change rather than riding along with a command cleanup.
+
+### Already done, as it turns out
+
+The audit listed `$input`'s type switches and `$yes`/`$no`/`$ok`/`$cancel`/
+`$timeout` as missing. They shipped in 26.8.27 — `$input(hi,yv)` returns `$yes`
+where `$input(hi,y)` returns `$true`, and `$retry` is there too. The audit note
+was stale, and is corrected with a warning for future sweeps: you cannot test
+these by evaluating them, because an implemented `$yes` returns the string
+`$yes` and an unknown identifier stays literal text, so both look identical.
+
+---
+
 ## ⏳ 26.8.30 — Countdown variables, and `/write` does what its page says
 
 ### `/set -z` — a variable that counts itself down
