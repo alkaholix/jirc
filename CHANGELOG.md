@@ -12,6 +12,49 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🧮 26.8.32 — Brackets can name the command, and `-p` finally does something
+
+### `[ %cmd ]` ran nowhere and told the server about it
+
+Evaluation brackets reorder a line: what's inside is worked out first. Because
+that happens *before* the line executes, the brackets can supply the command
+name itself. jIRC left them in place, so this:
+
+```
+var %cmd echo
+[ %cmd ] -a works
+```
+
+sent the literal line `[ echo ] -a works` to the IRC server. It now runs
+`echo -a works`. A bracket that names nothing — an unset variable, an unclosed
+pair — is dropped instead of sent, since a line beginning with `[` was the whole
+problem.
+
+The other three bracket forms were already fine, which is worth stating because
+the internal notes claimed otherwise in one place and the opposite in another:
+the dynamic-variable form (`%v. [ $+ [ $nick ] ]`), a bracket inside an argument
+(`echo -a [ %x ]`) and evaluation counting (`[ [ %b ] ]`) all worked. Command
+position was the only gap.
+
+### `-p` on `/set` and `/var` was a switch with no effect
+
+mIRC refuses two values unless you ask for them with `-p`: a bare pair of double
+quotes, and a value ending in a *single* space (two or more are fine). jIRC kept
+both regardless, so `-p` and no `-p` did exactly the same thing:
+
+```
+var %a ""                → was: ""     now: (empty)
+var %b test $+ $chr(32)  → was: 5      now: $len 4
+var -p %a ""             → "" — unchanged, this is what -p is for
+var -p %b test $+ $chr(32) → $len 5 — likewise
+```
+
+That matters because mIRC's own guidance is to use `-p` when putting an event's
+`$1-` into a variable — advice that meant nothing here while the default behaved
+identically. Help's `-p` row now says what it actually does.
+
+---
+
 ## 🔌 26.8.31 — Three commands that were telling the server your business
 
 `/finger`, `/auto` and `/hotlink` are all client-side commands. jIRC recognised
