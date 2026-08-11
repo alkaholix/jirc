@@ -12,6 +12,42 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🧾 26.8.34 — Housekeeping: a test for last release, and honest checklists
+
+No behaviour changes. This closes out the loose ends from the last few releases
+so the next piece of work starts from a clean slate.
+
+### The hotlink menu decision is now tested
+
+26.8.33's right-click menus shipped with the frontend half type-checked but
+untested. The part that could actually be wrong isn't the mouse handling — it's
+the decision: which menus a click asks for, in what order, and whether the
+clicked word reaches them as `$1`. That's now a small function with five tests
+covering no handler, `/halt`, `-m`, `-md` ordering, and `-d` with no menu to add
+to.
+
+### The checklists were advertising work that was already done
+
+`PARITY.md` still listed eleven open gaps in three themes. All three had been
+closed — in 26.8.25, 26.8.27 and 26.8.31/33. Four more entries were stale:
+
+- **evaluation brackets** were marked partial, "standalone/eval-count forms stay
+  literal". All four forms work; the last was fixed in 26.8.32.
+- **transparency** is `/setlayer` (opacity 0–255), and has been all along.
+- **menubar editing** is `/menubar`, which landed in 26.8.8.
+- **MDI tile/cascade** was already a documented window-model non-goal.
+
+And two entries — `^` and `=$nick` — turned out to be neither implemented nor
+backlog. Both came from the original symbol sweep with a one-line description
+and no mIRC page behind either. They're now marked `[?]`, a new marker meaning
+"listed by the sweep, no page found", with a note not to re-investigate them
+without a reference.
+
+What's honestly left unticked: ECDSA-NIST256P SASL, identd (deferred until a
+network needs it), UPnP, `/speak`, MIDI/video, and mIRC's `g*` agent commands.
+
+---
+
 ## 🖱️ 26.8.33 — Right-click menus your scripts control
 
 ### `on HOTLINK` can finally change something
