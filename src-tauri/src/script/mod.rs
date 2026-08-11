@@ -3852,6 +3852,17 @@ pub async fn script_run_key(
     .unwrap_or(false)
 }
 
+/// What an `on HOTLINK` handler decided about the click it was told of.
+/// `halted` is mIRC's `/halt` — suppress the default action; `menu` and
+/// `defaults` are what `/hotlink -m @name` and `-d` asked for.
+#[derive(Debug, Default, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HotlinkOutcome {
+    pub halted: bool,
+    pub menu: String,
+    pub defaults: bool,
+}
+
 /// Dispatches `on HOTLINK` for a word under the pointer in a rendered buffer.
 #[tauri::command]
 pub async fn script_run_hotlink(
@@ -3863,7 +3874,7 @@ pub async fn script_run_hotlink(
     action: String,
     line: usize,
     position: usize,
-) -> bool {
+) -> HotlinkOutcome {
     tauri::async_runtime::spawn_blocking(move || {
         if word.is_empty()
             || !matches!(
@@ -3871,7 +3882,7 @@ pub async fn script_run_hotlink(
                 "mouse" | "sclick" | "dclick" | "rclick" | "uclick"
             )
         {
-            return false;
+            return HotlinkOutcome::default();
         }
         let engine = app.state::<ScriptEngine>();
         let state = app
@@ -3900,12 +3911,34 @@ pub async fn script_run_hotlink(
             hotlink_pos: position,
             ..Default::default()
         };
+        // Clear any request left by an earlier click before the handler runs,
+        // so a stale `/hotlink -m` cannot decide this one.
+        {
+            let mut g = engine.inner.lock().unwrap();
+            g.vars.remove(crate::script::eval::HOTLINK_MENU_KEY);
+            g.vars.remove(crate::script::eval::HOTLINK_DEFAULTS_KEY);
+        }
         let (actions, halted) = engine.dispatch_event_halt(&ctx, "HOTLINK", vars);
         apply_actions(&app, &server_id, &my_nick, &network, &server, actions);
-        halted
+        let (menu, defaults) = {
+            let mut g = engine.inner.lock().unwrap();
+            (
+                g.vars
+                    .remove(crate::script::eval::HOTLINK_MENU_KEY)
+                    .unwrap_or_default(),
+                g.vars
+                    .remove(crate::script::eval::HOTLINK_DEFAULTS_KEY)
+                    .is_some(),
+            )
+        };
+        HotlinkOutcome {
+            halted,
+            menu,
+            defaults,
+        }
     })
     .await
-    .unwrap_or(false)
+    .unwrap_or_default()
 }
 
 /// The events a finished audio file fires, in order. `/splay` raises a
@@ -6463,6 +6496,24 @@ mod tests {
         // -n prevents the $crlf at the end of the written text.
         run("/write -cn n.txt solo");
         assert_eq!(read("n.txt"), "solo");
+
+        // -a with no line selected adds to the last line. write.rst says only
+        // "appends the text to an existing line"; the last one is where every
+        // other unselected operation acts, and without this -a did exactly what
+        // a plain /write does.
+        run("/write -c a.txt first");
+        run("/write a.txt second");
+        run("/write -a a.txt !");
+        assert_eq!(read("a.txt"), "first\r\nsecond!\r\n");
+        // An explicit line still wins, and one past the end stays a no-op.
+        run("/write -al1 a.txt ?");
+        assert_eq!(read("a.txt"), "first?\r\nsecond!\r\n");
+        run("/write -al9 a.txt ignored");
+        assert_eq!(read("a.txt"), "first?\r\nsecond!\r\n");
+        // Nothing to add to: the text becomes the line.
+        run("/write -c a.txt");
+        run("/write -a a.txt solo");
+        assert_eq!(read("a.txt"), "solo");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -12730,6 +12781,63 @@ alias t { .say hidden | say shown }");
     }
 
     #[test]
+    fn hotlink_handler_decides_the_menu() {
+        use crate::script::eval::{HOTLINK_DEFAULTS_KEY, HOTLINK_MENU_KEY};
+        let click = || EventVars {
+            chan: "#c".into(),
+            target: "#c".into(),
+            text: "/msg".into(),
+            params: vec!["/msg".into()],
+            hotlink_event: "rclick".into(),
+            hotlink_line_text: "try /msg".into(),
+            hotlink_line: 1,
+            hotlink_pos: 5,
+            ..Default::default()
+        };
+
+        // `/hotlink -m @menu` names the popup to show for the clicked word.
+        let engine = ScriptEngine::new();
+        engine.load("on *:HOTLINK:*:*:{ if ($hotlink(event) == rclick) { hotlink -m @helppop } }");
+        let (_, halted) = engine.dispatch_event_halt(&ctx(), "HOTLINK", click());
+        assert!(!halted);
+        {
+            let g = engine.inner.lock().unwrap();
+            assert_eq!(
+                g.vars.get(HOTLINK_MENU_KEY).map(String::as_str),
+                Some("@helppop")
+            );
+            assert!(!g.vars.contains_key(HOTLINK_DEFAULTS_KEY));
+        }
+
+        // `-d` asks for the window's normal popups alongside it.
+        let engine = ScriptEngine::new();
+        engine.load("on *:HOTLINK:*:*:{ hotlink -md @both }");
+        engine.dispatch_event_halt(&ctx(), "HOTLINK", click());
+        {
+            let g = engine.inner.lock().unwrap();
+            assert_eq!(
+                g.vars.get(HOTLINK_MENU_KEY).map(String::as_str),
+                Some("@both")
+            );
+            assert!(g.vars.contains_key(HOTLINK_DEFAULTS_KEY));
+        }
+
+        // `/halt` reaches the caller, which is what suppresses the default menu.
+        let engine = ScriptEngine::new();
+        engine.load("on *:HOTLINK:*:*:{ halt }");
+        assert!(engine.dispatch_event_halt(&ctx(), "HOTLINK", click()).1);
+
+        // A handler that asks for nothing leaves nothing behind, so the click
+        // gets the window's own menu.
+        let engine = ScriptEngine::new();
+        engine.load("on *:HOTLINK:*:*:{ echo -a seen $1 }");
+        engine.dispatch_event_halt(&ctx(), "HOTLINK", click());
+        let g = engine.inner.lock().unwrap();
+        assert!(!g.vars.contains_key(HOTLINK_MENU_KEY));
+        assert!(!g.vars.contains_key(HOTLINK_DEFAULTS_KEY));
+    }
+
+    #[test]
     fn finger_auto_and_hotlink_stay_off_the_wire() {
         let engine = ScriptEngine::new();
 
@@ -12755,9 +12863,8 @@ alias t { .say hidden | say shown }");
             vec![Action::Send("PRIVMSG #c :$true bob".into())]
         );
 
-        // `/hotlink` only means something inside an `on HOTLINK` handler, whose
-        // result jIRC discards; it is recognised and inert so that `HOTLINK`
-        // never reaches the server.
+        // `/hotlink` records its request for the `on HOTLINK` caller to read,
+        // so it produces no actions of its own — and never reaches the server.
         engine.load("alias t { hotlink -m @helppop | msg #c after }");
         assert_eq!(
             engine.run_alias(&ctx(), "#c", "t", ""),

@@ -309,7 +309,7 @@ export const api = {
   scriptRunKey: (serverId: string, target: string, kind: "KEYDOWN" | "KEYUP" | "CHAR", key: string, keyVal: number, keyRepeat: boolean, modifiers: string, text: string) =>
     invoke<boolean>("script_run_key", { serverId, target, kind, key, keyVal, keyRepeat, modifiers, text }),
   scriptRunHotlink: (serverId: string, target: string, word: string, lineText: string, action: "mouse" | "sclick" | "dclick" | "rclick" | "uclick", line: number, position: number) =>
-    invoke<boolean>("script_run_hotlink", { serverId, target, word, lineText, action, line, position }),
+    invoke<HotlinkOutcome>("script_run_hotlink", { serverId, target, word, lineText, action, line, position }),
   scriptDispatchAudioEnd: (serverId: string, kind: string, path: string) =>
     invoke<void>("script_dispatch_audio_end", { serverId, kind, path }),
   scriptSetClientWindowState: (label: string, focused: boolean, appState: string) =>
@@ -560,6 +560,16 @@ export type IrcEvent =
 export interface Member {
   nick: string;
   prefix: string;
+}
+
+/** What an `on HOTLINK` handler decided about a click (mirrors `HotlinkOutcome`). */
+export interface HotlinkOutcome {
+  /** `/halt` — suppress the default action for this click. */
+  halted: boolean;
+  /** `/hotlink -m @name` — show this menu instead of the window's own. */
+  menu: string;
+  /** `/hotlink -d` — show the window's normal popups as well. */
+  defaults: boolean;
 }
 
 export interface PopupItem {

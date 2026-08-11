@@ -255,6 +255,11 @@ export function MessageList({ buffer }: { buffer: Buffer }) {
   const lastHotlinkRef = useRef(0);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [popups, setPopups] = useState<PopupItem[]>([]);
+  // The word and menu a `/hotlink -m` popup was opened for, so a chosen item
+  // runs against the same word. Refs, not state: they are read by the click
+  // handler, not rendered.
+  const hotlinkWord = useRef("");
+  const hotlinkContext = useRef("");
   const popupContext =
     buffer.kind === "window"
       ? buffer.name
@@ -265,39 +270,65 @@ export function MessageList({ buffer }: { buffer: Buffer }) {
           : "status";
   const popupTarget = buffer.kind === "status" ? "" : buffer.name;
   const openMenu = (e: ReactMouseEvent) => {
-    dispatchHotlink(e, "rclick");
     e.preventDefault();
-    api
-      .scriptPopups(buffer.serverId, popupTarget, server?.nick ?? "", server?.name ?? "", popupContext, "")
-      .then(async (items) => {
+    const { clientX, clientY } = e;
+    void (async () => {
+      // An `on HOTLINK` handler decides this menu, as it does in mIRC: `/halt`
+      // suppresses it entirely, `/hotlink -m @name` shows that menu instead of
+      // the window's own, and `-d` asks for both.
+      const hit = hotlinkAtPoint(clientX, clientY);
+      const outcome = hit ? await runHotlink(hit, "rclick") : null;
+      if (outcome?.halted) return;
+      const custom = outcome?.menu ?? "";
+      const contexts = custom
+        ? outcome?.defaults
+          ? [custom, popupContext]
+          : [custom]
+        : [popupContext];
+      // A custom hotlink menu is built around the clicked word, which its
+      // labels and commands read as $1.
+      hotlinkWord.current = custom ? (hit?.word ?? "") : "";
+      hotlinkContext.current = custom;
+      try {
+        const lists = await Promise.all(
+          contexts.map((context) =>
+            api.scriptPopups(buffer.serverId, popupTarget, server?.nick ?? "", server?.name ?? "", context, context === custom ? (hit?.word ?? "") : "")
+          )
+        );
+        const items = lists.flat();
         const visible = buffer.kind === "window"
           ? items.filter((item) => !["mouse", "sclick", "dclick", "uclick", "rclick", "lbclick", "leave", "drop"].includes(item.label.trim().toLowerCase()))
           : items;
         setPopups(visible);
         if (!visible.length) return;
-        if (nativePopupMenus && await showNativePopup(visible, e.clientX, e.clientY, runPopup)) return;
-        setMenu({ x: e.clientX, y: e.clientY });
-      })
-      .catch(() => {});
+        if (nativePopupMenus && await showNativePopup(visible, clientX, clientY, runPopup)) return;
+        setMenu({ x: clientX, y: clientY });
+      } catch {
+        /* a menu that cannot be built simply does not open */
+      }
+    })();
   };
+  const runHotlink = (
+    hit: NonNullable<ReturnType<typeof hotlinkAtPoint>>,
+    action: "mouse" | "sclick" | "dclick" | "rclick" | "uclick"
+  ) =>
+    api
+      .scriptRunHotlink(buffer.serverId, popupTarget, hit.word, hit.fullLine, action, hit.line, hit.position)
+      .catch(() => null);
   const dispatchHotlink = (
     event: ReactMouseEvent,
     action: "mouse" | "sclick" | "dclick" | "rclick" | "uclick"
   ) => {
     const hit = hotlinkAtPoint(event.clientX, event.clientY);
     if (!hit) return;
-    api.scriptRunHotlink(
-      buffer.serverId,
-      popupTarget,
-      hit.word,
-      hit.fullLine,
-      action,
-      hit.line,
-      hit.position
-    ).catch(() => {});
+    void runHotlink(hit, action);
   };
   const runPopup = (item: PopupItem) => {
-    api.scriptRunPopup(buffer.serverId, popupTarget, server?.nick ?? "", server?.name ?? "", item.command, [], undefined, item.source, popupContext).catch(() => {});
+    // Items from a `/hotlink -m` menu carry the clicked word as $1; the
+    // window's own popups keep their usual empty parameters.
+    const params = hotlinkWord.current ? [hotlinkWord.current] : [];
+    const context = hotlinkContext.current || popupContext;
+    api.scriptRunPopup(buffer.serverId, popupTarget, server?.nick ?? "", server?.name ?? "", item.command, params, undefined, item.source, context).catch(() => {});
     setMenu(null);
   };
 

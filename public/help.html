@@ -682,7 +682,7 @@ matches exactly one word. So <code>on *:TEXT:!weather &amp;:#:</code> triggers o
   <tr><td><code>TABCOMP</code></td><td>Tab is pressed before nickname completion; <code>/halt</code> suppresses the default</td><td><code>$target $1-</code></td></tr>
   <tr><td><code>KEYDOWN</code> / <code>KEYUP</code></td><td>a key is pressed or released in the message input</td><td><code>$1</code> key, <code>$2</code> modifiers, <code>$3-</code> input text</td></tr>
   <tr><td><code>CHAR</code></td><td>a Unicode character is entered in a custom <code>@window</code> editbox</td><td><code>$keychar $keyval $keyrpt</code></td></tr>
-  <tr><td><code>HOTLINK</code></td><td>the pointer moves over or clicks a matching rendered word. It reports the click only — unlike mIRC, <code>/halt</code> and <code>/hotlink</code> do not change the menu jIRC shows</td><td><code>$1 $hotlink(...) $hotline $hotlinepos</code></td></tr>
+  <tr><td><code>HOTLINK</code></td><td>the pointer moves over or clicks a matching rendered word. On a right-click the handler chooses the menu: <code>/halt</code> shows none, <code>/hotlink -m @name</code> shows that one, <code>-d</code> adds the window's own</td><td><code>$1 $hotlink(...) $hotline $hotlinepos</code></td></tr>
   <tr><td><code>LOGON</code></td><td>registration lines have been sent, before the welcome numeric</td><td><code>$network $server $servertarget</code></td></tr>
   <tr><td><code>SERV</code></td><td>a user enters a command in a jIRC Fserve session</td><td><code>$nick $cd $1-</code></td></tr>
   <tr><td><code>WAVEEND</code> / <code>PLAYEND</code></td><td>script audio or a play queue item finishes</td><td><code>$filename</code></td></tr>
@@ -1299,7 +1299,7 @@ write anywhere else on your disk.</p>
   <tr><td><code>/write -dl&lt;n&gt; file</code></td><td>delete line <em>n</em></td></tr>
   <tr><td><code>/write -s&lt;words&gt; file text</code></td><td>act on the first line <em>starting with</em> those words instead of a line number</td></tr>
   <tr><td><code>/write -w&lt;wildcard&gt; file text</code> · <code>-r/regex/</code></td><td>the same, choosing the line by wildcard or regex</td></tr>
-  <tr><td><code>/write -a file text</code></td><td>add the text to the end of the chosen line instead of replacing it</td></tr>
+  <tr><td><code>/write -a file text</code></td><td>add the text to the end of the chosen line instead of replacing it — the last line when nothing else picks one</td></tr>
   <tr><td><code>/write -n file text</code></td><td>don't put a line break after the text</td></tr>
   <tr><td><code>$read(file)</code></td><td>a random line</td></tr>
   <tr><td><code>$read(file, n)</code></td><td>line number n</td></tr>

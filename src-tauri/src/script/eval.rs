@@ -422,6 +422,13 @@ pub const STYLE_MARK: char = '\u{E000}';
 /// Unix timestamp of the most recent editbox activity. `$idle` reads it and
 /// `/resetidle` updates it. Keeping this in the engine's shared variable store
 /// makes the value application-wide, as it is in mIRC.
+/// What `/hotlink` asked for during the current `on HOTLINK` handler: the
+/// `-m` menu name, and whether `-d` asked for the normal popups as well. The
+/// caller that dispatched the event reads and clears these — the handler's
+/// decision has no other way back out to the window that was clicked.
+pub const HOTLINK_MENU_KEY: &str = "\0hotlink-menu";
+pub const HOTLINK_DEFAULTS_KEY: &str = "\0hotlink-defaults";
+
 pub const CLIENT_IDLE_SINCE_KEY: &str = "\0client-idle-since";
 pub const FLINEN_KEY: &str = "\0flinen";
 pub const FINDFILEN_KEY: &str = "\0findfilen";
@@ -2870,18 +2877,10 @@ impl<'a> Runtime<'a> {
             // a stored profile would be a surprising side effect, so this stays
             // inert until we decide which profile it should target. Recognising
             // it still matters — otherwise it reaches the server as `USERNAME`.
-            //
-            // `/hotlink -md [@menu]` swaps the popup menu for the word under
-            // the pointer, and only means anything inside an `on HOTLINK`
-            // handler. jIRC dispatches that event and fills `$hotlink`,
-            // `$hotline` and `$hotlinepos`, but `script_run_hotlink`'s result
-            // is discarded by the caller, so a handler's decision — this menu,
-            // or `/halt` — has nowhere to travel to. Until that return trip
-            // exists the command has nothing to act on; recognising it keeps
-            // `HOTLINK` off the wire.
-            "fline" | "renwin" | "run" | "maximize" | "minimize" | "username" | "hotlink" => {
+            "fline" | "renwin" | "run" | "maximize" | "minimize" | "username" => {
                 let _ = self.expand(raw_args);
             }
+            "hotlink" => self.cmd_hotlink(raw_args),
             _ => {
                 // Unknown client command: pass it to the IRC server. When `!`
                 // bypassed an alias, send the command without the prefix.
@@ -3434,6 +3433,26 @@ impl<'a> Runtime<'a> {
         }
     }
 
+    /// `/hotlink -md [@menu]` — choose the popup menu for the word under the
+    /// pointer. Only meaningful inside an `on HOTLINK` handler: `-m` names a
+    /// custom `menu @name` to show instead of the window's own popups, and `-d`
+    /// asks for those normal popups as well. The request is left where
+    /// `script_run_hotlink` collects it once the handler returns.
+    fn cmd_hotlink(&mut self, raw: &str) {
+        let (flags, rest) = split_switches(raw);
+        let flags = flags.to_ascii_lowercase();
+        let menu = self.expand(rest);
+        let menu = menu.trim();
+        if flags.contains('m') && !menu.is_empty() {
+            self.vars
+                .insert(HOTLINK_MENU_KEY.to_string(), menu.to_string());
+        }
+        if flags.contains('d') {
+            self.vars
+                .insert(HOTLINK_DEFAULTS_KEY.to_string(), "1".to_string());
+        }
+    }
+
     /// `/unset [-sgl] <%var> [%var2 ...]` — remove one or more variables;
     /// names may be wildcards (`/unset %prefix.*`).
     /// `/auser [-a] <levels> <nick|address> [info]` — add/edit a user-list entry.
@@ -3692,10 +3711,20 @@ impl<'a> Runtime<'a> {
         } else if control_switches.contains('i') {
             let index = line_number.unwrap_or(lines.len() + 1).max(1);
             lines.insert((index - 1).min(lines.len()), text.to_string());
-        } else if control_switches.contains('a') && line_number.is_some() {
-            let index = line_number.unwrap();
+        } else if control_switches.contains('a') {
+            // `-a` adds the text to an existing line instead of replacing it.
+            // write.rst does not say *which* line that is when no `-l`/`-s`/
+            // `-w`/`-r` picks one, so jIRC takes the last — the point every
+            // other unselected /write operation acts on (a plain write appends
+            // there, `-i` inserts there, `-d` deletes the last line). Left
+            // alone, `-a` did nothing a plain /write did not already do.
+            let index = line_number.unwrap_or(lines.len());
             if let Some(line) = index.checked_sub(1).and_then(|i| lines.get_mut(i)) {
                 line.push_str(text);
+            } else if line_number.is_none() {
+                // An empty file has no line to add to, so the text becomes it.
+                // A line number past the end stays a no-op, as before.
+                lines.push(text.to_string());
             }
         } else if let Some(index) = line_number {
             if index <= lines.len() {
