@@ -1562,6 +1562,29 @@ impl<'a> Runtime<'a> {
                 return;
             }
         }
+        // mIRC processes `[ ]` for the whole line *before* the line executes,
+        // so a bracket can supply the command name itself — `[ %cmd ] -a hi`
+        // runs whatever `%cmd` holds. Unresolved, the brackets became part of
+        // an unknown command and the entire line went to the server as
+        // `[ echo ] -a hi`.
+        if name.starts_with('[') {
+            let resolved = self
+                .expand_evaluation_brackets(split_top_level(&format!("{name} {raw_args}")))
+                .join(" ");
+            let (command, rest) = resolved
+                .split_once(char::is_whitespace)
+                .unwrap_or((resolved.as_str(), ""));
+            // The bracket pass seals its result against re-evaluation; the
+            // command name has to come back out of that envelope to be matched.
+            let command = decode_sealed(&decode_evaluated(command));
+            // A bracket that resolves to no command — an unclosed pair, or an
+            // empty variable — is dropped. The server has no use for a line
+            // beginning with `[`, which is what made this a leak.
+            if !command.is_empty() && !command.starts_with('[') {
+                self.dispatch(&command, rest);
+            }
+            return;
+        }
         let lname = name.to_ascii_lowercase();
         // mIRC's silent prefix: `.command` runs the command but suppresses its
         // output. We don't echo command output anyway, so just drop a leading
@@ -3309,6 +3332,11 @@ impl<'a> Runtime<'a> {
         // it only for a whole number, so anything else (a negative, a float, or
         // text) stays an ordinary assignment rather than a guessed countdown.
         let countdown = flags_lower.contains('z');
+        // `-p` permits the two values mIRC otherwise refuses: a bare pair of
+        // double quotes, and a single trailing space. Without it those are
+        // stripped — which is the whole reason var.rst tells scripts to use
+        // `-p` when putting an event's `$1-` into a variable.
+        let permit_literal = flags_lower.contains('p');
         if is_var {
             for decl in split_top_commas(rest) {
                 let decl = decl.trim();
@@ -3330,6 +3358,9 @@ impl<'a> Runtime<'a> {
                 if !no_math {
                     value = try_var_math(&value).unwrap_or(value);
                 }
+                if !permit_literal {
+                    value = strip_unpermitted_value(value);
+                }
                 if force_global {
                     update_timed_expiry(self.var_expiry, key.clone(), flags);
                     self.vars.insert(key, value);
@@ -3345,6 +3376,9 @@ impl<'a> Runtime<'a> {
             let mut value = self.expand(value.trim());
             if !no_math {
                 value = try_var_math(&value).unwrap_or(value);
+            }
+            if !permit_literal {
+                value = strip_unpermitted_value(value);
             }
             // `-i` only assigns when there is nothing there yet.
             if init_only && self.var_value(&key).is_some_and(|v| !v.is_empty()) {
@@ -7849,6 +7883,20 @@ fn is_fully_parenthesised(s: &str) -> bool {
 /// `("m", "tbl item")`. Returns `("", trimmed)` when there are no switches.
 /// Only a leading `-token` is treated as switches; later `-` args (e.g. a
 /// negative value) are left in place.
+/// The two values `/set` and `/var` refuse unless `-p` permits them, from
+/// var.rst: a bare pair of double quotes is not a value, and a value may not
+/// end with *one* space — "multiple spaces can be set", so only a lone trailing
+/// space is dropped.
+fn strip_unpermitted_value(value: String) -> String {
+    if value == "\"\"" {
+        return String::new();
+    }
+    match value.strip_suffix(' ') {
+        Some(head) if !head.ends_with(' ') => head.to_string(),
+        _ => value,
+    }
+}
+
 /// mIRC's single `/var`/`/set` math operation: exactly 3 space-separated tokens
 /// where the 1st and 3rd parse as numbers and the 2nd is one of `+ - * / % ^ &`.
 /// Returns the computed value (formatted like `$calc`), or `None` to keep the

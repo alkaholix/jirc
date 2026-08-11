@@ -536,7 +536,8 @@ for the words the user typed after it.</p>
   <tr><td><code>/set -i %x value</code></td><td>Only set it if it has no value yet — the usual way to initialise.</td></tr>
   <tr><td><code>/set -s %x value</code></td><td>Also echo <code>* Set %x to value</code>.</td></tr>
   <tr><td><code>/set -l %x value</code> · <code>-g</code></td><td>Force local · force global.</td></tr>
-  <tr><td><code>/set -n %x 1 + 1</code> · <code>-p</code></td><td>Keep the value literal instead of working out the one sum <code>/set</code> normally does.</td></tr>
+  <tr><td><code>/set -n %x 1 + 1</code></td><td>Keep the value literal instead of working out the one sum <code>/set</code> normally does.</td></tr>
+  <tr><td><code>/set -p %x <em>value</em></code></td><td>Everything <code>-n</code> does, and it keeps two values <code>/set</code> otherwise throws away: a bare <code>&quot;&quot;</code>, and a single trailing space. Use it when storing someone else's text, such as an event's <code>$1-</code>.</td></tr>
 </table>
 <pre><code><span class="c">; a 10-second cooldown, and a countdown you can read</span>
 <span class="k">/set</span> -u10 <span class="v">%cooldown</span> 1
@@ -605,6 +606,10 @@ echo -a [ [ $!me ] ]    ; twice -&gt; your nick</code></pre>
 brackets contains a space that no <code>$+</code> closes up, every pair beyond the
 first is ignored &mdash; so <code>[ [ a $!me ] ]</code> gives <code>a $me</code>, not
 your nick. Use <code>$+(...)</code> to close the gap when you need the extra pass.</p>
+<p>Because the brackets are worked out before the line runs, they can supply the
+<strong>command name</strong> itself:</p>
+<pre><code><span class="k">var</span> <span class="v">%cmd</span> msg
+[ <span class="v">%cmd</span> ] <span class="i">$chan</span> hello     <span class="c">; runs /msg $chan hello</span></code></pre>
 <p><code>[ $+ text $+ ]</code> is not a group at all &mdash; it is how you write
 literal square brackets.</p>
 <h3>Channel and list tests</h3>

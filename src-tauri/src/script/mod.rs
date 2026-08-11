@@ -8565,6 +8565,39 @@ mod tests {
     ///
     /// Cases are taken from `mirckb-master/docs/source/advanced/eval_brackets.rst`.
     #[test]
+    fn evaluation_brackets_can_name_the_command() {
+        // mIRC resolves `[ ]` for the line before the line runs, so a bracket
+        // can supply the command name. jIRC used to leave the brackets in place
+        // and send the whole line to the server as `[ echo ] -a works`.
+        let run = |body: &str| {
+            let engine = ScriptEngine::new();
+            engine.load(&format!("alias t {{ {body} }}"));
+            engine.run_alias(&ctx(), "#c", "t", "")
+        };
+
+        assert_eq!(
+            run("var %cmd echo | [ %cmd ] -a works"),
+            vec![Action::Echo {
+                target: "(active)".into(),
+                text: "works".into()
+            }]
+        );
+        assert_eq!(
+            run("var %cmd msg | [ %cmd ] #c hi"),
+            vec![Action::Send("PRIVMSG #c :hi".into())]
+        );
+        // The command name can be built rather than stored whole.
+        assert_eq!(
+            run("var %suffix sg | [ m $+ %suffix ] #c built"),
+            vec![Action::Send("PRIVMSG #c :built".into())]
+        );
+        // A bracket that names nothing is dropped, not sent: an unset variable
+        // and an unclosed pair both used to reach the server.
+        assert!(run("[ %missing ] -a x").is_empty());
+        assert!(run("[ %missing -a x").is_empty());
+    }
+
+    #[test]
     fn evaluation_brackets_count_evaluations() {
         let run = |body: &str| {
             let engine = ScriptEngine::new();
@@ -8969,6 +9002,26 @@ alias t { .say hidden | say shown }");
         assert_eq!(run("set -g %a glob | echo %a"), vec!["glob"]);
         // `-u` sets an expiry without disturbing the value.
         assert_eq!(run("set -u60 %a temp | echo %a"), vec!["temp"]);
+
+        // Without `-p` a bare pair of double quotes is not a value and a single
+        // trailing space is dropped; `-p` permits both. var.rst's example:
+        // `//var -p %a "" | var -p %b test $+ $chr(32)` gives `"" vs 5`, and
+        // the same without `-p` gives ` vs 4`.
+        assert_eq!(run("set -p %a \"\" | echo [ $+ %a $+ ]"), vec!["[\"\"]"]);
+        assert_eq!(run("set %a \"\" | echo [ $+ %a $+ ]"), vec!["[]"]);
+        assert_eq!(
+            run("set -p %b test $+ $chr(32) | echo $len(%b)"),
+            vec!["5"]
+        );
+        assert_eq!(run("set %b test $+ $chr(32) | echo $len(%b)"), vec!["4"]);
+        // "multiple spaces can be set" — only a lone trailing space goes.
+        assert_eq!(
+            run("set %c test $+ $chr(32) $+ $chr(32) | echo $len(%c)"),
+            vec!["6"]
+        );
+        // /var follows the same rules.
+        assert_eq!(run("var %d \"\" | echo [ $+ %d $+ ]"), vec!["[]"]);
+        assert_eq!(run("var -p %e \"\" | echo [ $+ %e $+ ]"), vec!["[\"\"]"]);
 
         // `-z` counts down from the assigned value, which reads unchanged until
         // a second has passed (set.rst's example prints 3 before it prints 2),
