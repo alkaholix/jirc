@@ -9,6 +9,7 @@ import { nickColor } from "../lib/nickColor";
 import { ircxDisplay } from "../lib/ircx";
 import { FINDTEXT_COMMAND_EVENT, type FindTextCommand } from "../lib/clientCommands";
 import { showNativePopup } from "../lib/nativePopup";
+import { planHotlinkMenu } from "../lib/hotlink";
 import { UrlPreviews } from "./UrlPreviews";
 
 const isJoinPart = (l: Line) => l.kind === "event" && /^[→←]/.test(l.text);
@@ -278,21 +279,16 @@ export function MessageList({ buffer }: { buffer: Buffer }) {
       // the window's own, and `-d` asks for both.
       const hit = hotlinkAtPoint(clientX, clientY);
       const outcome = hit ? await runHotlink(hit, "rclick") : null;
-      if (outcome?.halted) return;
-      const custom = outcome?.menu ?? "";
-      const contexts = custom
-        ? outcome?.defaults
-          ? [custom, popupContext]
-          : [custom]
-        : [popupContext];
+      const plan = planHotlinkMenu(outcome, popupContext, hit?.word ?? "");
+      if (!plan.contexts.length) return;
       // A custom hotlink menu is built around the clicked word, which its
       // labels and commands read as $1.
-      hotlinkWord.current = custom ? (hit?.word ?? "") : "";
-      hotlinkContext.current = custom;
+      hotlinkWord.current = plan.word;
+      hotlinkContext.current = plan.custom;
       try {
         const lists = await Promise.all(
-          contexts.map((context) =>
-            api.scriptPopups(buffer.serverId, popupTarget, server?.nick ?? "", server?.name ?? "", context, context === custom ? (hit?.word ?? "") : "")
+          plan.contexts.map((context) =>
+            api.scriptPopups(buffer.serverId, popupTarget, server?.nick ?? "", server?.name ?? "", context, context === plan.custom ? plan.word : "")
           )
         );
         const items = lists.flat();
