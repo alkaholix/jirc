@@ -12,6 +12,53 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🖱️ 26.8.33 — Right-click menus your scripts control
+
+### `on HOTLINK` can finally change something
+
+The event has been firing for a while: click or right-click a word in a chat
+window and your handler runs, with `$hotlink`, `$hotline` and `$hotlinepos`
+telling it everything about the click. What it could not do is *act* — jIRC
+threw the handler's answer away, so `/halt` did nothing and `/hotlink` had
+nowhere to act.
+
+Now a right-click asks your handler first:
+
+- **`/halt`** — no menu opens.
+- **`/hotlink -m @name`** — that menu opens instead of the window's, with the
+  clicked word as `$1` in both its labels and its commands.
+- **`/hotlink -d`** — the window's normal popups are added underneath.
+
+So mIRC's own example works: right-click a `/command` or `$identifier` in chat
+and get a menu built for that word.
+
+```
+menu @helppop {
+  Lookup Help $1:/echo -a Looking up $1
+}
+on *:HOTLINK:/^[/$]\S+/:*:{
+  if ($hotlink(event) == rclick) hotlink -m @helppop
+}
+```
+
+Two differences from mIRC worth knowing. Its `-d` adds the default menu for a
+recognised *type* (URL, nick, channel); jIRC has no per-type word menus, so `-d`
+adds the window's normal menu instead. And `/halt` stops the menu but not a hand
+cursor, which jIRC doesn't draw for hotlinks.
+
+### `/write -a` now appends to a line, not after it
+
+`-a` means "add to an existing line instead of replacing it". With no `-l`/`-s`/
+`-w`/`-r` to pick one, jIRC started a **new** line — which is exactly what a
+plain `/write` does, so the switch did nothing. It now adds to the **last** line,
+which is where every other unselected `/write` acts. An empty file has no line to
+add to, so the text becomes it.
+
+mIRC's page doesn't say which line `-a` means on its own, so this is jIRC reading
+that silence rather than documented behaviour.
+
+---
+
 ## 🧮 26.8.32 — Brackets can name the command, and `-p` finally does something
 
 ### `[ %cmd ]` ran nowhere and told the server about it
