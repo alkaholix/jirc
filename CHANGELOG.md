@@ -12,6 +12,48 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🔧 26.8.36 — Switches that were being thrown away
+
+Three more commands from the per-command sweep, all of them the same shape: the
+switch was read as a filename or discarded outright, so the command quietly did
+the wrong thing — or nothing.
+
+### `/remove -b` deleted nothing. `/rename -o` renamed nothing.
+
+Neither command stripped its switches, so `-b` and `-o` became part of the
+filename. Any switched form was a silent no-op. Both now work.
+
+`-o` on `/rename` permits replacing an existing file, and without it the target
+is left alone. On `/remove`, mIRC's `-b` sends the file to the recycle bin —
+jIRC has no cross-platform equivalent, so **the file is deleted outright either
+way**, which is less recoverable than mIRC. Worth knowing before you rely on it.
+
+### `/copy` always overwrote
+
+It stripped its switches and then ignored them. mIRC leaves an existing target
+alone unless `-o` overrides it, and `-a` appends to it instead. Both now do what
+they say.
+
+### `/aline` and friends ignored all nine of their switches
+
+`/aline`, `/iline`, `/rline` and `/dline` skipped their switch token whole. Four
+of the nine are things jIRC's windows can do, and now do:
+
+- **`-n`** — don't add the line if it's already there.
+- **`-i[N]`** — indent it, 2 spaces by default.
+- **`-s`** / **`-a`** — select the line, clearing or keeping the current selection.
+
+The other five (`-c` colour, `-p` wrap, `-t` re-wrap, `-h` treebar highlight,
+`-l` side listbox) describe presentation jIRC doesn't model, and are now
+accepted deliberately rather than by accident.
+
+### Also checked: `/play` is clean
+
+All fourteen of its switches were already implemented. Recorded so nobody audits
+it twice.
+
+---
+
 ## 🗂️ 26.8.35 — Your server list, hash countdowns, and two lists that ate their own switches
 
 ### `$server(N)` reads your saved server list
