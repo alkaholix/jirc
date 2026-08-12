@@ -459,6 +459,33 @@ impl ScriptEngine {
         );
     }
 
+    /// Publishes the saved server list for `$server(N)`. Called wherever
+    /// profiles are read or written, so the list a script sees is the list on
+    /// disk. Takes only the fields `$server`'s properties expose — passwords
+    /// stay in the OS keyring and never enter the engine.
+    pub fn set_server_list(&self, servers: &[crate::config::ServerProfile]) {
+        let encoded = servers
+            .iter()
+            .map(|p| {
+                [
+                    p.host.as_str(),
+                    &p.port.to_string(),
+                    p.name.as_str(),
+                    p.nick.as_str(),
+                    p.alt_nick.as_deref().unwrap_or(""),
+                    p.username.as_deref().unwrap_or(""),
+                ]
+                .join(&eval::SERVER_LIST_FIELD_SEP.to_string())
+            })
+            .collect::<Vec<_>>()
+            .join(&eval::SERVER_LIST_ENTRY_SEP.to_string());
+        self.inner
+            .lock()
+            .unwrap()
+            .vars
+            .insert(eval::CLIENT_SERVER_LIST_KEY.into(), encoded);
+    }
+
     pub fn set_client_unread_windows(&self, windows: Vec<String>) {
         self.inner.lock().unwrap().vars.insert(
             eval::CLIENT_UNREAD_WINDOWS_KEY.into(),
@@ -12778,6 +12805,67 @@ alias t { .say hidden | say shown }");
             engine.run_alias(&ctx(), "#c", "t", ""),
             vec![Action::Send("WHOIS someone".into())]
         );
+    }
+
+    #[test]
+    fn server_identifier_reads_the_saved_list() {
+        use crate::config::ServerProfile;
+        // Built through serde rather than a struct literal: every other field
+        // carries `#[serde(default)]`, and `ServerProfile` deliberately has no
+        // `Default` impl (it would make `auto_reconnect` false, contradicting
+        // its serde default of true).
+        let profile = |name: &str, host: &str, port: u16, nick: &str| {
+            serde_json::from_str::<ServerProfile>(&format!(
+                r#"{{"name":"{name}","host":"{host}","port":{port},"nick":"{nick}",
+                    "altNick":"{nick}_","username":"user","password":"hunter2"}}"#
+            ))
+            .expect("profile fixture")
+        };
+        let engine = ScriptEngine::new();
+        engine.set_server_list(&[
+            profile("Libera.Chat", "irc.libera.chat", 6697, "me"),
+            profile("Undernet", "eu.undernet.org", 6667, "bob"),
+            profile("Libera.Chat", "irc2.libera.chat", 6667, "me"),
+        ]);
+        let run = |line: &str| {
+            engine
+                .run_command(&ctx(), "#c", line, &[])
+                .into_iter()
+                .find_map(|a| match a {
+                    Action::Echo { text, .. } => Some(text),
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+
+        // server.rst: "if N = 0, returns total number of server", and with a
+        // group, only that group's servers count.
+        assert_eq!(run("/echo -a $server(0)"), "3");
+        assert_eq!(run("/echo -a $server(0,Libera.Chat)"), "2");
+        assert_eq!(run("/echo -a $server(0,nosuch)"), "0");
+        // The Nth server's address, and the Nth within a group.
+        assert_eq!(run("/echo -a $server(1)"), "irc.libera.chat");
+        assert_eq!(run("/echo -a $server(2)"), "eu.undernet.org");
+        assert_eq!(run("/echo -a $server(2,Libera.Chat)"), "irc2.libera.chat");
+        // Properties jIRC has the data for.
+        assert_eq!(run("/echo -a $server(1).port"), "6697");
+        assert_eq!(run("/echo -a $server(1).group"), "Libera.Chat");
+        assert_eq!(run("/echo -a $server(2).nick"), "bob");
+        assert_eq!(run("/echo -a $server(2).anick"), "bob_");
+        assert_eq!(run("/echo -a $server(1).user"), "user");
+        // A name rather than a number looks the server up by address.
+        assert_eq!(run("/echo -a $server(eu.undernet.org).nick"), "bob");
+        // -1 is the live connection, not a list entry.
+        assert_eq!(run("/echo -a $server(-1)"), "irc.example.org");
+        assert_eq!(run("/echo -a $server(-1).group"), "Net");
+        // Out of range is $null, and the bare form still works.
+        assert_eq!(run("/echo -a [ $+ $server(9) $+ ]"), "[]");
+        assert_eq!(run("/echo -a $server"), "irc.example.org");
+        // Passwords are never handed to a script: jIRC keeps them in the OS
+        // keyring, so `.pass` is empty even though the profile carried one.
+        assert_eq!(run("/echo -a [ $+ $server(1).pass $+ ]"), "[]");
+        // mIRC's documented value for a connection not taken from the list.
+        assert_eq!(run("/echo -a $server(1).encoding"), "0");
     }
 
     #[test]

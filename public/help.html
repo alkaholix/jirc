@@ -1123,6 +1123,7 @@ goes to the server.</div>
   <tr><td><code>$cmdline</code></td><td>arguments passed when jIRC was launched</td></tr>
   <tr><td><code>$network</code></td><td>network name</td></tr>
   <tr><td><code>$server</code></td><td>server host</td></tr>
+  <tr><td><code>$server(N[,group])</code></td><td>your <strong>saved</strong> server list: <code>$server(0)</code> counts them, <code>$server(N)</code> is the Nth address, <code>$server(-1)</code> is the live connection, and a name instead of a number looks one up by address. Properties: <code>.port</code> <code>.group</code> <code>.nick</code> <code>.anick</code> <code>.user</code>. <code>.pass</code> is always empty — passwords live in your OS keyring and are never given to a script</td></tr>
   <tr><td><code>$notify</code> · <code>$notify(0)</code> · <code>$notify(N/nick)</code></td><td>notify-list enabled state, count, Nth nick, or nick position; properties: <code>.ison</code>, <code>.addr</code></td></tr>
   <tr><td><code>$time</code> · <code>$date</code> · <code>$ctime</code></td><td>current time / date / unix seconds</td></tr>
   <tr><td><code>$timestamp</code> · <code>$logstamp</code></td><td>the current local time in jIRC's timestamp form; <code>$timestampfmt</code> and <code>$logstampfmt</code> return the corresponding mSL format string</td></tr>

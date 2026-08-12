@@ -263,6 +263,16 @@ fn logs_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app_data_dir(app)?.join("logs"))
 }
 
+/// Keeps `$server(N)`'s view of the server list in step with what is on disk.
+/// Called wherever profiles are read or written. Only the non-secret fields
+/// reach the engine — see `ScriptEngine::set_server_list`. A missing engine
+/// (early startup, tests) is simply skipped.
+fn publish_server_list(app: &AppHandle, profiles: &[ServerProfile]) {
+    if let Some(engine) = app.try_state::<crate::script::ScriptEngine>() {
+        engine.set_server_list(profiles);
+    }
+}
+
 /// Loads saved server profiles, rehydrating secrets from the OS keyring.
 #[tauri::command]
 pub fn profiles_load(app: AppHandle) -> Result<Vec<ServerProfile>, String> {
@@ -291,6 +301,7 @@ pub fn profiles_load(app: AppHandle) -> Result<Vec<ServerProfile>, String> {
             }
         }
     }
+    publish_server_list(&app, &profiles);
     Ok(profiles)
 }
 
@@ -323,7 +334,9 @@ pub fn profiles_save(app: AppHandle, mut profiles: Vec<ServerProfile>) -> Result
     }
 
     let json = serde_json::to_string_pretty(&profiles).map_err(|e| e.to_string())?;
-    fs::write(dir.join("profiles.json"), json).map_err(|e| e.to_string())
+    fs::write(dir.join("profiles.json"), json).map_err(|e| e.to_string())?;
+    publish_server_list(&app, &profiles);
+    Ok(())
 }
 
 /// Deletes a saved profile by id, including its keyring secrets.
@@ -337,6 +350,7 @@ pub fn profiles_delete(app: AppHandle, id: String) -> Result<(), String> {
         profiles.retain(|p| p.id.as_deref() != Some(id.as_str()));
         let json = serde_json::to_string_pretty(&profiles).map_err(|e| e.to_string())?;
         fs::write(&path, json).map_err(|e| e.to_string())?;
+        publish_server_list(&app, &profiles);
     }
     // Remove any keyring secrets for this profile.
     store_secret(&id, "account_password", None);

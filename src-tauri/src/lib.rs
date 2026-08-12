@@ -77,6 +77,11 @@ pub fn run() {
                     .load(dir.join("ircx-keys.json"));
             }
             script::load_persisted(app.handle(), &engine);
+            // Publish the saved server list before any script runs, so an
+            // `on START` handler's `$server(N)` sees it rather than an empty
+            // list it would only get filled once the UI happened to load
+            // profiles. The load also refreshes it on every later read/write.
+            let _ = storage::profiles_load(app.handle().clone());
             // Fire `on START` now that scripts are loaded (mIRC's startup init event).
             script::fire_lifecycle(app.handle(), &engine, "START");
             Ok(())

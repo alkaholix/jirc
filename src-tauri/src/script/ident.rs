@@ -1473,7 +1473,8 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 _ => text.to_string(),
             }
         }
-        "server" => rt.server.to_string(),
+        "server" if args.is_empty() => rt.server.to_string(),
+        "server" => eval_server(rt, args, prop),
         "cmdline" => process_command_line(std::env::args_os().skip(1)),
         "portable" => std::env::current_exe()
             .ok()
@@ -6561,6 +6562,93 @@ fn finish_file_read(rt: &mut Runtime, value: String, no_eval: bool, command_pipe
         super::eval::encode_command_pipes(&value)
     } else {
         value
+    }
+}
+
+/// One entry of the saved server list, decoded from the engine's snapshot.
+#[derive(Default)]
+struct ServerEntry {
+    address: String,
+    port: String,
+    group: String,
+    nick: String,
+    anick: String,
+    user: String,
+}
+
+fn server_list(rt: &Runtime) -> Vec<ServerEntry> {
+    let raw = match rt.vars.get(super::eval::CLIENT_SERVER_LIST_KEY) {
+        Some(raw) if !raw.is_empty() => raw.clone(),
+        _ => return Vec::new(),
+    };
+    raw.split(super::eval::SERVER_LIST_ENTRY_SEP)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            let mut f = entry.split(super::eval::SERVER_LIST_FIELD_SEP);
+            let mut next = || f.next().unwrap_or("").to_string();
+            ServerEntry {
+                address: next(),
+                port: next(),
+                group: next(),
+                nick: next(),
+                anick: next(),
+                user: next(),
+            }
+        })
+        .collect()
+}
+
+/// `$server(N/address, [group])` — the saved server list, plus `$server(-1)`
+/// for the current connection. `N = 0` is the count. Properties come from
+/// server.rst; the ones jIRC has no equivalent for return `$null` rather than
+/// a guess, and `.pass` is empty by design — passwords live in the OS keyring
+/// and are never handed to a script. `.encoding` returns mIRC's documented
+/// not-from-the-list value, 0.
+fn eval_server(rt: &mut Runtime, args: &[String], prop: &str) -> String {
+    let selector = args.first().map(|a| a.trim()).unwrap_or("");
+    let group = args.get(1).map(|g| g.trim()).unwrap_or("");
+    let entries: Vec<ServerEntry> = server_list(rt)
+        .into_iter()
+        .filter(|e| group.is_empty() || e.group.eq_ignore_ascii_case(group))
+        .collect();
+
+    // `-1` is the live connection rather than a list entry: mIRC documents the
+    // current network as its group, and its address as the value.
+    let current = ServerEntry {
+        address: rt.server.to_string(),
+        group: rt.network.to_string(),
+        nick: rt.my_nick.to_string(),
+        ..Default::default()
+    };
+    let entry = match selector.parse::<i64>() {
+        Ok(0) => return entries.len().to_string(),
+        Ok(-1) => Some(current),
+        Ok(n) if n >= 1 => entries.into_iter().nth(n as usize - 1),
+        Ok(_) => None,
+        // A non-numeric selector is an address to look up.
+        Err(_) => entries
+            .into_iter()
+            .find(|e| e.address.eq_ignore_ascii_case(selector)),
+    };
+    let Some(entry) = entry else {
+        return String::new();
+    };
+    match prop.to_ascii_lowercase().as_str() {
+        "" => entry.address,
+        "port" => entry.port,
+        "group" => entry.group,
+        "nick" => entry.nick,
+        "anick" => entry.anick,
+        "user" => entry.user,
+        // mIRC's documented default for a connection that did not come from
+        // the server list.
+        "encoding" => "0".to_string(),
+        // Everything else is real in mIRC and has no jIRC equivalent: there is
+        // no per-entry description or email, no `/server -l` login method, no
+        // global-vs-local user info or certificate distinction — and `.pass`
+        // is withheld on purpose. `$null` is what mIRC itself returns for
+        // several of these when the connection did not come from the list.
+        _ => String::new(),
     }
 }
 

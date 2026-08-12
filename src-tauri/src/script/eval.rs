@@ -422,6 +422,19 @@ pub const STYLE_MARK: char = '\u{E000}';
 /// Unix timestamp of the most recent editbox activity. `$idle` reads it and
 /// `/resetidle` updates it. Keeping this in the engine's shared variable store
 /// makes the value application-wide, as it is in mIRC.
+/// The saved server list as `$server(N)` sees it: entries separated by US,
+/// fields within an entry by RS, in the order address, port, group, nick,
+/// alternative nick, username.
+///
+/// **Secrets are deliberately not here.** jIRC keeps server and account
+/// passwords in the OS keyring rather than in `profiles.json`, and does not
+/// hand them to scripts, so `$server(N).pass` is empty where mIRC returns the
+/// password. Keeping them out of the engine entirely is the point — an
+/// identifier that cannot reach a secret cannot leak one.
+pub const CLIENT_SERVER_LIST_KEY: &str = "\0client-server-list";
+pub const SERVER_LIST_FIELD_SEP: char = '\u{1e}';
+pub const SERVER_LIST_ENTRY_SEP: char = '\u{1f}';
+
 /// What `/hotlink` asked for during the current `on HOTLINK` handler: the
 /// `-m` menu name, and whether `-d` asked for the normal popups as well. The
 /// caller that dispatched the event reads and clears these — the handler's
