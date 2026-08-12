@@ -1420,6 +1420,19 @@ impl<'a> Runtime<'a> {
                 hash.remove(&item);
             }
         }
+
+        // `/hadd -z` items count down the same way `/set -z` variables do.
+        let counting: Vec<((String, String), u64)> = self
+            .hash_expiry
+            .iter()
+            .filter(|(_, expiry)| matches!(expiry, TimedExpiry::Countdown(_)))
+            .map(|(key, expiry)| (key.clone(), expiry.seconds_remaining(now)))
+            .collect();
+        for ((table, item), left) in counting {
+            if let Some(value) = self.hashes.get_mut(&table).and_then(|h| h.get_mut(&item)) {
+                *value = left.to_string();
+            }
+        }
     }
 
     /// Switches a departure event from mIRC's intentionally delayed roster/IAL
@@ -5787,17 +5800,25 @@ impl<'a> Runtime<'a> {
             return;
         };
         let path = sandbox_path(&self.data_dir, &file);
-        if flags.contains('a') {
+        let saved = if flags.contains('a') {
             use std::io::Write;
-            if let Ok(mut output) = std::fs::OpenOptions::new()
+            std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(path)
-            {
-                let _ = output.write_all(&bytes);
-            }
+                .and_then(|mut output| output.write_all(&bytes))
+                .is_ok()
         } else {
-            let _ = std::fs::write(path, bytes);
+            std::fs::write(path, bytes).is_ok()
+        };
+        // hsave.rst: -s displays "* Saved hash table <table> to <filename>",
+        // and only on success.
+        if saved && flags.contains('s') {
+            let target = self.reply_target();
+            self.actions.push(Action::Echo {
+                target,
+                text: format!("* Saved hash table {table} to {file}"),
+            });
         }
     }
 
@@ -5859,6 +5880,15 @@ impl<'a> Runtime<'a> {
                     .get_mut(&table)
                     .expect("table checked above")
                     .insert(item, value);
+            }
+            // hload.rst: -s displays
+            // "* Loaded hash table '<name>' from '<filename>'".
+            if flags.contains('s') {
+                let target = self.reply_target();
+                self.actions.push(Action::Echo {
+                    target,
+                    text: format!("* Loaded hash table '{table}' from '{file}'"),
+                });
             }
         }
     }
@@ -5939,7 +5969,6 @@ impl<'a> Runtime<'a> {
                 .get(&table)
                 .and_then(|hash| super::hash::item_key(hash, item.trim()))
                 .unwrap_or_else(|| item.trim().to_string());
-            update_timed_expiry(self.hash_expiry, (table.clone(), item.clone()), flags);
             let value = value.unwrap_or("").trim();
             let stored = if flags.contains('b') {
                 let mut bytes = self.bins.get(value).cloned().unwrap_or_default();
@@ -5960,6 +5989,16 @@ impl<'a> Runtime<'a> {
             } else {
                 value.to_string()
             };
+            // `-z` counts the value down to zero once a second and unsets the
+            // item there — the same shape as `/set -z`: an `-u<value>` lifetime
+            // whose stored value *is* the seconds left. Only a whole number can
+            // count down, so anything else stays an ordinary item.
+            set_timed_value(
+                self.hash_expiry,
+                (table.clone(), item.clone()),
+                flags,
+                &stored,
+            );
             let is_new = !self.hashes.contains_key(&table);
             self.hashes
                 .entry(table.clone())
@@ -6026,11 +6065,18 @@ impl<'a> Runtime<'a> {
                 .get(&table)
                 .and_then(|hash| super::hash::item_key(hash, item.trim()))
                 .unwrap_or_else(|| item.trim().to_string());
-            update_timed_expiry(self.hash_expiry, (table.clone(), item.clone()), flags);
             let is_new = !self.hashes.contains_key(&table);
             let h = self.hashes.entry(table.clone()).or_default();
             let cur: i64 = h.get(&item).and_then(|v| v.parse().ok()).unwrap_or(0);
-            h.insert(item, (cur + sign * by).to_string());
+            // mIRC counts down from the value *after* the increment.
+            let updated = (cur + sign * by).to_string();
+            h.insert(item.clone(), updated.clone());
+            set_timed_value(
+                self.hash_expiry,
+                (table.clone(), item),
+                flags,
+                &updated,
+            );
             if is_new {
                 super::hash::set_slots(self.hashes, &table, 100);
             }
@@ -8161,6 +8207,27 @@ fn unset_seconds(flags: &str) -> Option<u64> {
         return digits.parse::<u32>().ok().map(u64::from);
     }
     None
+}
+
+/// Attaches a lifetime to a value that may be a `-z` countdown. `-z` wins over
+/// `-uN`/`-k` because it *is* its own lifetime (`-u<value>`), and it only
+/// applies to a whole number — mIRC documents no countdown for anything else,
+/// so a non-numeric value keeps the ordinary rules.
+fn set_timed_value<K>(expiries: &mut HashMap<K, TimedExpiry>, key: K, flags: &str, value: &str)
+where
+    K: std::hash::Hash + Eq + Clone,
+{
+    let countdown = flags
+        .chars()
+        .any(|c| c == 'z' || c == 'Z')
+        .then(|| value.trim().parse::<u64>().ok())
+        .flatten();
+    match countdown {
+        Some(seconds) => {
+            expiries.insert(key, TimedExpiry::counting_down(seconds));
+        }
+        None => update_timed_expiry(expiries, key, flags),
+    }
 }
 
 /// Applies mIRC's overwrite rule for timed values: an ordinary assignment

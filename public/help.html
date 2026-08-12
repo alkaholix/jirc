@@ -1349,9 +1349,20 @@ from files (sandboxed, like <a href="#files">file I/O</a>).</p>
   <tr><td><code>$hget(table)</code></td><td>the table name if it exists (so <code>if (!$hget(t))</code> works)</td></tr>
   <tr><td><code>$hget(table, item)</code></td><td>read a value</td></tr>
   <tr><td><code>$hfind(table, wild, n)</code></td><td>nth item name matching a wildcard (n=0 → count)</td></tr>
-  <tr><td><code>/hsave table file</code></td><td>save the table to a file</td></tr>
-  <tr><td><code>/hload table file</code></td><td>load a table from a file</td></tr>
+  <tr><td><code>/hsave [-s] table file</code></td><td>save the table to a file; <code>-s</code> reports it, <code>-a</code> appends to an existing file</td></tr>
+  <tr><td><code>/hload [-s] table file</code></td><td>load a table from a file; <code>-s</code> reports it</td></tr>
 </table>
+<h3>Items that expire</h3>
+<p>Hash items take the same lifetime switches as <a href="#vars">variables</a>:</p>
+<table>
+  <tr><th>Switch</th><th>Effect</th></tr>
+  <tr><td><code>/hadd -u&lt;n&gt; table item value</code></td><td>remove the item after <em>n</em> seconds.</td></tr>
+  <tr><td><code>/hadd -z table item &lt;n&gt;</code></td><td>count <em>n</em> down by one a second, then remove the item. Reading it gives the seconds left.</td></tr>
+  <tr><td><code>/hinc -z</code> · <code>/hdec -z</code></td><td>the same, counting down from the value after the change.</td></tr>
+</table>
+<p><code>/hsave</code> leaves expiring items out of the file unless you pass
+<code>-u</code>, so a saved table doesn't come back full of countdowns that have
+already run out.</p>
 <pre><code><span class="k">on</span> *:TEXT:!seen *:#:{
   <span class="k">/msg</span> <span class="i">$chan</span> last saw <span class="i">$2</span> at <span class="i">$hget</span>(seen, <span class="i">$2</span>)
 }

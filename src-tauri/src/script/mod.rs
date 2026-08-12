@@ -12808,6 +12808,83 @@ alias t { .say hidden | say shown }");
     }
 
     #[test]
+    fn hash_switches_match_the_kb() {
+        let dir = std::env::temp_dir().join(format!("jirc-hash-kb-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: dir.clone(),
+            state: std::sync::Arc::new(Default::default()),
+        };
+        let engine = ScriptEngine::new();
+        let echo = |line: &str| {
+            engine
+                .run_command(&rctx, "#c", line, &[])
+                .into_iter()
+                .find_map(|a| match a {
+                    Action::Echo { text, .. } => Some(text),
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+
+        // hadd.rst `-z`: "Decreases the value by 1.0 every second; unsets at
+        // zero" — the same countdown `/set -z` uses, so a read gives the
+        // seconds left and the item is gone at zero.
+        engine.run_command(&rctx, "#c", "/hadd -mz t counter 3", &[]);
+        assert_eq!(echo("/echo -a $hget(t,counter)"), "3");
+        // hinc.rst `-z` counts down from the value *after* the increment.
+        engine.run_command(&rctx, "#c", "/hinc -mz t2 n 5", &[]);
+        assert_eq!(echo("/echo -a $hget(t2,n)"), "5");
+        // A value with no countdown meaning keeps the ordinary rules.
+        engine.run_command(&rctx, "#c", "/hadd -mz t words hello", &[]);
+        assert_eq!(echo("/echo -a $hget(t,words)"), "hello");
+        // `-u` still attaches a plain lifetime rather than a countdown.
+        engine.run_command(&rctx, "#c", "/hadd -mu30 t temp kept", &[]);
+        assert_eq!(echo("/echo -a $hget(t,temp)"), "kept");
+
+        // hsave.rst / hload.rst give `-s`'s exact wording.
+        engine.run_command(&rctx, "#c", "/hadd -m save a 1", &[]);
+        assert_eq!(
+            echo("/hsave -s save h.txt"),
+            "* Saved hash table save to h.txt"
+        );
+        assert_eq!(
+            echo("/hload -ms fresh h.txt"),
+            "* Loaded hash table 'fresh' from 'h.txt'"
+        );
+        assert_eq!(echo("/echo -a $hget(fresh,a)"), "1");
+        // A load that finds no file says nothing.
+        assert_eq!(echo("/hload -ms other missing.txt"), "");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hash_countdown_items_expire() {
+        let engine = ScriptEngine::new();
+        let echo = |line: &str| {
+            engine
+                .run_command(&ctx(), "#c", line, &[])
+                .into_iter()
+                .find_map(|a| match a {
+                    Action::Echo { text, .. } => Some(text),
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+        // One real second of a two-second countdown reads 1, and past the end
+        // the item is gone — lazily, like every other timed value.
+        engine.run_command(&ctx(), "#c", "/hadd -mz t counter 2", &[]);
+        std::thread::sleep(std::time::Duration::from_millis(1_100));
+        assert_eq!(echo("/echo -a $hget(t,counter)"), "1");
+        std::thread::sleep(std::time::Duration::from_millis(1_100));
+        assert_eq!(echo("/echo -a [ $+ $hget(t,counter) $+ ]"), "[]");
+    }
+
+    #[test]
     fn server_identifier_reads_the_saved_list() {
         use crate::config::ServerProfile;
         // Built through serde rather than a struct literal: every other field
