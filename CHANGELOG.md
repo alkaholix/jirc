@@ -12,6 +12,62 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🗂️ 26.8.35 — Your server list, hash countdowns, and two lists that ate their own switches
+
+### `$server(N)` reads your saved server list
+
+`$server` ignored everything you passed it. `$server(0)` returned the current
+hostname where mIRC returns a **count**, so `if ($server(0) > 0)` got nonsense,
+and `$server(1).port` returned the hostname too.
+
+All of server.rst's forms now work against the servers you've saved:
+
+```
+$server(0)                 how many saved servers
+$server(0,Libera.Chat)     how many in that group
+$server(2)                 the 2nd server's address
+$server(2,Libera.Chat)     the 2nd in that group
+$server(-1)                the connection you're on
+$server(irc.libera.chat)   look one up by address
+```
+
+with `.port`, `.group`, `.nick`, `.anick` and `.user`.
+
+**`.pass` is always empty, on purpose.** mIRC hands scripts your server
+password; jIRC keeps passwords in your OS keyring, and the snapshot the script
+engine gets never contains them. An identifier that can't reach a secret can't
+leak one. The properties describing things jIRC doesn't store — `.desc`,
+`.email`, `.method`, certificate and encoding details — return `$null` rather
+than a guess.
+
+### Hash items can count down
+
+`/hadd -z`, `/hinc -z` and `/hdec -z` were accepted and thrown away. They now
+count the value down by one a second and remove the item at zero, exactly like
+`/set -z` — same machinery, so the two can't drift apart. `/hinc -z` counts from
+the value *after* the increment, as mIRC documents.
+
+`/hsave -s` and `/hload -s` were silent; both now print the messages their pages
+specify.
+
+### `/ignore -pc bob` was ignoring nobody, and remembering "-pc"
+
+Both `/ignore` and `/notify` only understood `-r`, so **the first word became
+the name whatever it was**. `/ignore -pc bob` added a literal `-pc` to your
+ignore list and left bob talking; `/notify -l` added `-l` to your notify list.
+
+Both now read their switches properly: `-r` removes (a bare `/ignore -r` clears
+the list), `-l` lists, `/notify -n` takes a network before the nick, and
+`/notify -s`/`-h` — which show and hide mIRC's notify window — are accepted and
+do nothing, since jIRC keeps that list in Settings.
+
+One honest limit: mIRC's `-p`, `-c`, `-n` and friends ignore *particular kinds*
+of message. jIRC's ignore is all-or-nothing, so a narrower switch ignores that
+person completely — **and tells you so** instead of quietly hiding more than you
+asked. `-a`, which means "all types" in mIRC, is exactly what jIRC does anyway.
+
+---
+
 ## 🧾 26.8.34 — Housekeeping: a test for last release, and honest checklists
 
 No behaviour changes. This closes out the loose ends from the last few releases
