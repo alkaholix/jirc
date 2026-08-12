@@ -4602,13 +4602,29 @@ impl<'a> Runtime<'a> {
     fn cmd_window_line(&mut self, raw: &str, op: &str) {
         let expanded = self.expand(raw);
         let mut rest = expanded.trim();
-        // Skip a leading switch (e.g. `/aline -p @w text` colour switch).
+        // The switch token was previously skipped whole, so none of these did
+        // anything. Four of them are things jIRC's window model can honour:
+        // `-n` (skip a duplicate line), `-i[N]` (indent, default 2 spaces),
+        // and `-s`/`-a` (select the affected line, clearing or keeping the
+        // existing selection). The rest describe presentation jIRC does not
+        // model — `-c[N]` line colour, `-p` forced wrap, `-t` re-wrap, `-h`
+        // treebar highlight for a minimised window, `-l` the side listbox —
+        // and are consumed deliberately rather than by accident.
+        let mut flags = "";
         if rest.starts_with('-') {
-            rest = rest
+            let (token, tail) = rest
                 .split_once(char::is_whitespace)
-                .map(|(_, r)| r.trim())
-                .unwrap_or("");
+                .unwrap_or((rest, ""));
+            flags = token;
+            rest = tail.trim();
         }
+        let flags_lower = flags.to_ascii_lowercase();
+        let skip_duplicate = flags_lower.contains('n');
+        let indent = flags_lower.contains('i').then(|| {
+            write_numeric_switch(&flags_lower, 'i').unwrap_or(2) as usize
+        });
+        let select_clearing = flags_lower.contains('s');
+        let select_adding = flags_lower.contains('a');
         let mut parts = rest.splitn(2, char::is_whitespace);
         let Some(name) = parts.next() else {
             return;
@@ -4617,10 +4633,22 @@ impl<'a> Runtime<'a> {
             return;
         }
         let arg = parts.next().unwrap_or("");
+        // `-i[N]` indents the text that is written, so it applies to whatever
+        // the line ends up being.
+        let indented = |text: &str| match indent {
+            Some(spaces) => format!("{}{text}", " ".repeat(spaces)),
+            None => text.to_string(),
+        };
         let (n, text) = match op {
             "add" => {
-                self.windows.aline(name, arg);
-                (0u32, arg.to_string())
+                let text = indented(arg);
+                // `-n` — "prevent the line from being added if it already
+                // exists". Nothing is added, and nothing is selected either.
+                if skip_duplicate && self.windows.contains_line(name, &text) {
+                    return;
+                }
+                self.windows.aline(name, &text);
+                (self.windows.count(name) as u32, text)
             }
             "delete" => {
                 let n: u32 = arg.trim().parse().unwrap_or(0);
@@ -4631,13 +4659,16 @@ impl<'a> Runtime<'a> {
                 // replace / insert: <N> <text>
                 let mut p2 = arg.splitn(2, char::is_whitespace);
                 let n: u32 = p2.next().unwrap_or("").trim().parse().unwrap_or(0);
-                let text = p2.next().unwrap_or("");
+                let text = indented(p2.next().unwrap_or(""));
                 if op == "replace" {
-                    self.windows.rline(name, n as usize, text);
+                    self.windows.rline(name, n as usize, &text);
                 } else {
-                    self.windows.iline(name, n as usize, text);
+                    if skip_duplicate && self.windows.contains_line(name, &text) {
+                        return;
+                    }
+                    self.windows.iline(name, n as usize, &text);
                 }
-                (n, text.to_string())
+                (n, text)
             }
         };
         self.actions.push(Action::WindowLine {
@@ -4646,6 +4677,19 @@ impl<'a> Runtime<'a> {
             n,
             text,
         });
+        // `-s` selects the affected line after clearing the old selection;
+        // `-a` selects it while keeping what was already selected. The
+        // selection travels to the window as its own action, the way `/sline`
+        // already sends it — otherwise only the engine's copy would know.
+        if (select_clearing || select_adding) && n > 0 && op != "delete" {
+            self.windows.select(name, n as usize, select_adding, false);
+            self.actions.push(Action::WindowLine {
+                name: name.to_string(),
+                op: if select_adding { "selectAdd" } else { "select" }.to_string(),
+                n,
+                text: String::new(),
+            });
+        }
     }
 
     /// `/sline [-a|-r] @window N` — set/add/remove listbox selection.

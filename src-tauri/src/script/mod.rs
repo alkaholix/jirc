@@ -12808,6 +12808,73 @@ alias t { .say hidden | say shown }");
     }
 
     #[test]
+    fn window_line_switches_match_the_kb() {
+        let engine = ScriptEngine::new();
+        let lines = |window: &str| {
+            engine
+                .run_command(&ctx(), "#c", &format!("/echo -a $line({window},0)"), &[])
+                .into_iter()
+                .find_map(|a| match a {
+                    Action::Echo { text, .. } => Some(text),
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+        let line = |window: &str, n: u32| {
+            engine
+                .run_command(&ctx(), "#c", &format!("/echo -a [ $+ $line({window},{n}) $+ ]"), &[])
+                .into_iter()
+                .find_map(|a| match a {
+                    Action::Echo { text, .. } => Some(text),
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+        engine.run_command(&ctx(), "#c", "/window @w", &[]);
+
+        // aline.rst `-n`: "prevent the line from being added if it already
+        // exists". Without it the duplicate goes in, as before.
+        engine.run_command(&ctx(), "#c", "/aline @w alpha", &[]);
+        engine.run_command(&ctx(), "#c", "/aline -n @w alpha", &[]);
+        assert_eq!(lines("@w"), "1");
+        engine.run_command(&ctx(), "#c", "/aline @w alpha", &[]);
+        assert_eq!(lines("@w"), "2");
+
+        // `-i[N]`: indent by N spaces, defaulting to 2.
+        engine.run_command(&ctx(), "#c", "/aline -i @w indented", &[]);
+        assert_eq!(line("@w", 3), "[  indented]");
+        engine.run_command(&ctx(), "#c", "/aline -i4 @w deeper", &[]);
+        assert_eq!(line("@w", 4), "[    deeper]");
+        // The indent is part of the line, so `-n` compares against it.
+        engine.run_command(&ctx(), "#c", "/aline -ni4 @w deeper", &[]);
+        assert_eq!(lines("@w"), "4");
+
+        // `-s` selects the new line and clears what was selected; `-a` keeps it.
+        let selected = || {
+            engine
+                .run_command(&ctx(), "#c", "/echo -a $sline(@w,0)", &[])
+                .into_iter()
+                .find_map(|a| match a {
+                    Action::Echo { text, .. } => Some(text),
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+        engine.run_command(&ctx(), "#c", "/aline -s @w picked", &[]);
+        assert_eq!(selected(), "1");
+        engine.run_command(&ctx(), "#c", "/aline -a @w also", &[]);
+        assert_eq!(selected(), "2");
+        engine.run_command(&ctx(), "#c", "/aline -s @w only", &[]);
+        assert_eq!(selected(), "1");
+
+        // Presentation-only switches are consumed, not treated as the window
+        // name: `-c`, `-p`, `-t`, `-h` and `-l` describe things jIRC's window
+        // model has no equivalent for.
+        engine.run_command(&ctx(), "#c", "/aline -pc4 @w coloured", &[]);
+        assert_eq!(line("@w", 8), "[coloured]");
+    }
+
+    #[test]
     fn hash_switches_match_the_kb() {
         let dir = std::env::temp_dir().join(format!("jirc-hash-kb-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

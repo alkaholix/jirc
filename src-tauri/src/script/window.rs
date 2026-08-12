@@ -135,6 +135,13 @@ impl WindowStore {
         }
     }
 
+    /// Whether the window already holds this exact line — `/aline -n` and
+    /// `/iline -n` use it to skip adding a duplicate.
+    pub fn contains_line(&self, name: &str, text: &str) -> bool {
+        self.get(name)
+            .is_some_and(|w| w.lines.iter().any(|line| line == text))
+    }
+
     /// `/iline` — insert a line at 1-based position N (append if past the end).
     pub fn iline(&mut self, name: &str, n: usize, text: &str) {
         if let Some(w) = self.windows.get_mut(&key(name)) {
