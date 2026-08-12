@@ -12808,6 +12808,59 @@ alias t { .say hidden | say shown }");
     }
 
     #[test]
+    fn file_command_switches_match_the_kb() {
+        let dir = std::env::temp_dir().join(format!("jirc-filecmd-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rctx = RunCtx {
+            my_nick: "me",
+            network: "Net",
+            server: "s",
+            data_dir: dir.clone(),
+            state: std::sync::Arc::new(Default::default()),
+        };
+        let engine = ScriptEngine::new();
+        let run = |line: &str| {
+            engine.run_command(&rctx, "#c", line, &[]);
+        };
+        let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap_or_default();
+
+        // `/remove -b` deleted nothing: the switch was read as the filename.
+        run("/write -c gone.txt x");
+        run("/remove -b gone.txt");
+        assert!(!dir.join("gone.txt").exists());
+
+        // `/rename -o` renamed nothing, for the same reason. With `-o` it
+        // replaces an existing target; without it mIRC leaves the target alone.
+        run("/write -c r1.txt from");
+        run("/write -c r2.txt to");
+        run("/rename r1.txt r2.txt");
+        assert_eq!(read("r2.txt"), "to\r\n");
+        assert!(dir.join("r1.txt").exists());
+        run("/rename -o r1.txt r2.txt");
+        assert_eq!(read("r2.txt"), "from\r\n");
+        assert!(!dir.join("r1.txt").exists());
+
+        // copy.rst: `-o` overrides an existing file, `-a` appends to it. A
+        // plain /copy used to overwrite regardless.
+        run("/write -c src.txt hello");
+        run("/write -c dst.txt existing");
+        run("/copy src.txt dst.txt");
+        assert_eq!(read("dst.txt"), "existing\r\n");
+        run("/copy -o src.txt dst.txt");
+        assert_eq!(read("dst.txt"), "hello\r\n");
+        run("/write -c app.txt one");
+        run("/copy -a src.txt app.txt");
+        assert_eq!(read("app.txt"), "one\r\nhello\r\n");
+        // Copying to a name that does not exist works with or without switches.
+        run("/copy src.txt fresh.txt");
+        assert_eq!(read("fresh.txt"), "hello\r\n");
+        run("/copy -a src.txt fresh2.txt");
+        assert_eq!(read("fresh2.txt"), "hello\r\n");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn window_line_switches_match_the_kb() {
         let engine = ScriptEngine::new();
         let lines = |window: &str| {

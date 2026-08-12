@@ -2215,36 +2215,58 @@ impl<'a> Runtime<'a> {
                 }
             }
             "remove" => {
-                let f = self.expand(raw_args);
-                if !f.trim().is_empty() {
-                    let _ = std::fs::remove_file(sandbox_path(&self.data_dir, f.trim()));
+                // `/remove [-b] <file>`. The switch used to be read as part of
+                // the filename, so `/remove -b x.txt` deleted nothing at all.
+                // `-b` is mIRC's "send it to the recycle bin"; there is no
+                // cross-platform bin without a new dependency, so the file is
+                // deleted outright — noted in the help, since that is less
+                // recoverable than mIRC.
+                let expanded = self.expand(raw_args);
+                let (_flags, rest) = split_switches(&expanded);
+                if !rest.trim().is_empty() {
+                    let _ = std::fs::remove_file(sandbox_path(&self.data_dir, rest.trim()));
                 }
             }
             "rename" => {
-                let s = self.expand(raw_args);
-                if let Some((old, new)) = s.trim().split_once(char::is_whitespace) {
-                    let _ = std::fs::rename(
-                        sandbox_path(&self.data_dir, old.trim()),
-                        sandbox_path(&self.data_dir, new.trim()),
-                    );
+                // `/rename [-of] <old> <new>`. Switches were read as the source
+                // filename, so any switched form renamed nothing.
+                let expanded = self.expand(raw_args);
+                let (flags, rest) = split_switches(&expanded);
+                if let Some((old, new)) = rest.split_once(char::is_whitespace) {
+                    let old = sandbox_path(&self.data_dir, old.trim());
+                    let new = sandbox_path(&self.data_dir, new.trim());
+                    // `-o` permits replacing an existing file; without it mIRC
+                    // leaves the target alone. `std::fs::rename` replaces on
+                    // both platforms, so the guard has to be explicit.
+                    if !new.exists() || flags.to_ascii_lowercase().contains('o') {
+                        let _ = std::fs::rename(old, new);
+                    }
                 }
             }
             "copy" => {
-                // /copy [-switches] <source> <target>
-                let s = self.expand(raw_args);
-                let mut rest = s.trim();
-                while rest.starts_with('-') {
-                    rest = rest
-                        .split_once(char::is_whitespace)
-                        .map(|(_, r)| r)
-                        .unwrap_or("")
-                        .trim();
-                }
+                // `/copy [-oaf] <source> <target>`. The switches were stripped
+                // and then ignored, so a copy always overwrote — where mIRC
+                // leaves an existing target alone unless `-o` says otherwise,
+                // and `-a` appends to it instead. `-f` (flush to disk) is
+                // accepted; the writes below are not buffered by jIRC.
+                let expanded = self.expand(raw_args);
+                let (flags, rest) = split_switches(&expanded);
+                let flags = flags.to_ascii_lowercase();
                 if let Some((src, dst)) = rest.split_once(char::is_whitespace) {
-                    let _ = std::fs::copy(
-                        sandbox_path(&self.data_dir, src.trim()),
-                        sandbox_path(&self.data_dir, dst.trim()),
-                    );
+                    let src = sandbox_path(&self.data_dir, src.trim());
+                    let dst = sandbox_path(&self.data_dir, dst.trim());
+                    let exists = dst.exists();
+                    if flags.contains('a') && exists {
+                        use std::io::Write;
+                        if let (Ok(data), Ok(mut out)) = (
+                            std::fs::read(&src),
+                            std::fs::OpenOptions::new().append(true).open(&dst),
+                        ) {
+                            let _ = out.write_all(&data);
+                        }
+                    } else if !exists || flags.contains('o') || flags.contains('a') {
+                        let _ = std::fs::copy(&src, &dst);
+                    }
                 }
             }
             "server" => self.cmd_server(raw_args),
