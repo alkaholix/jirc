@@ -18,19 +18,29 @@ const has = (list: string[], value: string) =>
 const without = (list: string[], value: string) =>
   list.filter((entry) => entry.toLowerCase() !== value.toLowerCase());
 
-/** Shared shape for a list command: edits settings, returns the lines to echo. */
-function listCommand(
+/** A leading `-switches` token, and the arguments after it. */
+export function splitSwitches(args: string): { flags: string; rest: string[] } {
+  const parts = args.trim().split(/\s+/).filter(Boolean);
+  if (parts[0]?.startsWith("-") && parts[0].length > 1) {
+    return { flags: parts[0].slice(1).toLowerCase(), rest: parts.slice(1) };
+  }
+  return { flags: "", rest: parts };
+}
+
+/** Edits the stored list and returns the lines to echo. */
+function applyList(
   key: "ignores" | "notifyList",
   label: string,
-  args: string,
-  forceRemove = false
+  who: string | undefined,
+  remove: boolean,
+  removeAll = false
 ): string[] {
   const settings = useSettings.getState();
-  const parts = args.trim().split(/\s+/).filter(Boolean);
-  const remove = forceRemove || parts[0] === "-r";
-  const who = remove && !forceRemove ? parts[1] : parts[0];
   const current = settings[key];
-
+  if (removeAll) {
+    settings.set(key, []);
+    return [`${label} list cleared.`];
+  }
   if (!who) {
     return [`${label} list: ${current.length ? current.join(", ") : "(none)"}`];
   }
@@ -42,15 +52,58 @@ function listCommand(
   return [`${who} added to ${label.toLowerCase()}`];
 }
 
-/** `/ignore [-r] [nick]` — no nick lists the current entries. */
-export const runIgnore = (args: string) => listCommand("ignores", "Ignore", args);
+/**
+ * mIRC's `/ignore` type switches. jIRC's ignore list is all-or-nothing — one
+ * `isIgnored(nick)` test with no notion of message type — so any of these
+ * selects the whole user. `-a` means exactly that in mIRC too; the narrower
+ * ones ask for something jIRC cannot do, and say so rather than quietly
+ * over-ignoring.
+ */
+const IGNORE_TYPES = "pcntikdshyf";
+
+/** `/ignore [-rlpcntikdshyfa] [nick]` — no nick lists the current entries. */
+export function runIgnore(args: string): string[] {
+  const { flags, rest } = splitSwitches(args);
+  // `-r` with no address removes every ignore, which ignore.rst documents.
+  if (flags.includes("r")) {
+    return applyList("ignores", "Ignore", rest[0], true, rest.length === 0);
+  }
+  if (flags.includes("l") || rest.length === 0) {
+    return applyList("ignores", "Ignore", undefined, false);
+  }
+  const narrowed = [...flags].filter((f) => IGNORE_TYPES.includes(f)).join("");
+  const lines = applyList("ignores", "Ignore", rest[0], false);
+  if (narrowed && !flags.includes("a")) {
+    lines.push(
+      `(jIRC's ignore is all-or-nothing, so -${narrowed} ignores ${rest[0]} entirely.)`
+    );
+  }
+  return lines;
+}
 
 /** `/unignore <nick>` — `/ignore -r` by another name. */
-export const runUnignore = (args: string) =>
-  args.trim() ? listCommand("ignores", "Ignore", args, true) : [];
+export const runUnignore = (args: string) => {
+  const who = args.trim().split(/\s+/)[0];
+  return who ? applyList("ignores", "Ignore", who, true) : [];
+};
 
-/** `/notify [-r] [nick]` */
-export const runNotify = (args: string) => listCommand("notifyList", "Notify", args);
+/**
+ * `/notify [-shrln] [network] [nick]`. `-s`/`-h` show and hide mIRC's notify
+ * *window*, which jIRC has no equivalent of — its list lives in Settings — so
+ * they are consumed. `-n` says a network was given; jIRC's list is not
+ * per-network, so the network token is consumed and the nick still parses.
+ */
+export function runNotify(args: string): string[] {
+  const { flags, rest } = splitSwitches(args);
+  const who = flags.includes("n") ? rest[1] : rest[0];
+  if (flags.includes("r")) {
+    return applyList("notifyList", "Notify", who, true);
+  }
+  if (flags.includes("l") || !who) {
+    return applyList("notifyList", "Notify", undefined, false);
+  }
+  return applyList("notifyList", "Notify", who, false);
+}
 
 /** `/urls [clear]` — the URL grabber's catch list. */
 export function runUrls(args: string): string[] {
