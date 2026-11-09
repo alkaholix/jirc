@@ -12,6 +12,46 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🗂️ 26.11.2 — Script files in folders, on every OS
+
+### Folders inside `scriptdata`
+
+Script file commands and identifiers (`$read`, `/write`, `$isfile`, `/fopen`,
+`/writeini`, `/copy`, `/rename`, `/remove`, `$findfile`, …) now keep folders, as
+mIRC does: `data\names.txt` is `names.txt` in the folder `data` inside
+`scriptdata`. Before, every path was flattened to its file name, so
+`data\names.txt` and `logs\names.txt` were the same file.
+
+- Make a folder first with `/mkdir data` (nested folders work too). Writing
+  into a folder that doesn't exist is now mIRC's error instead of doing nothing:
+  `/write`, `/copy`, `/rename`, `/filter`, `/hsave` and `/bwrite` say they are
+  unable to open (or copy, or rename) the file.
+- `$mircdir` and the paths `$findfile` returns resolve inside `scriptdata`, so
+  `$read($findfile(data,*.txt,1))` and `$isdir($mircdir)` work.
+- `..` still never leaves `scriptdata`, and a full path elsewhere
+  (`C:\x\notes.txt`) still keeps only its file name.
+- Links inside `scriptdata` are no longer followed by any file command, by
+  `$findfile`/`$finddir` or by `$zip`, so a link can't lead a script out of its
+  folder (some link cases could in earlier versions). A `:` inside a path becomes `_`.
+- `$samepath(d,d\)` is `$false`, as in mIRC.
+- `/dcc send nick data\x.txt` sends that file from the folder, and `$zip`
+  extraction resolves `..` in entry names before writing.
+- A file an earlier version saved from a path with folders (`data\x.txt` was
+  stored as `x.txt`) is not found under the folder path any more; move it into
+  the folder.
+
+### The same paths on Windows, macOS and Linux
+
+`\` and `/` both separate folders on every OS, and a drive letter is ignored, so
+a script written on Windows (`$scriptdir\settings.ini`, `C:\anywhere\probe.dat`)
+finds its files on macOS and Linux too.
+
+### Tests on all three platforms
+
+Every push now runs the test suites on Windows, macOS and Linux.
+
+---
+
 ## 🧭 26.11.1 — Scripts read the way mIRC reads them
 
 A parser release. Every change below was first run in real mIRC 7.79, and jIRC
