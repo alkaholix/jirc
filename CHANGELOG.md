@@ -12,6 +12,54 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## 🔒 26.11.3 — Data stays data
+
+A security release. Text that arrives as data (an IRC message, a line from a
+file, a hash table item) can no longer be run as script through the two older
+paths that were left, and a few smaller ways around the script folder are
+closed. Every scripting change below was first run in real mIRC 7.79, and jIRC
+now gives the same answer.
+
+### Bracket joins take data as written
+
+A `[ $+ … ]` group now joins its text to the word before it as written, and
+that word is then evaluated once, as in mIRC:
+
+- `$ [ $+ $1 ]` with `$1` = `pwn` is `$$1`: it prints `pwn` and never runs an
+  alias called `pwn`.
+- `% [ $+ $1 ]` reads the variable `%$1`, never a variable named by the data,
+  and `x [ $+ $1 ]` is the text `x$1`.
+- Names written into the script still work: `% [ $+ secret ]` reads `%secret`.
+- The usual way to build a name from a value keeps working:
+  `%color. [ $+ [ $nick ] ]` (two pairs) reads `%color.bob`. With one pair,
+  `%color. [ $+ $nick ]` is the variable `%color.$nick`, as in mIRC; jIRC used to
+  read `%color.bob` there, so add the inner brackets if a script relied on it.
+- A bracket result joined to a `[ $+ … ]` group now uses its value, as in mIRC:
+  `[ $1 ] [ $+ x ]` is `abx` and `[ $calc(1+1) ] [ $+ z ]` is `2z`.
+- `/inc`, `/dec` and `/unset` resolve bracket-built names the way `/set` does.
+
+### A NUL byte ends a value
+
+mIRC's values stop at a NUL byte, and jIRC's now do too: `$chr(0)` is empty,
+`$decode` stops at a NUL, and in a file a NUL ends only its own line (the next
+line still reads). jIRC's internal markers also carry a key picked when jIRC
+starts, so text shaped like one is just text.
+
+### Smaller fixes around the script folder
+
+- `users.json`, `/fserve` listings and DCC resumes never go through a link.
+- `$disk` reports on a drive, never on the path a script names, so it can't
+  tell a script whether a file outside its folder exists. As in mIRC,
+  `$disk(C:\nowhere\x.txt)` is drive C:.
+- Trailing dots and spaces are dropped from each part of a script path, as
+  Windows drops them (`notes.txt.` is `notes.txt`), on every OS.
+- Windows device names (`CON`, `NUL`, `AUX`, `COM1`, `LPT1` and the rest, also
+  with an extension such as `nul.txt`) name no file on any OS, so a script or a
+  zip file can't open a device. This is a jIRC safety choice: mIRC on Windows
+  opens the device.
+
+---
+
 ## 🗂️ 26.11.2 — Script files in folders, on every OS
 
 ### Folders inside `scriptdata`
