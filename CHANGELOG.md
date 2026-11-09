@@ -12,7 +12,69 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
-## Unreleased — mSL migration compatibility
+## 🧭 26.11.1 — Scripts read the way mIRC reads them
+
+A parser release. Every change below was first run in real mIRC 7.79, and jIRC
+now gives the same answer. Two of them change how existing scripts read, so the
+first section is worth a look before you update.
+
+### `$` and `%` are only evaluated at the start of a word
+
+mIRC evaluates identifiers and variables only where a word starts. jIRC used to
+evaluate them anywhere, so `echo -a nick=$nick` printed `nick=bob`; mIRC prints
+`nick=$nick`. jIRC now matches mIRC:
+
+- `a$1b`, `<$me>`, `x%y`, `($1)` and `nick!$1@host` stay as written. Join with
+  `$+` instead: `nick= $+ $nick`.
+- A variable's name runs to the end of the word, so `%chan.` and `%nick,` are
+  variables of their own. Write `%chan $+ .`. Plain identifiers work the same way
+  (`$nick's` is empty); `$1`, `$2-` and `$0` still keep text after them (`$1:` is
+  `bob:`), but an empty `$5` takes its glued text with it (`a $5x b` is `a b`).
+- Quotes don't group anything: `"$1"` stays as written, so write
+  `" $+ $1 $+ "`. A `$?="Your name?"` prompt still keeps its quotes together.
+- `#$1` still turns a parameter into a channel name; `if (!$1)`, `((%a == 1))`
+  and the other condition forms work as before.
+- Inside `$calc(...)`, `1+%a` and `($1+1)*2` still work, as they do in mIRC.
+- In `$regsubex`, `\1` and `\n` work next to other text (`\1$chr(45)`,
+  `$calc(97+ (\n % 6))`), as in mIRC.
+
+IRCX channel names such as `%#Lobby` stay literal (a jIRC extension; mIRC has
+no IRCX), and `/msg =$nick` still reaches a DCC chat.
+
+### `$*` repeats a command once per token
+
+`tokenize 32 a b c | echo -a $*` now prints three lines, with all of mIRC's
+documented quirks: the line is evaluated once and then repeated, so other
+identifiers on it give the same value each time; once per scope (each alias and
+event handler is its own); the token is never evaluated as script; and
+`$mid($*,2)` gives `~$*`. `scon -r echo -a $*` gets each token too.
+
+### `$$` stops the command — and its callers
+
+An empty `$$1` (or `$$ident`) no longer lets its command run with a blank
+value. The command is skipped, changes nothing, and the script halts, along with
+any alias that called it. In popup menus, an item labelled `Whois $$1` hides
+itself when nothing is selected, and the rest of the menu still shows. A
+`/halt` inside an alias used as an identifier now stops the calling line too.
+
+### Variable names built with `$+`
+
+`set %count. $+ $nick 1`, `inc %seen. $+ $chan` and `unset %x. $+ $1` now
+create, change and remove the variable you built. Before, they missed it.
+
+### Text glued after an identifier call
+
+In a word that starts with `$name(...)`, mIRC drops whatever follows the
+closing parenthesis: `$calc(3 * 4)) end` is `12 end`. jIRC does the same.
+
+### `/dll`, `/dde` and `/com*` stay on your machine
+
+These Windows-only commands used to be sent to the IRC server as raw lines.
+They now stop the script with a local error on every OS. jIRC still doesn't
+load DLLs or COM objects, and won't.
+
+### Also in this release: mSL migration compatibility
+
 
 - Preserve formatting when `/S` regex substitutions find no match. Implement
   `/fopen -x` writer exclusion with retained OS handles and read sharing. Apply
