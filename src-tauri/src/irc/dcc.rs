@@ -1456,7 +1456,7 @@ impl DccManager {
         let exact = dir.join(&base);
         let (path, position) = if resume || resume_path.is_some() {
             let path = resume_path.unwrap_or(exact);
-            let n = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let n = partial_size(&path, &base)?;
             if n == 0 {
                 return Err(format!("there is no partial \"{base}\" to resume"));
             }
@@ -2646,19 +2646,7 @@ async fn run_fserve(
             .unwrap_or((input.as_str(), ""));
         match command.to_ascii_lowercase().as_str() {
             "dir" | "ls" => {
-                let mut entries = std::fs::read_dir(&cwd)
-                    .map_err(|error| error.to_string())?
-                    .filter_map(Result::ok)
-                    .collect::<Vec<_>>();
-                entries
-                    .sort_by_key(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase());
-                for entry in entries.into_iter().take(500) {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    let line = if entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
-                        format!("[{name}]")
-                    } else {
-                        format!("{} {name}", entry.metadata().map(|m| m.len()).unwrap_or(0))
-                    };
+                for line in fserve_listing(&cwd)? {
                     write_fserve_line(&mut write_half, &line).await?;
                 }
             }
@@ -2756,6 +2744,34 @@ async fn write_fserve_line<W: AsyncWrite + Unpin>(
     .await
     .map_err(|_| "write timed out".to_string())?
     .map_err(|error| error.to_string())
+}
+
+/// The `dir` lines for `folder`: `[name]` for a folder, `<size> name` for a
+/// file, sorted by name, at most 500. Links are left out: `cd` and `get`
+/// refuse them when they lead out of the served folder, and the listing
+/// shouldn't show their names or their targets' sizes either.
+fn fserve_listing(folder: &std::path::Path) -> Result<Vec<String>, String> {
+    let mut entries = std::fs::read_dir(folder)
+        .map_err(|error| error.to_string())?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let kind = entry.file_type().ok()?;
+            (!kind.is_symlink()).then_some((entry, kind))
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|(entry, _)| entry.file_name().to_string_lossy().to_ascii_lowercase());
+    Ok(entries
+        .into_iter()
+        .take(500)
+        .map(|(entry, kind)| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if kind.is_dir() {
+                format!("[{name}]")
+            } else {
+                format!("{} {name}", entry.metadata().map(|m| m.len()).unwrap_or(0))
+            }
+        })
+        .collect())
 }
 
 fn canonical_fserve_root(path: &std::path::Path) -> Result<std::path::PathBuf, String> {
@@ -2873,6 +2889,13 @@ async fn recv_into(
     offset: u64,
 ) -> std::io::Result<u64> {
     let mut stream = transfer_io(app, xid, stream);
+    // Never write through a link put in place of the reserved or partial file.
+    if is_link(path) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "the download file is a link",
+        ));
+    }
     let mut file = tokio::fs::OpenOptions::new()
         .create(true)
         .write(true)
@@ -3278,6 +3301,23 @@ fn unused_destination(dir: &std::path::Path, filename: &str) -> std::path::PathB
         }
     }
     unreachable!()
+}
+
+/// The size of the partial download `path` that a resume would append to: 0
+/// when there is none, an error when it is a link (appending would write
+/// wherever the link leads).
+fn partial_size(path: &std::path::Path, base: &str) -> Result<u64, String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            Err(format!("\"{base}\" is a link and can't be resumed"))
+        }
+        Ok(meta) => Ok(meta.len()),
+        Err(_) => Ok(0),
+    }
+}
+
+fn is_link(path: &std::path::Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
 }
 
 fn reserve_destination(
@@ -3721,6 +3761,29 @@ mod tests {
         );
         assert!(resolve_fserve_input(&root, &root, "../secret.txt", false).is_err());
         assert!(resolve_fserve_input(&root, &root, "file.txt", true).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Links are left out of an fserve `dir` listing, and a resume never
+    /// appends through one (TODO S-02).
+    #[cfg(unix)]
+    #[test]
+    fn fserve_listings_and_resumes_skip_links() {
+        let dir = std::env::temp_dir().join(format!(
+            "jirc-fserve-links-{}",
+            NEXT_TOKEN.fetch_add(1, Ordering::Relaxed)
+        ));
+        let root = dir.join("public");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("file.txt"), b"safe").unwrap();
+        std::fs::write(dir.join("secret.txt"), b"a much longer secret").unwrap();
+        std::os::unix::fs::symlink(dir.join("secret.txt"), root.join("link.txt")).unwrap();
+        std::os::unix::fs::symlink(&dir, root.join("linkdir")).unwrap();
+        assert_eq!(fserve_listing(&root).unwrap(), ["4 file.txt", "[sub]"]);
+        assert_eq!(partial_size(&root.join("file.txt"), "file.txt"), Ok(4));
+        assert_eq!(partial_size(&root.join("none.txt"), "none.txt"), Ok(0));
+        assert!(partial_size(&root.join("link.txt"), "link.txt").is_err());
+        assert!(is_link(&root.join("link.txt")) && !is_link(&root.join("file.txt")));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

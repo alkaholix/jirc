@@ -141,18 +141,27 @@ impl UserList {
     }
 
     /// Load the user list (and auto-lists) from `dir/users.json`; empty if the
-    /// file is absent or unreadable.
+    /// file is absent, unreadable or a link (which could lead out of `dir`).
     pub fn load_from(dir: &Path) -> UserList {
-        std::fs::read_to_string(dir.join("users.json"))
+        let path = dir.join("users.json");
+        if is_link(&path) {
+            return UserList::default();
+        }
+        std::fs::read_to_string(path)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default()
     }
 
-    /// Save the user list (and auto-lists) to `dir/users.json`.
+    /// Save the user list (and auto-lists) to `dir/users.json`, never through
+    /// a link of that name.
     pub fn save_to(&self, dir: &Path) {
+        let path = dir.join("users.json");
+        if is_link(&path) {
+            return;
+        }
         if let Ok(json) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(dir.join("users.json"), json);
+            let _ = std::fs::write(path, json);
         }
     }
 
@@ -514,9 +523,37 @@ pub fn level_matches(
         .then(|| (lvl.into(), lvl.into()))
 }
 
+
+fn is_link(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `users.json` that is a link is neither read nor written through
+    /// (TODO S-02): it could lead out of the script folder.
+    #[cfg(unix)]
+    #[test]
+    fn users_json_is_never_used_through_a_link() {
+        let dir = std::env::temp_dir().join(format!("jirc-users-link-{}", std::process::id()));
+        let outside = dir.with_extension("outside");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let mut real = UserList::default();
+        real.add("5", "friend!*@*", "", false);
+        real.save_to(&outside);
+        let saved = std::fs::read_to_string(outside.join("users.json")).unwrap();
+        std::os::unix::fs::symlink(outside.join("users.json"), dir.join("users.json")).unwrap();
+        assert!(UserList::load_from(&dir).entries.is_empty());
+        UserList::default().save_to(&dir);
+        assert_eq!(std::fs::read_to_string(outside.join("users.json")).unwrap(), saved);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
 
     #[test]
     fn unlisted_users_have_mirc_default_level_one() {

@@ -5723,8 +5723,15 @@ fn extract_zip(
             match part {
                 // `:` becomes `_` as in every sandbox path: on Windows
                 // `name:stream` would otherwise skip the link check below.
+                // A device name can't be extracted to (see `plain_part`).
                 std::path::Component::Normal(part) => {
-                    relative.push(super::eval::plain_part(&part.to_string_lossy()))
+                    let part = super::eval::plain_part(&part.to_string_lossy());
+                    if part.contains('\0') {
+                        return Err("unsafe zip entry".into());
+                    }
+                    if !part.is_empty() {
+                        relative.push(part);
+                    }
                 }
                 std::path::Component::ParentDir => {
                     relative.pop();
@@ -5853,11 +5860,32 @@ fn eval_disk(rt: &Runtime, args: &[String], prop: &str) -> String {
     if selector == "0" {
         return "1".into();
     }
-    let path = if selector.parse::<usize>().is_ok() {
-        base.to_path_buf()
-    } else {
-        std::path::PathBuf::from(selector)
+    // `$disk` reports on a disk, never on the path a script names: like mIRC,
+    // `$disk(C:\nowhere\x.txt)` is drive C: (`native-s02.txt` d01), so a
+    // script can't use it to learn whether a file outside its folder exists.
+    // A drive letter names that drive on Windows, and the disk jIRC's folder
+    // is on elsewhere; a number or `.` names that disk too; anything else names
+    // no disk (`$disk(/tmp)` is `$false`, d08).
+    // A drive is a letter alone or a letter and `:` (`$disk(c).path` is `c:\`,
+    // d02).
+    let bytes = selector.as_bytes();
+    let drive = (!bytes.is_empty()
+        && bytes[0].is_ascii_alphabetic()
+        && (bytes.len() == 1 || bytes[1] == b':'))
+        .then(|| format!("{}:", &selector[..1]));
+    let path = match &drive {
+        Some(drive) if cfg!(windows) => std::path::PathBuf::from(format!("{drive}\\")),
+        Some(_) => base.to_path_buf(),
+        None if selector.parse::<usize>().is_ok() || selector == "." => base.to_path_buf(),
+        None => return if prop.is_empty() { bool_str(false) } else { String::new() },
     };
+    if let (Some(drive), "path") = (&drive, prop.to_ascii_lowercase().as_str()) {
+        return if path.exists() {
+            format!("{drive}{}", std::path::MAIN_SEPARATOR)
+        } else {
+            String::new()
+        };
+    }
     match prop.to_ascii_lowercase().as_str() {
         "" => bool_str(path.exists()),
         "type" => {
@@ -6547,11 +6575,14 @@ fn eval_read(rt: &mut Runtime, args: &[String]) -> String {
     let a = |i: usize| args.get(i).cloned().unwrap_or_default();
     let path = super::eval::sandbox_path(&rt.data_dir, &a(0));
     let content = std::fs::read_to_string(&path).unwrap_or_default();
-    // mIRC stops text reads at the first NUL and accepts CR, LF, or CRLF line
-    // endings. Normalize only for line selection; returned line text is intact.
-    let content = content.split('\0').next().unwrap_or("");
+    // mIRC accepts CR, LF, or CRLF line endings, and a NUL ends the text of
+    // its line only (`a<NUL>b` then `c` reads as `a` and `c`). Normalize only
+    // for line selection; returned line text is otherwise intact.
     let normalized = content.replace("\r\n", "\n").replace('\r', "\n");
-    let lines: Vec<&str> = normalized.lines().collect();
+    let lines: Vec<&str> = normalized
+        .lines()
+        .map(|line| line.split('\0').next().unwrap_or(""))
+        .collect();
     let arg1 = a(1);
     let arg1 = arg1.trim();
     // arg1 is a switch string when it's present and not a plain number.

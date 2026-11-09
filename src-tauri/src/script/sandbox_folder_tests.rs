@@ -372,3 +372,108 @@ fn zip_entry_names_get_the_same_colon_rule() {
     assert!(ctx.data_dir.join("dest").join("fl_x").exists());
     let _ = std::fs::remove_dir_all(&ctx.data_dir);
 }
+
+/// Trailing dots and spaces are dropped from every part, as Windows drops
+/// them, so a link check and the file that is opened always see the same name
+/// (TODO S-03). Expected values from `analysis/rea-batch3-20261109/native-s02.txt`.
+#[test]
+fn trailing_dots_and_spaces_are_dropped_on_every_os() {
+    for (body, expected) in [
+        (
+            "write -c s3a. hi | out $isfile(s3a) $isfile(s3a.) $read(s3a,n,1) $read(s3a.,n,1)",
+            "<$true $true hi hi>",
+        ), // t01
+        ("write -c \"s3b \" hi | out $isfile(s3b) $read(s3b,n,1)", "<$true hi>"), // t02
+        (
+            "mkdir s3c. | write -c s3c.\\f.txt hi | out $isdir(s3c) $isdir(s3c.) $isfile(s3c\\f.txt) $read(s3c\\f.txt,n,1)",
+            "<$true $true $true hi>",
+        ), // t03
+        ("write -c s3e... hi | out $isfile(s3e) $read(s3e,n,1)", "<$true hi>"), // t05
+        ("write -c s3f.txt. hi | out $isfile(s3f.txt) $read(s3f.txt,n,1)", "<$true hi>"), // t07
+        ("write -c s3g.. hi | out $isfile(s3g) $findfile($mircdir,s3g*,0)", "<$true 1>"), // t08
+    ] {
+        assert_eq!(run(body), [expected], "{body}");
+    }
+    let dir = std::path::Path::new("/sandbox");
+    assert_eq!(super::eval::sandbox_path(dir, "a./b ./c.txt."), dir.join("a").join("b").join("c.txt"));
+    assert_eq!(super::eval::sandbox_path(dir, "x/.../y"), dir.join("x").join("y"));
+}
+
+/// A Windows device name names no file in the sandbox, on any OS, so a script
+/// can't open a device (TODO S-03).
+#[test]
+fn device_names_name_no_file() {
+    for name in ["nul", "CON", "aux.txt", "com1", "LPT9.log", "con.", "Nul .txt", "conin$", "COM¹"] {
+        let ctx = fixture();
+        let engine = ScriptEngine::new();
+        engine.load(&format!(
+            "alias out {{ echo -a < $+ $1- $+ > }}\n\
+             alias w {{ write -c \"{name}\" x }}\n\
+             alias t {{ out $isfile({name}) $exists({name}) }}"
+        ));
+        let echoed = |alias: &str| -> Vec<String> {
+            engine
+                .run_alias(&ctx, "#c", alias, "")
+                .into_iter()
+                .filter_map(|action| match action {
+                    Action::Echo { text, .. } => Some(text),
+                    _ => None,
+                })
+                .collect()
+        };
+        let written = echoed("w");
+        assert!(
+            written.len() == 1 && written[0].starts_with("* /write: unable to open file"),
+            "{name}: {written:?}"
+        );
+        assert_eq!(echoed("t"), ["<$false $false>"], "{name}");
+        assert_eq!(std::fs::read_dir(&ctx.data_dir).unwrap().count(), 0, "{name}");
+        let _ = std::fs::remove_dir_all(&ctx.data_dir);
+    }
+    // Names that only start like a device are ordinary files.
+    assert_eq!(run("write -c console.txt hi | write -c com10 hi | out $read(console.txt,n,1) $read(com10,n,1)"), ["<hi hi>"]);
+}
+
+#[test]
+fn zip_entries_with_device_names_are_refused() {
+    use std::io::Write;
+    let ctx = fixture();
+    let file = std::fs::File::create(ctx.data_dir.join("d.zip")).unwrap();
+    let mut zip = zip::ZipWriter::new(file);
+    zip.start_file("sub/nul.txt", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(b"x").unwrap();
+    zip.finish().unwrap();
+    let engine = ScriptEngine::new();
+    engine.load("alias t { echo -a $zip(d.zip,e,dest) }");
+    let echoed: Vec<String> = engine
+        .run_alias(&ctx, "#c", "t", "")
+        .into_iter()
+        .filter_map(|action| match action {
+            Action::Echo { text, .. } => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(echoed, ["$false"]);
+    let _ = std::fs::remove_dir_all(&ctx.data_dir);
+}
+
+/// `$disk` reports on a disk, never on a path a script names (TODO S-02).
+/// mIRC: `$disk(C:\nonexist\x.txt)` is `$true` (drive C:), `$disk(/tmp)` and
+/// `$disk(nonexist)` are `$false` (`native-s02.txt` d01, d05, d08).
+#[test]
+fn disk_reports_on_disks_not_on_paths() {
+    assert_eq!(
+        run("out $disk(C:\\nonexist\\x.txt) $disk(nonexist) $disk(/tmp) $disk(1) $disk(.)"),
+        ["<$true $false $false $true $true>"]
+    );
+    assert_eq!(run("out $disk(nonexist).path $disk(/tmp).free $disk(/tmp).type"), ["<>"]);
+    let outside = std::env::temp_dir().join(format!("jirc-disk-probe-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&outside);
+    let missing = run(&format!("out $disk({})", outside.display()));
+    std::fs::create_dir_all(&outside).unwrap();
+    let present = run(&format!("out $disk({})", outside.display()));
+    let _ = std::fs::remove_dir_all(&outside);
+    // Whether that folder exists makes no difference.
+    assert_eq!(missing, present);
+}

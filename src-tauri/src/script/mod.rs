@@ -32,6 +32,8 @@ mod regex_strip_tests;
 mod parse_rules_tests;
 #[cfg(test)]
 mod sandbox_folder_tests;
+#[cfg(test)]
+mod data_text_tests;
 pub mod files;
 pub mod hash;
 pub mod ident;
@@ -8417,8 +8419,10 @@ mod tests {
         ));
         assert_eq!(
             engine.run_alias(&ctx(), "#c", "t", ""),
+            // A NUL ends its own line only: the line after it still reads
+            // (native `s02` r02: `nul=[third]`).
             vec![Action::Send(
-                "PRIVMSG #c :random=only miss=[] readn=0 regex=Beta unicode=rest cr=second nul=[]"
+                "PRIVMSG #c :random=only miss=[] readn=0 regex=Beta unicode=rest cr=second nul=[third]"
                     .into()
             )]
         );

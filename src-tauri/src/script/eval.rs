@@ -611,14 +611,52 @@ const WSA_INVALID_ARGUMENT: i32 = 10_022;
 // characters with Private-Use code points. NUL framing cannot collide with
 // mIRC file/script text (text reads stop at NUL), while allowing every visible
 // Unicode scalar, including the old U+E101..U+E106 sentinels, to pass through.
-const DELAY_PREFIX: &str = "\0jirc-unsafe:";
-const PIPE_PREFIX: &str = "\0jirc-read-pipe:";
+//
+// Every prefix carries a key chosen when jIRC starts, so text that arrives as
+// data (an IRC message, a file, a socket read) can never pass for an envelope,
+// even before its NUL bytes are dropped (`c_string`).
+struct EnvelopePrefixes {
+    delay: String,
+    pipe: String,
+    evaluated: String,
+    sealed: String,
+}
+
+fn envelope_prefixes() -> &'static EnvelopePrefixes {
+    static PREFIXES: std::sync::OnceLock<EnvelopePrefixes> = std::sync::OnceLock::new();
+    PREFIXES.get_or_init(|| {
+        let key = uuid::Uuid::new_v4().simple().to_string();
+        EnvelopePrefixes {
+            delay: format!("\0jirc-{key}-unsafe:"),
+            pipe: format!("\0jirc-{key}-read-pipe:"),
+            evaluated: format!("\0jirc-{key}-evaluated:"),
+            sealed: format!("\0jirc-{key}-sealed:"),
+        }
+    })
+}
+
+/// Deferred `$unsafe` values.
+fn delay_prefix() -> &'static str {
+    &envelope_prefixes().delay
+}
+
+/// `$read(…, p)` results whose pipes separate commands.
+fn pipe_prefix() -> &'static str {
+    &envelope_prefixes().pipe
+}
+
 /// Wraps a value an evaluation-bracket group has already produced, so the
 /// ordinary token pass does not evaluate it a second time.
-const EVALUATED_PREFIX: &str = "\0jirc-evaluated:";
-/// As [`EVALUATED_PREFIX`], but also opaque to an enclosing bracket pair —
+fn evaluated_prefix() -> &'static str {
+    &envelope_prefixes().evaluated
+}
+
+/// As [`evaluated_prefix`], but also opaque to an enclosing bracket pair —
 /// mIRC ignores extra pairs once the segment contains an unjoined space.
-const SEALED_PREFIX: &str = "\0jirc-sealed:";
+fn sealed_prefix() -> &'static str {
+    &envelope_prefixes().sealed
+}
+
 const ENVELOPE_END: char = '\0';
 
 /// Synchronous socket operations the engine can call *during* a run, so
@@ -4080,9 +4118,16 @@ impl<'a> Runtime<'a> {
         let force_local = flags.contains('l');
         // /unset takes literal variable names/patterns — don't value-expand
         // them (so `%i7f.*` stays a wildcard rather than becoming its value) —
-        // but a name may be built with `$+` (`unset %n. $+ $nick`).
+        // but a name may be built with `$+` (`unset %n. $+ $nick`) or with
+        // brackets (`unset %n. [ $+ [ $nick ] ]`).
+        let rest = self
+            .expand_evaluation_brackets(split_top_level(rest))
+            .join(" ");
+        if self.error_pending() {
+            return;
+        }
         let mut names = Vec::new();
-        let mut remaining = rest;
+        let mut remaining = rest.as_str();
         while !remaining.trim().is_empty() {
             let (name, after, _) = self.join_var_name(remaining);
             names.push(name);
@@ -4152,7 +4197,15 @@ impl<'a> Runtime<'a> {
 
     fn cmd_incdec(&mut self, raw: &str, sign: i64) {
         let (flags, rest) = split_switches(raw);
-        let (key, amount, _) = self.join_var_name(rest);
+        // A bracket-built name (`inc %n. [ $+ [ $nick ] ]`) is resolved first,
+        // as for /set; the completed name stays a literal target.
+        let rest = self
+            .expand_evaluation_brackets(split_top_level(rest))
+            .join(" ");
+        if self.error_pending() {
+            return;
+        }
+        let (key, amount, _) = self.join_var_name(&rest);
         if key.is_empty() {
             return;
         }
@@ -7215,7 +7268,7 @@ impl<'a> Runtime<'a> {
         // A `$regsubex` capture left inside literal text (`x$upper(\1)` is not
         // evaluated) is plain text from here on.
         for part in &mut parts {
-            if part.contains(SEALED_PREFIX) {
+            if part.contains(sealed_prefix()) {
                 *part = decode_sealed_within(part);
             }
         }
@@ -7252,6 +7305,43 @@ impl<'a> Runtime<'a> {
                 }
             }
 
+            // A group that starts with `$+` joins its text to the word before
+            // it as written: mIRC doesn't evaluate that text first, so data
+            // never becomes part of a name (`$ [ $+ $1 ]` is `$$1`,
+            // `% [ $+ $1 ]` the variable `%$1`, `x [ $+ $1 ]` the text `x$1`).
+            // The joined word is then evaluated once by the token pass. Words
+            // `$+`-joined after it join the same way; a word after an unjoined
+            // space is evaluated as usual. A nested group has already been
+            // evaluated, so `% [ $+ [ $1 ] ]` still reads the variable named
+            // `%` plus the value of `$1`, as in mIRC.
+            if span.join_left {
+                let words: Vec<usize> =
+                    (0..inner.len()).filter(|&index| !inner[index].is_empty()).collect();
+                let mut joined = String::new();
+                let mut used = 0;
+                if let Some(&first) = words.first() {
+                    joined.push_str(&plain_group_value(&inner[first]));
+                    used = 1;
+                    while used + 1 < words.len() && inner[words[used]] == "$+" {
+                        joined.push_str(&plain_group_value(&inner[words[used + 1]]));
+                        used += 2;
+                    }
+                }
+                let rest = words.get(used).map_or(inner.len(), |&index| index);
+                let mut replace_start = span.open;
+                if let Some(previous) = (0..span.open)
+                    .rev()
+                    .find(|index| !tokens[*index].is_empty())
+                {
+                    joined.insert_str(0, &tokens[previous]);
+                    replace_start = previous;
+                }
+                let replacement: Vec<String> =
+                    std::iter::once(joined).chain(inner[rest..].iter().cloned()).collect();
+                tokens.splice(replace_start..=span.close, replacement);
+                continue;
+            }
+
             // mIRC's rule: extra bracket pairs each add an evaluation, *unless*
             // the segment contains a space that no `$+` closes — then every
             // enclosing pair beyond the first is ignored. So `[ [ a $!me ] ]`
@@ -7261,21 +7351,12 @@ impl<'a> Runtime<'a> {
             // just apply to the pair that first saw the space.
             let multi_word = (inner.iter().filter(|t| !t.is_empty()).count() > 1
                 && !inner.iter().any(|t| t == "$+"))
-                || inner.iter().any(|t| t.starts_with(SEALED_PREFIX));
+                || inner.iter().any(|t| t.starts_with(sealed_prefix()));
             let content: Vec<String> = inner.iter().map(|t| decode_evaluated(t)).collect();
             let mut value = self.expand_inner(&content.join(" "), false);
-            let mut replace_start = span.open;
+            let replace_start = span.open;
             let mut replace_end = span.close;
 
-            if span.join_left {
-                if let Some(previous) = (0..span.open)
-                    .rev()
-                    .find(|index| !tokens[*index].is_empty())
-                {
-                    value.insert_str(0, &tokens[previous]);
-                    replace_start = previous;
-                }
-            }
             if span.join_right {
                 if let Some(next) =
                     (span.close + 1..tokens.len()).find(|index| !tokens[*index].is_empty())
@@ -7285,11 +7366,11 @@ impl<'a> Runtime<'a> {
                 }
             }
 
-            // A `$+` join builds a new token — `% [ $+ [ %k ] ]` becomes
-            // `%a` — which the token pass must still dereference. Anything else
-            // is finished, and sealing it stops that pass evaluating it again.
-            let joined = span.join_left || span.join_right;
-            let value = if joined {
+            // A `$+` join builds a new token — `[ $1 $+ ] x` becomes `$1`'s
+            // value plus `x` — which the token pass must still evaluate.
+            // Anything else is finished, and sealing it stops that pass
+            // evaluating it again.
+            let value = if span.join_right {
                 value
             } else if multi_word {
                 // Sealed against the token pass *and* against any outer pair,
@@ -7308,10 +7389,10 @@ impl<'a> Runtime<'a> {
         // An evaluation-bracket group has already been evaluated the number of
         // times its brackets called for; hand its result straight back rather
         // than evaluating it once more.
-        if tok.starts_with(EVALUATED_PREFIX) {
+        if tok.starts_with(evaluated_prefix()) {
             return decode_evaluated(tok);
         }
-        if tok.starts_with(SEALED_PREFIX) {
+        if tok.starts_with(sealed_prefix()) {
             return decode_sealed(tok);
         }
         // `$input` and other synchronous identifiers can keep a run open long
@@ -7359,7 +7440,7 @@ impl<'a> Runtime<'a> {
             return std::iter::once('%').chain(name.iter().copied()).collect();
         }
         let name: String = name.iter().collect();
-        self.var_value(&name).cloned().unwrap_or_default()
+        c_string(self.var_value(&name).cloned().unwrap_or_default())
     }
 
     /// Evaluates a word whose `$` sits at `chars[start - 1]` and applies what
@@ -7502,7 +7583,7 @@ impl<'a> Runtime<'a> {
         // Only the command's own words swap in a `$*` token; inside an
         // identifier's arguments the marker stays as it is.
         let outer_star = self.star_token.take();
-        let value = self.eval_dollar_value(chars, i);
+        let value = c_string(self.eval_dollar_value(chars, i));
         self.calc_args = outer_calc;
         self.star_token = outer_star;
         value
@@ -8176,7 +8257,7 @@ fn read_balanced(chars: &[char], i: &mut usize) -> String {
 }
 
 fn encode_delayed(value: &str) -> String {
-    encode_envelope(DELAY_PREFIX, &value.replace(['\r', '\n'], " "))
+    encode_envelope(delay_prefix(), &value.replace(['\r', '\n'], " "))
 }
 
 pub(crate) fn decode_delayed(value: &str) -> String {
@@ -8188,7 +8269,7 @@ pub(crate) fn decode_delayed(value: &str) -> String {
 /// result intact while it travels through surrounding identifier expansion.
 pub(super) fn encode_command_pipes(value: &str) -> String {
     if value.contains('|') {
-        encode_envelope(PIPE_PREFIX, value)
+        encode_envelope(pipe_prefix(), value)
     } else {
         value.to_string()
     }
@@ -8201,13 +8282,13 @@ pub(super) fn encode_command_pipes(value: &str) -> String {
 /// group's *result* as well and every group would get one evaluation too many —
 /// `[ $!me ]` printed the nick when the KB says it prints `$me`.
 fn encode_evaluated(value: &str) -> String {
-    encode_envelope(EVALUATED_PREFIX, value)
+    encode_envelope(evaluated_prefix(), value)
 }
 
 /// Unwraps a bracket result so an enclosing pair can evaluate it again — which
 /// is exactly what the extra pair means.
 fn decode_evaluated(value: &str) -> String {
-    let Some(rest) = value.strip_prefix(EVALUATED_PREFIX) else {
+    let Some(rest) = value.strip_prefix(evaluated_prefix()) else {
         return value.to_string();
     };
     match rest.strip_suffix(ENVELOPE_END) {
@@ -8220,19 +8301,19 @@ fn decode_evaluated(value: &str) -> String {
 /// evaluate it, and neither may an enclosing bracket pair, because mIRC ignores
 /// extra pairs once the segment contains an unjoined space.
 pub(crate) fn encode_sealed(value: &str) -> String {
-    encode_envelope(SEALED_PREFIX, value)
+    encode_envelope(sealed_prefix(), value)
 }
 
 /// Replaces every sealed value inside `text` with its plain text.
 fn decode_sealed_within(text: &str) -> String {
     let mut out = String::new();
     let mut rest = text;
-    while let Some(at) = rest.find(SEALED_PREFIX) {
+    while let Some(at) = rest.find(sealed_prefix()) {
         out.push_str(&rest[..at]);
         let after = &rest[at..];
-        match after[SEALED_PREFIX.len()..].find(ENVELOPE_END) {
+        match after[sealed_prefix().len()..].find(ENVELOPE_END) {
             Some(end) => {
-                let envelope = &after[..SEALED_PREFIX.len() + end + ENVELOPE_END.len_utf8()];
+                let envelope = &after[..sealed_prefix().len() + end + ENVELOPE_END.len_utf8()];
                 out.push_str(&decode_sealed(envelope));
                 rest = &after[envelope.len()..];
             }
@@ -8246,8 +8327,46 @@ fn decode_sealed_within(text: &str) -> String {
     out
 }
 
+/// mIRC values are C strings: text stops at a NUL byte (`$chr(0)` is empty,
+/// `$decode(YQBi,m)` is `a`). jIRC's own envelopes start with NUL too and are
+/// kept; anything else is cut at its first NUL, so data can never carry the
+/// NUL-prefixed markers jIRC uses internally.
+pub(crate) fn c_string(mut value: String) -> String {
+    let mut from = 0;
+    while let Some(offset) = value[from..].find('\0') {
+        let at = from + offset;
+        let rest = &value[at..];
+        let envelope_end = [delay_prefix(), pipe_prefix(), evaluated_prefix(), sealed_prefix()]
+            .into_iter()
+            .find(|prefix| rest.starts_with(prefix))
+            .and_then(|prefix| {
+                rest[prefix.len()..]
+                    .find(ENVELOPE_END)
+                    .map(|end| at + prefix.len() + end + ENVELOPE_END.len_utf8())
+            });
+        match envelope_end {
+            Some(end) => from = end,
+            None => {
+                value.truncate(at);
+                break;
+            }
+        }
+    }
+    value
+}
+
+/// The plain text of a bracket-group token: a nested group's value, or the
+/// token as written.
+fn plain_group_value(token: &str) -> String {
+    if token.starts_with(sealed_prefix()) {
+        decode_sealed(token)
+    } else {
+        decode_evaluated(token)
+    }
+}
+
 fn decode_sealed(value: &str) -> String {
-    let Some(rest) = value.strip_prefix(SEALED_PREFIX) else {
+    let Some(rest) = value.strip_prefix(sealed_prefix()) else {
         return value.to_string();
     };
     match rest.strip_suffix(ENVELOPE_END) {
@@ -8294,7 +8413,7 @@ fn decode_envelopes(value: &str) -> String {
 }
 
 fn next_envelope(value: &str) -> Option<(usize, &'static str)> {
-    [DELAY_PREFIX, PIPE_PREFIX]
+    [delay_prefix(), pipe_prefix()]
         .into_iter()
         .filter_map(|prefix| value.find(prefix).map(|at| (at, prefix)))
         .min_by_key(|(at, _)| *at)
@@ -8305,9 +8424,9 @@ fn next_envelope(value: &str) -> Option<(usize, &'static str)> {
 fn split_command_pipes(value: &str) -> Vec<String> {
     let mut segments = vec![String::new()];
     let mut rest = value;
-    while let Some(at) = rest.find(PIPE_PREFIX) {
+    while let Some(at) = rest.find(pipe_prefix()) {
         segments.last_mut().unwrap().push_str(&rest[..at]);
-        let after_prefix = &rest[at + PIPE_PREFIX.len()..];
+        let after_prefix = &rest[at + pipe_prefix().len()..];
         let Some(end) = after_prefix.find(ENVELOPE_END) else {
             segments.last_mut().unwrap().push_str(&rest[at..]);
             return segments;
@@ -8316,7 +8435,7 @@ fn split_command_pipes(value: &str) -> Vec<String> {
             segments
                 .last_mut()
                 .unwrap()
-                .push_str(&rest[at..at + PIPE_PREFIX.len() + end + ENVELOPE_END.len_utf8()]);
+                .push_str(&rest[at..at + pipe_prefix().len() + end + ENVELOPE_END.len_utf8()]);
             rest = &after_prefix[end + ENVELOPE_END.len_utf8()..];
             continue;
         };
@@ -8485,17 +8604,49 @@ fn sandbox_parts(dir: &std::path::Path, name: &str) -> Option<Vec<String>> {
             ".." => {
                 parts.pop();
             }
-            part => parts.push(plain_part(part)),
+            part => {
+                let part = plain_part(part);
+                if !part.is_empty() {
+                    parts.push(part);
+                }
+            }
         }
     }
     (absolute || !parts.is_empty()).then_some(parts)
 }
 
-/// One folder or file name as the sandbox uses it: a `:` becomes `_`, so a
-/// part such as `D:x` can't name another drive on Windows (and names the same
-/// file on every OS).
+/// One folder or file name as the sandbox uses it, the same on every OS:
+/// - a `:` becomes `_`, so a part such as `D:x` can't name another drive on
+///   Windows;
+/// - trailing dots and spaces are dropped, as Windows drops them (`a.` is
+///   `a`), so the name checked for links is the name that is opened;
+/// - a Windows device name (`CON`, `NUL`, `COM1`, `LPT1`, also with an
+///   extension) gets a NUL, which every file operation refuses, so a script
+///   can't open a device.
+///
+/// An empty result (`...`) names no folder or file.
 pub(super) fn plain_part(part: &str) -> String {
-    part.replace(':', "_")
+    let part = part.trim_end_matches(['.', ' ']).replace(':', "_");
+    if is_device_name(&part) {
+        format!("{part}\0")
+    } else {
+        part
+    }
+}
+
+/// Whether Windows reads `part` as a device rather than a file: one of its
+/// reserved names, alone or before an extension (`nul.txt`).
+fn is_device_name(part: &str) -> bool {
+    let stem = part.split('.').next().unwrap_or("").trim_end_matches(' ');
+    let upper = stem.to_ascii_uppercase();
+    if matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$") {
+        return true;
+    }
+    ["COM", "LPT"].iter().any(|prefix| {
+        upper.strip_prefix(prefix).is_some_and(|rest| {
+            matches!(rest, "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³")
+        })
+    })
 }
 
 /// `name` with the folder `root` taken off the front, separators compared as
@@ -8530,7 +8681,10 @@ pub(super) fn script_leaf(name: &str) -> Option<String> {
         .split(['/', '\\'])
         .filter(|part| !part.is_empty() && *part != ".")
         .last()?;
-    (last != "..").then(|| plain_part(last))
+    if last == ".." {
+        return None;
+    }
+    Some(plain_part(last)).filter(|part| !part.is_empty())
 }
 
 fn is_line_range(value: &str) -> bool {
@@ -10032,10 +10186,15 @@ mod tests {
                msg #c [ [ %x ] ] % [ $+ [ %key ] ] [ $+ keep $+ ] pre [ $+ $upper(mid) ] [ $upper(end) $+ ] post\n\
              }",
         );
+        // `pre [ $+ $upper(mid) ]` joins the text as written, so the word is
+        // `pre$upper(mid)` and stays literal (native `s01c` c12:
+        // `x [ $+ $upper($1) ]` is `x$upper($1)`). The symmetric
+        // `[ $+ keep $+ ]` is still jIRC's literal-bracket form (TODO P-12;
+        // mIRC joins it too, `native-s02.txt` r01).
         assert_eq!(
             engine.run_alias(&run_ctx(), "#c", "t", ""),
             vec![Action::Send(
-                "PRIVMSG #c :hello apple [keep] preMID ENDpost".into()
+                "PRIVMSG #c :hello apple [keep] pre$upper(mid) ENDpost".into()
             )]
         );
     }
