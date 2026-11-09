@@ -1351,17 +1351,23 @@ fn parse_if(cur: &mut Cursor, line: usize) -> Option<Stmt> {
     })
 }
 
-/// Reads `(cond)` then a body and appends to `branches`. Returns Some(()) on ok.
+/// Reads a condition then a body and appends to `branches`. Parentheses are
+/// optional for the single-value and `left operator right` shorthand forms.
 fn read_cond_and_block(cur: &mut Cursor, branches: &mut Vec<(String, Vec<Stmt>)>) -> Option<()> {
     cur.skip_inline_ws();
     cur.skip_trivia();
-    if cur.peek() != Some('(') {
+    let parenthesized = cur.peek() == Some('(');
+    let mut cond = if parenthesized {
+        cur.read_parens()
+    } else {
+        read_unparenthesized_condition(cur)
+    };
+    if cond.is_empty() {
         return None;
     }
     // First bracket group (inner, unwrapped — keeps single-group conditions as
     // before). Then extend across trailing `&&`/`||` operands so mixed-paren
     // conditions parse: `if ($2==X) && $y==z { ... }`.
-    let mut cond = cur.read_parens();
     loop {
         let save = cur.pos;
         cur.skip_inline_ws();
@@ -1377,6 +1383,8 @@ fn read_cond_and_block(cur: &mut Cursor, branches: &mut Vec<(String, Vec<Stmt>)>
         cur.skip_inline_ws();
         let operand = if cur.peek() == Some('(') {
             format!("({})", cur.read_parens())
+        } else if !parenthesized {
+            read_unparenthesized_condition(cur)
         } else {
             read_cond_operand(cur)
         };
@@ -1388,6 +1396,58 @@ fn read_cond_and_block(cur: &mut Cursor, branches: &mut Vec<(String, Vec<Stmt>)>
         body,
     ));
     Some(())
+}
+
+/// Reads a source operand without evaluating it. Identifier arguments and
+/// evaluation brackets can contain spaces, so whitespace inside them does not
+/// mark the start of the command following a parenthesis-free comparison.
+fn read_condition_token(cur: &mut Cursor) -> String {
+    let mut token = String::new();
+    let mut parens = 0usize;
+    let mut brackets = 0usize;
+    while let Some(c) = cur.peek() {
+        if parens == 0
+            && brackets == 0
+            && (c.is_whitespace() || matches!(c, '{' | '}' | '|'))
+        {
+            break;
+        }
+        match c {
+            '(' => parens += 1,
+            ')' => parens = parens.saturating_sub(1),
+            '[' => brackets += 1,
+            ']' => brackets = brackets.saturating_sub(1),
+            _ => {}
+        }
+        token.push(c);
+        cur.pos += 1;
+    }
+    token
+}
+
+fn read_unparenthesized_condition(cur: &mut Cursor) -> String {
+    let mut cond = read_condition_token(cur);
+    if cond.is_empty() {
+        return cond;
+    }
+    let save = cur.pos;
+    cur.skip_inline_ws();
+    let op = read_condition_token(cur);
+    if super::eval::is_supported_operator(&op) {
+        cond.push(' ');
+        cond.push_str(&op);
+        if !super::eval::is_unary_word_op(&op) {
+            cur.skip_inline_ws();
+            let right = read_condition_token(cur);
+            if !right.is_empty() {
+                cond.push(' ');
+                cond.push_str(&right);
+            }
+        }
+    } else {
+        cur.pos = save;
+    }
+    cond
 }
 
 /// Reads a parenless condition operand (after `&&`/`||`) up to the next logical
@@ -1600,6 +1660,81 @@ mod tests {
     }
 
     #[test]
+    fn parses_parenthesis_free_if_conditions_and_preserves_body_boundaries() {
+        let script = parse(
+            "alias t {\n\
+               if %value == 1 echo one\n\
+               elseif %value == 2 echo two\n\
+               else echo other\n\
+               if %nick isop # msg #c operator\n\
+               if $true echo true | echo sibling\n\
+               if %value isnum { echo numeric }\n\
+             }",
+        );
+        let body = &script.aliases[0].body;
+        assert_eq!(body.len(), 5);
+        assert!(matches!(
+            &body[0],
+            Stmt::If { branches, else_body, .. }
+                if branches[0].0 == "%value == 1"
+                    && branches[1].0 == "%value == 2"
+                    && else_body.is_some()
+        ));
+        assert!(matches!(
+            &body[1], Stmt::If { branches, .. } if branches[0].0 == "%nick isop #"
+        ));
+        assert!(matches!(
+            &body[2], Stmt::If { branches, .. } if branches[0].0 == "$true"
+        ));
+        assert!(matches!(
+            &body[3], Stmt::Command { name, args, .. } if name == "echo" && args == "sibling"
+        ));
+        assert!(matches!(
+            &body[4], Stmt::If { branches, .. } if branches[0].0 == "%value isnum"
+        ));
+    }
+
+    #[test]
+    fn parenthesis_free_if_executes_goto_branches_and_identifier_operands_once() {
+        use crate::script::eval::Action;
+        use crate::script::{RunCtx, ScriptEngine};
+
+        let engine = ScriptEngine::new();
+        engine.load(
+            "alias t {\n\
+               set %calls 0\n\
+               if 1 == 2 msg #c wrong\n\
+               elseif 2 == 2 msg #c matched\n\
+               else msg #c wrong-else\n\
+               if $probe(hello world) == hello-world msg #c identifier\n\
+               if $true goto done\n\
+               msg #c wrong-goto\n\
+               :done\n\
+               if $false msg #c wrong-pipe | msg #c sibling\n\
+               msg #c calls=%calls\n\
+             }\n\
+             alias probe { inc %calls | return $replace($1,$chr(32),-) }",
+        );
+        let ctx = RunCtx {
+            server_id: "",
+            my_nick: "me",
+            network: "test",
+            server: "test.invalid",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(Default::default()),
+        };
+        assert_eq!(
+            engine.run_alias(&ctx, "#c", "t", ""),
+            vec![
+                Action::Send("PRIVMSG #c :matched".into()),
+                Action::Send("PRIVMSG #c :identifier".into()),
+                Action::Send("PRIVMSG #c :sibling".into()),
+                Action::Send("PRIVMSG #c :calls=1".into()),
+            ]
+        );
+    }
+
+    #[test]
     fn parses_braceless_while_and_trailing_sibling() {
         let s = parse("alias t { while (%i < 3) /inc %i }");
         assert!(matches!(s.aliases[0].body[0], Stmt::While { .. }));
@@ -1796,6 +1931,7 @@ mod tests {
         let engine = ScriptEngine::new();
         engine.load("alias t {\n  /* msg #c must-not-run */\n  msg #c hello $&\n    continued\n}");
         let ctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "test",
             server: "test.invalid",

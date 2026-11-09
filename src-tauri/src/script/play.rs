@@ -417,6 +417,7 @@ fn execute_line(app: &AppHandle, run: &PlayRun, line: &str) -> bool {
         .connection_context(&run.server_id)
         .unwrap_or_else(|| (run.network.clone(), run.server.clone()));
     let ctx = RunCtx {
+        server_id: &run.server_id,
         my_nick: &my_nick,
         network: &network,
         server: &server,

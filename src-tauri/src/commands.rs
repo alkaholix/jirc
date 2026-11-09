@@ -454,10 +454,25 @@ pub fn open_help(app: AppHandle, keyword: Option<String>) -> Result<(), String> 
 }
 
 /// Opens a URL in the user's default browser (the `/url` command).
+///
+/// The scheme is checked because this hands the string to the OS handler, which
+/// treats far more than the web as openable: `file:` runs a local program, and
+/// Windows' app protocols (`ms-msdt:` and friends) are established
+/// code-execution chains. jIRC deliberately never launches programs -- `/run`
+/// is a no-op -- so a script, plugin or link that reaches `/url` must not
+/// become the way around that. A bare host is read as `https`, so typing
+/// `/url example.com` still works.
 #[tauri::command]
 pub fn open_url(app: AppHandle, url: String) -> Result<(), String> {
+    let trimmed = url.trim();
+    let parsed = tauri::Url::parse(trimmed)
+        .or_else(|_| tauri::Url::parse(&format!("https://{trimmed}")))
+        .map_err(|_| "invalid URL".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https" | "mailto" | "irc" | "ircs") {
+        return Err(format!("jIRC will not open a {}: URL", parsed.scheme()));
+    }
     app.opener()
-        .open_url(url, None::<&str>)
+        .open_url(parsed.to_string(), None::<&str>)
         .map_err(|e| e.to_string())
 }
 

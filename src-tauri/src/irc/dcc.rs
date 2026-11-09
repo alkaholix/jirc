@@ -13,13 +13,15 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use std::task::{Context, Poll};
 
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{
-    AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt, BufReader, SeekFrom,
+    AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt, BufReader, ReadBuf, SeekFrom,
 };
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{
@@ -378,6 +380,7 @@ struct DccChat {
     nick: String,
     ip: String,
     opened: Instant,
+    last_received: Arc<Mutex<Instant>>,
     connected: Arc<AtomicBool>,
 }
 
@@ -427,6 +430,91 @@ pub struct DccTransferSnapshot {
     pub resume: u64,
     pub last_ack: u64,
     pub opened: Instant,
+    timing: TransferTiming,
+}
+
+#[derive(Debug, Clone)]
+struct TransferTiming {
+    connected: Option<Instant>,
+    finished: Option<Instant>,
+    last_io: Arc<Mutex<Instant>>,
+}
+
+impl TransferTiming {
+    fn new(active: bool) -> Self {
+        let now = Instant::now();
+        Self {
+            connected: active.then_some(now),
+            finished: None,
+            last_io: Arc::new(Mutex::new(now)),
+        }
+    }
+}
+
+impl DccTransferSnapshot {
+    fn script_info(&self, now: Instant) -> crate::script::eval::DccInfo {
+        crate::script::eval::DccInfo {
+            id: self.id.clone(),
+            kind: self.kind.clone(),
+            nick: self.nick.clone(),
+            filename: self.filename.clone(),
+            path: self.path.clone(),
+            ip: self.ip.clone(),
+            status: match self.status.as_str() {
+                "done" if self.kind == "send" => "sent",
+                "done" => "received",
+                "error" | "cancelled" => "failed",
+                other => other,
+            }.into(),
+            transferred: self.transferred,
+            size: self.size,
+            resume: self.resume,
+            last_ack: self.last_ack,
+            secs: self.timing.connected.map_or(0, |start| {
+                self.timing.finished.unwrap_or(now).saturating_duration_since(start).as_secs()
+            }),
+            idle: now.saturating_duration_since(*self.timing.last_io.lock().unwrap()).as_secs(),
+        }
+    }
+}
+
+/// Track socket traffic independently of throttled UI progress updates. Chat
+/// idle measures incoming traffic only; transfers count reads and writes.
+struct DccIo<T> {
+    inner: T,
+    activity: Arc<Mutex<Instant>>,
+    writes_count: bool,
+}
+
+impl<T: AsyncRead + Unpin> AsyncRead for DccIo<T> {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        let before = buf.filled().len();
+        let result = Pin::new(&mut this.inner).poll_read(cx, buf);
+        if matches!(result, Poll::Ready(Ok(()))) && buf.filled().len() > before {
+            *this.activity.lock().unwrap() = Instant::now();
+        }
+        result
+    }
+}
+
+impl<T: AsyncWrite + Unpin> AsyncWrite for DccIo<T> {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
+        let this = self.get_mut();
+        let result = Pin::new(&mut this.inner).poll_write(cx, buf);
+        if this.writes_count && matches!(result, Poll::Ready(Ok(n)) if n > 0) {
+            *this.activity.lock().unwrap() = Instant::now();
+        }
+        result
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
 }
 
 struct TransferRecord {
@@ -435,12 +523,58 @@ struct TransferRecord {
     retry: RetrySpec,
 }
 
+#[cfg(test)]
+mod activity_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn activity_tracks_actual_io_without_waiting_for_progress_notifications() {
+        let old = Instant::now() - Duration::from_secs(30);
+        let activity = Arc::new(Mutex::new(old));
+        let (socket, mut peer) = tokio::io::duplex(32);
+        let mut socket = DccIo { inner: socket, activity: activity.clone(), writes_count: true };
+        socket.write_all(b"one").await.unwrap();
+        assert!(*activity.lock().unwrap() > old);
+        *activity.lock().unwrap() = old;
+        peer.write_all(b"two").await.unwrap();
+        let mut bytes = [0; 3]; socket.read_exact(&mut bytes).await.unwrap();
+        assert_eq!(&bytes, b"two"); assert!(*activity.lock().unwrap() > old);
+    }
+
+    #[tokio::test]
+    async fn chat_idle_tracks_remote_data_and_excludes_local_writes() {
+        let old = Instant::now() - Duration::from_secs(30);
+        let activity = Arc::new(Mutex::new(old));
+        let (socket, mut peer) = tokio::io::duplex(32);
+        let mut socket = DccIo { inner: socket, activity: activity.clone(), writes_count: false };
+        socket.write_all(b"one").await.unwrap(); assert_eq!(*activity.lock().unwrap(), old);
+        peer.write_all(b"two").await.unwrap();
+        let mut bytes = [0; 3]; socket.read_exact(&mut bytes).await.unwrap();
+        assert!(*activity.lock().unwrap() > old);
+    }
+
+    #[test]
+    fn completed_connection_duration_freezes_and_idle_is_separate() {
+        let now = Instant::now();
+        let snapshot = DccTransferSnapshot { server_id: "s".into(), id: "t".into(), kind: "recv".into(),
+            nick: "peer".into(), filename: "done.bin".into(), path: "done.bin".into(), ip: "127.0.0.1".into(),
+            status: "done".into(), transferred: 5, size: 5, resume: 0, last_ack: 5,
+            opened: now - Duration::from_secs(20),
+            timing: TransferTiming { connected: Some(now - Duration::from_secs(10)), finished: Some(now - Duration::from_secs(3)),
+                last_io: Arc::new(Mutex::new(now - Duration::from_secs(4))) } };
+        let info = snapshot.script_info(now + Duration::from_secs(2));
+        assert_eq!(info.id, "t"); assert_eq!(info.status, "received");
+        assert_eq!(info.secs, 7); assert_eq!(info.idle, 6);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DccChatSnapshot {
     pub nick: String,
     pub ip: String,
     pub status: String,
     pub opened: Instant,
+    pub last_received: Instant,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -561,6 +695,12 @@ fn parse_server_request(request: &str) -> Option<DccServerRequest> {
 const OFFER_TIMEOUT: Duration = Duration::from_secs(120);
 const IO_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_TRANSFER_HISTORY: usize = 256;
+/// A DCC SEND may omit its size, and then nothing in the protocol says where
+/// the file ends: the sender simply stops. The offer dialog shows such a
+/// transfer as "0 bytes", so an accepted one would otherwise let a peer stream
+/// until the disk is full. A sized transfer is already bounded by the size the
+/// user agreed to; this bounds the rest.
+const MAX_UNSIZED_RECV_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 /// Manages active DCC chat sessions, keyed by their `=nick` buffer id.
 #[derive(Default)]
@@ -762,6 +902,7 @@ impl DccManager {
                 nick,
                 ip: ip.to_string(),
                 opened: Instant::now(),
+                last_received: Arc::new(Mutex::new(Instant::now())),
                 connected,
             },
         );
@@ -881,6 +1022,7 @@ impl DccManager {
                 nick,
                 ip: ip.to_string(),
                 opened: Instant::now(),
+                last_received: Arc::new(Mutex::new(Instant::now())),
                 connected,
             },
         );
@@ -966,6 +1108,7 @@ impl DccManager {
                 nick: target,
                 ip: ip.to_string(),
                 opened: Instant::now(),
+                last_received: Arc::new(Mutex::new(Instant::now())),
                 connected,
             },
         );
@@ -1062,6 +1205,7 @@ impl DccManager {
                 nick,
                 ip: ip.to_string(),
                 opened: Instant::now(),
+                last_received: Arc::new(Mutex::new(Instant::now())),
                 connected,
             },
         );
@@ -1340,6 +1484,7 @@ impl DccManager {
                 resume: position,
                 last_ack: 0,
                 opened: Instant::now(),
+                timing: TransferTiming::new(false),
             },
             RetrySpec::Recv {
                 server_id: server_id.clone(),
@@ -1587,6 +1732,7 @@ impl DccManager {
                 resume: 0,
                 last_ack: 0,
                 opened: Instant::now(),
+                timing: TransferTiming::new(false),
             },
             RetrySpec::Send {
                 server_id,
@@ -1671,6 +1817,7 @@ impl DccManager {
                 resume: 0,
                 last_ack: 0,
                 opened: Instant::now(),
+                timing: TransferTiming::new(false),
             },
             RetrySpec::Send {
                 server_id,
@@ -1743,6 +1890,7 @@ impl DccManager {
             task.abort();
         }
         record.snapshot.status = "cancelled".into();
+        record.snapshot.timing.finished = Some(Instant::now());
         let snapshot = record.snapshot.clone();
         drop(records);
         self.pending_resumes
@@ -1991,6 +2139,7 @@ impl DccManager {
                     "waiting".into()
                 },
                 opened: chat.opened,
+                last_received: *chat.last_received.lock().unwrap(),
             })
             .collect()
     }
@@ -2015,25 +2164,10 @@ impl crate::script::eval::ScriptDcc for EngineDcc {
         let mut items: Vec<(Instant, crate::script::eval::DccInfo)> = manager
             .transfer_snapshots(server_id, None)
             .into_iter()
-            // mIRC removes completed/failed transfers from `$send`/`$get`;
-            // jIRC keeps them separately only so the transfer UI can retry.
-            .filter(|transfer| matches!(transfer.status.as_str(), "active" | "waiting"))
             .map(|transfer| {
                 (
                     transfer.opened,
-                    crate::script::eval::DccInfo {
-                        kind: transfer.kind,
-                        nick: transfer.nick,
-                        filename: transfer.filename,
-                        path: transfer.path,
-                        ip: transfer.ip,
-                        status: transfer.status,
-                        transferred: transfer.transferred,
-                        size: transfer.size,
-                        resume: transfer.resume,
-                        last_ack: transfer.last_ack,
-                        secs: transfer.opened.elapsed().as_secs(),
-                    },
+                    transfer.script_info(Instant::now()),
                 )
             })
             .collect();
@@ -2046,6 +2180,7 @@ impl crate::script::eval::ScriptDcc for EngineDcc {
                     ip: chat.ip,
                     status: chat.status,
                     secs: chat.opened.elapsed().as_secs(),
+                    idle: chat.last_received.elapsed().as_secs(),
                     ..Default::default()
                 },
             )
@@ -2308,6 +2443,7 @@ async fn receive_server_file(
             resume: 0,
             last_ack: 0,
             opened: Instant::now(),
+            timing: TransferTiming::new(true),
         },
         RetrySpec::ServerDirect,
     );
@@ -2387,6 +2523,7 @@ async fn send_server_get(
             resume: offset,
             last_ack: offset,
             opened: Instant::now(),
+            timing: TransferTiming::new(true),
         },
         RetrySpec::ServerDirect,
     );
@@ -2407,8 +2544,17 @@ async fn run_chat(
     connected: Arc<AtomicBool>,
 ) {
     connected.store(true, Ordering::Release);
+    let activity = app.try_state::<DccManager>()
+        .and_then(|manager| manager.chats.lock().unwrap()
+            .get(&chat_key(&server_id, &id)).map(|chat| chat.last_received.clone()))
+        .unwrap_or_else(|| Arc::new(Mutex::new(Instant::now())));
+    *activity.lock().unwrap() = Instant::now();
     fire_chat_event(&app, &server_id, "OPEN", &nick, "");
-    let (read_half, mut write_half) = tokio::io::split(stream);
+    let (read_half, mut write_half) = tokio::io::split(DccIo {
+        inner: stream,
+        activity,
+        writes_count: false,
+    });
     let mut reader = BufReader::new(read_half);
     let mut buf: Vec<u8> = Vec::new();
     loop {
@@ -2426,7 +2572,7 @@ async fn run_chat(
                 }
                 None => break,
             },
-            res = reader.read_until(b'\n', &mut buf) => match res {
+            res = crate::irc::connection::read_capped_line(&mut reader, &mut buf) => match res {
                 Ok(0) => break,
                 Ok(_) => {
                     let text = String::from_utf8_lossy(&buf)
@@ -2479,7 +2625,10 @@ async fn run_fserve(
     let mut buf = Vec::new();
     loop {
         write_fserve_line(&mut write_half, "fserve>").await?;
-        let read = timeout(IO_TIMEOUT, reader.read_until(b'\n', &mut buf))
+        let read = timeout(
+            IO_TIMEOUT,
+            crate::irc::connection::read_capped_line(&mut reader, &mut buf),
+        )
             .await
             .map_err(|_| "session timed out".to_string())?
             .map_err(|error| error.to_string())?;
@@ -2717,10 +2866,11 @@ async fn recv_into(
     _nick: &str,
     _base: &str,
     path: &std::path::Path,
-    mut stream: TcpStream,
+    stream: TcpStream,
     size: u64,
     offset: u64,
 ) -> std::io::Result<u64> {
+    let mut stream = transfer_io(app, xid, stream);
     let mut file = tokio::fs::OpenOptions::new()
         .create(true)
         .write(true)
@@ -2743,6 +2893,12 @@ async fn recv_into(
     loop {
         if size > 0 && received >= size {
             break;
+        }
+        if size == 0 && received >= MAX_UNSIZED_RECV_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "sender declared no size and passed the limit for an unsized transfer",
+            ));
         }
         let limit = if size > 0 {
             let remaining = size - received;
@@ -2797,7 +2953,7 @@ async fn send_into(
     size: u64,
     offset: u64,
 ) -> std::io::Result<u64> {
-    let (mut rd, mut wr) = stream.into_split();
+    let (mut rd, mut wr) = tokio::io::split(transfer_io(app, xid, stream));
     let sent_total = Arc::new(AtomicU64::new(offset));
     let acked_total = Arc::new(AtomicU64::new(offset));
     let sent_for_acks = sent_total.clone();
@@ -2927,6 +3083,14 @@ fn emit_transfer_snapshot(app: &AppHandle, snapshot: &DccTransferSnapshot) {
     );
 }
 
+fn transfer_io(app: &AppHandle, id: &str, stream: TcpStream) -> DccIo<TcpStream> {
+    let activity = app.try_state::<DccManager>()
+        .and_then(|manager| manager.transfers.lock().unwrap()
+            .get(id).map(|record| record.snapshot.timing.last_io.clone()))
+        .unwrap_or_else(|| Arc::new(Mutex::new(Instant::now())));
+    DccIo { inner: stream, activity, writes_count: true }
+}
+
 fn mark_transfer_active(app: &AppHandle, id: &str, position: u64) {
     if let Some(manager) = app.try_state::<DccManager>() {
         let mut records = manager.transfers.lock().unwrap();
@@ -2935,6 +3099,9 @@ fn mark_transfer_active(app: &AppHandle, id: &str, position: u64) {
                 return;
             }
             record.snapshot.status = "active".into();
+            let now = Instant::now();
+            record.snapshot.timing.connected = Some(now);
+            *record.snapshot.timing.last_io.lock().unwrap() = now;
             record.snapshot.transferred = position;
             record.snapshot.resume = position;
             let snapshot = record.snapshot.clone();
@@ -2980,6 +3147,7 @@ fn finish_transfer(app: &AppHandle, id: &str, result: std::io::Result<u64>) {
         }
         Err(_) => record.snapshot.status = "error".into(),
     }
+    record.snapshot.timing.finished = Some(Instant::now());
     record.task = None;
     let snapshot = record.snapshot.clone();
     drop(records);
@@ -3052,14 +3220,30 @@ fn send_ctcp(app: &AppHandle, server_id: &str, nick: &str, payload: &str) -> Res
     manager.send(server_id, format!("PRIVMSG {nick} :\u{1}{payload}\u{1}"))
 }
 
+/// Reduces a peer-supplied DCC filename to a leaf name that cannot leave the
+/// download directory. Splitting on separators is not enough on Windows, where
+/// two shapes escape without containing one: `PathBuf::join` throws the whole
+/// base path away when what it joins carries a drive prefix, so `C:evil.exe`
+/// lands wherever the process's current directory on C: happens to be, and
+/// `name:stream` writes an alternate data stream on a *different* file.
+/// Trailing dots and spaces go too: Windows strips them when opening, so
+/// `report.txt.` and `report.txt` are the same file.
 fn safe_basename(filename: &str) -> String {
-    let filename = filename.replace('\\', "/");
-    filename
-        .rsplit('/')
-        .next()
-        .filter(|name| !name.is_empty() && *name != "." && *name != "..")
-        .unwrap_or("received.bin")
-        .to_string()
+    let normalized = filename.replace('\\', "/");
+    let leaf = std::path::Path::new(&normalized)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let cleaned: String = leaf
+        .chars()
+        .map(|c| if c == ':' || c.is_control() { '_' } else { c })
+        .collect();
+    let cleaned = cleaned.trim_matches([' ', '.']);
+    if cleaned.is_empty() {
+        "received.bin".to_string()
+    } else {
+        cleaned.to_string()
+    }
 }
 
 fn parse_server_target(target: &str) -> Option<(IpAddr, u16)> {
@@ -3169,6 +3353,7 @@ fn fire_file_event(app: &AppHandle, snapshot: &DccTransferSnapshot, success: boo
             params: vec![snapshot.path.clone()],
             filename: snapshot.path.clone(),
             dcc_id: snapshot.id.clone(),
+            dcc_snapshot: Some(snapshot.script_info(Instant::now())),
             ..Default::default()
         },
     );
@@ -3190,6 +3375,7 @@ fn fire_dcc_script(
     let my_nick = state.nick.clone();
     let (network, server) = engine.connection_context(server_id).unwrap_or_default();
     let ctx = crate::script::RunCtx {
+        server_id,
         my_nick: &my_nick,
         network: &network,
         server: &server,
@@ -3218,6 +3404,7 @@ fn fire_dcc_server_event(
     let my_nick = state.nick.clone();
     let (network, server) = engine.connection_context(server_id).unwrap_or_default();
     let ctx = crate::script::RunCtx {
+        server_id,
         my_nick: &my_nick,
         network: &network,
         server: &server,
@@ -3339,6 +3526,44 @@ mod tests {
         assert_eq!(o.kind, DccKind::Chat);
         assert_eq!(o.ip, Ipv4Addr::new(192, 168, 0, 1));
         assert_eq!(o.port, 1024);
+    }
+
+    /// A DCC filename is chosen by the peer, so it must never be able to
+    /// name a destination outside the download folder. The separator cases
+    /// are obvious; the Windows ones are not, and are what this guards.
+    #[test]
+    fn safe_basename_cannot_name_a_file_outside_the_download_folder() {
+        let dir = std::path::Path::new("/downloads");
+        for probe in [
+            "../../evil.exe",
+            r"..\..\evil.exe",
+            "/etc/passwd",
+            r"\\srv\share\evil.exe",
+            // Drive-relative: no separator, yet `join` drops the base path.
+            "C:evil.exe",
+            // An alternate data stream on a different file.
+            "report.txt:hidden.exe",
+            "..",
+            ".",
+            "",
+            "   ",
+            // Windows drops the trailing dot, so this is `evil.exe`.
+            "evil.exe.",
+        ] {
+            let base = safe_basename(probe);
+            let joined = dir.join(&base);
+            assert_eq!(
+                joined.parent(),
+                Some(dir),
+                "{probe:?} escaped as {base:?} -> {}",
+                joined.display()
+            );
+            assert!(!base.contains(':'), "{probe:?} kept a stream marker");
+        }
+        // Ordinary names are untouched.
+        assert_eq!(safe_basename("holiday photo.jpg"), "holiday photo.jpg");
+        assert_eq!(safe_basename("a/b/c/setup.zip"), "setup.zip");
+        assert_eq!(safe_basename(".."), "received.bin");
     }
 
     #[test]

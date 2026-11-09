@@ -663,7 +663,7 @@ function MainApp() {
                   ) : (
                     <MessageList buffer={active} />
                   )}
-                  {(active.kind !== "window" || active.windowKind === "editbox") && (
+                  {(active.kind !== "window" || (active.windowEditbox ?? active.windowKind === "editbox")) && (
                     <InputBar buffer={active} />
                   )}
                 </div>

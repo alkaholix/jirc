@@ -26,8 +26,8 @@ function usesMonitor(serverId: string): boolean {
 }
 
 /** Announces arrivals and departures, then records the new online set. */
-function applyOnline(serverId: string, nowOnline: string[], wentOffline: string[]) {
-  const notifications = useSettings.getState().notifications;
+function applyOnline(serverId: string, nowOnline: string[], wentOffline: string[], suppressDefault = false) {
+  const notifications = !suppressDefault && useSettings.getState().notifications;
   const network = useStore.getState().servers[serverId]?.name ?? "";
   const prev = useNotify.getState().online[serverId] ?? [];
   const prevLc = prev.map((n) => n.toLowerCase());
@@ -37,7 +37,7 @@ function applyOnline(serverId: string, nowOnline: string[], wentOffline: string[
     // Fire `on NOTIFY` regardless of the desktop-notification setting.
     api.scriptNotify(serverId, network, n, true).catch(() => {});
     if (notifications) notify("Online", `${n} is online`);
-    playAlertSound("online");
+    if (!suppressDefault) playAlertSound("online");
   }
   for (const n of wentOffline) {
     if (!prevLc.includes(n.toLowerCase())) continue;
@@ -82,16 +82,17 @@ export function routeNotifyEvent(ev: IrcEvent) {
       applyOnline(
         ev.serverId,
         reported,
-        prev.filter((n) => !reportedLc.includes(n.toLowerCase()))
+        prev.filter((n) => !reportedLc.includes(n.toLowerCase())),
+        ev.suppressDefault
       );
       return;
     }
     // RPL_MONONLINE / RPL_MONOFFLINE — pushed deltas.
     case 730:
-      applyOnline(ev.serverId, monitorTargets(ev.args), []);
+      applyOnline(ev.serverId, monitorTargets(ev.args), [], ev.suppressDefault);
       return;
     case 731:
-      applyOnline(ev.serverId, [], monitorTargets(ev.args));
+      applyOnline(ev.serverId, [], monitorTargets(ev.args), ev.suppressDefault);
       return;
     // RPL_MONLIST — the server's view of our list, on request. Informational.
     case 732:

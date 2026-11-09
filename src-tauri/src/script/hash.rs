@@ -42,11 +42,34 @@ pub fn item_key(table: &HashMap<String, String>, wanted: &str) -> Option<String>
         .cloned()
 }
 
+/// mIRC retains one slot, or rounds upward to an odd prime. The declared
+/// bucket hint is bounded to 1..=10000 before normalization, so 10000 uses
+/// 10007 slots. The native odd-first step also makes a hint of 2 use 3.
+pub fn normalized_slots(slots: usize) -> usize {
+    let mut candidate = slots.clamp(1, 10000);
+    if candidate == 1 {
+        return 1;
+    }
+    if candidate % 2 == 0 {
+        candidate += 1;
+    }
+    loop {
+        let mut divisor = 3;
+        while divisor * divisor <= candidate && candidate % divisor != 0 {
+            divisor += 2;
+        }
+        if divisor * divisor > candidate {
+            return candidate;
+        }
+        candidate += 2;
+    }
+}
+
 pub fn set_slots(tables: &mut HashMap<String, HashMap<String, String>>, table: &str, slots: usize) {
     tables
         .entry(META_TABLE.to_string())
         .or_default()
-        .insert(table.to_string(), slots.max(1).to_string());
+        .insert(table.to_string(), normalized_slots(slots).to_string());
 }
 
 pub fn slots(tables: &HashMap<String, HashMap<String, String>>, table: &str) -> usize {
@@ -54,7 +77,7 @@ pub fn slots(tables: &HashMap<String, HashMap<String, String>>, table: &str) -> 
         .get(META_TABLE)
         .and_then(|metadata| metadata.get(table))
         .and_then(|value| value.parse().ok())
-        .unwrap_or(100)
+        .unwrap_or_else(|| normalized_slots(100))
 }
 
 pub fn remove_slots(tables: &mut HashMap<String, HashMap<String, String>>, table: &str) {
@@ -306,6 +329,27 @@ fn load_ini_section(text: &str, wanted: &str) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slot_hints_follow_mirc_odd_prime_normalization() {
+        for (hint, expected) in [(1, 1), (2, 3), (5, 5), (10, 11), (100, 101), (10000, 10007)] {
+            assert_eq!(normalized_slots(hint), expected, "slot hint {hint}");
+        }
+        assert_eq!(normalized_slots(0), 1);
+        assert_eq!(normalized_slots(usize::MAX), 10007);
+    }
+
+    #[test]
+    fn slot_metadata_and_default_report_normalized_counts() {
+        let mut tables = HashMap::new();
+        assert_eq!(slots(&tables, "missing"), 101);
+        set_slots(&mut tables, "ten", 10);
+        set_slots(&mut tables, "five", 5);
+        assert_eq!(slots(&tables, "ten"), 11);
+        assert_eq!(slots(&tables, "five"), 5);
+        remove_slots(&mut tables, "ten");
+        assert_eq!(slots(&tables, "ten"), 101);
+    }
 
     fn entries() -> Vec<(String, String)> {
         vec![

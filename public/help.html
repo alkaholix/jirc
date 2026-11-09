@@ -87,6 +87,7 @@
   <a href="#popups">Popup menus</a>
   <a href="#custom-windows">Custom @windows</a>
   <a href="#dialogs">Dialogs</a>
+  <a href="#http-downloads">HTTP downloads</a>
   <a href="#timers">Timers</a>
   <h2>Reference</h2>
   <a href="#commands">Commands</a>
@@ -645,6 +646,21 @@ out of <code>if</code>/<code>while</code> blocks). A safety cap stops runaway lo
 }
 </code></pre>
 
+<h3>Script errors</h3>
+<p>Missing required arguments to string/token identifiers such as
+<code>$mid(text,start)</code> raise a script error. Execution enters the routine's
+<code>:error</code> label, or unwinds to a caller with that label. <code>$error</code>
+contains the diagnostic and available source location. Use <code>/reseterror</code>
+after handling it; returning without resetting propagates it to the caller.
+Unhandled errors are displayed locally.</p>
+<pre><code>alias guarded {
+  echo -a $mid(example)
+  return
+  :error
+  echo -a Caught: $error
+  reseterror
+}</code></pre>
+
 <h2 id="events">Events: reacting with <code>on</code></h2>
 <p>Events run automatically. The general form is:</p>
 <pre><code><span class="k">on</span> &lt;level&gt;:&lt;EVENT&gt;:&lt;target&gt;:{ commands }
@@ -698,7 +714,7 @@ matches exactly one word. So <code>on *:TEXT:!weather &amp;:#:</code> triggers o
   <tr><td><code>OP DEOP VOICE DEVOICE BAN UNBAN OWNER ADMIN HELP</code> (+ DE‑ forms)</td><td>a specific mode change</td><td><code>$nick</code> (setter), <code>$opnick</code>/<code>$bnick</code>/<code>$vnick</code>/<code>$knick</code> = affected nick/mask, <code>$chan</code></td></tr>
   <tr><td><code>TOPIC</code></td><td>the topic changes</td><td><code>$nick</code> (setter), <code>$chan $1-</code> (topic)</td></tr>
   <tr><td><code>INVITE</code></td><td>you are invited</td><td><code>$nick</code> (inviter), <code>$chan</code></td></tr>
-  <tr><td><code>CONNECT</code></td><td>you finish connecting</td><td>—</td></tr>
+  <tr><td><code>CONNECT</code></td><td>the initial MOTD ends (376), or the server reports no MOTD (422), once per connection</td><td>—</td></tr>
   <tr><td><code>DISCONNECT</code></td><td>you disconnect</td><td>—</td></tr>
   <tr><td><code>START</code></td><td>jIRC starts, after scripts load (init)</td><td>—</td></tr>
   <tr><td><code>UNLOAD</code></td><td>scripts are about to reload (cleanup)</td><td>—</td></tr>
@@ -765,9 +781,13 @@ for all):</p>
 <code>$group(#name).status</code> is <code>on</code> or <code>off</code>.</p>
 
 <h3>Signals — talk between scripts</h3>
-<p><code>/signal &lt;name&gt; [params]</code> fires every <code>on SIGNAL</code> handler whose
+<p><code>/signal [-n] &lt;name&gt; [params]</code> fires matching <code>on SIGNAL</code> handlers whose
 name matches (wildcards allowed). In the handler, <code>$signal</code> is the name and
-<code>$1-</code> are the parameters.</p>
+<code>$1-</code> are the parameters. Ordinary signals wait until the current script
+and its actions finish. <code>-n</code> runs handlers immediately, so their global
+variable changes are visible to the caller's next command. Immediate signals
+can nest up to 24 levels; each handler has its own local variables and event
+context. A handler's <code>/halt</code> or <code>/return</code> ends that handler.</p>
 <pre><code><span class="k">on</span> *:SIGNAL:refresh:{ <span class="k">/echo</span> -s refreshing (<span class="i">$1-</span>) }
 <span class="k">alias</span> go { <span class="k">/signal</span> refresh now }
 </code></pre>
@@ -780,10 +800,10 @@ name matches (wildcards allowed). In the handler, <code>$signal</code> is the na
       alias name may be written with or without its leading slash.</li>
   <li><code>/anick</code>, <code>/mnick</code>, <code>/fullname</code> set your alternate nick,
       main nick and full name (read back as <code>$anick</code>/<code>$mnick</code>/<code>$fullname</code>).</li>
-  <li><code>/autojoin -n|-s|-dN</code> — use in <code>on CONNECT</code> to join now, skip, or
-      delay the connect-time autojoin by N seconds. (Manage the channels themselves in the
+  <li><code>/autojoin -n|-s|-dN</code> — use in <code>on CONNECT</code> or profile perform commands to join now, skip, or
+      delay automatic joins by N seconds. Skip/delay replace earlier controls; <code>-n</code> queues profile joins at that command, once. Later controls cannot undo an already queued join. (Manage the channels themselves in the
       <strong>#</strong> auto-join dialog.)</li>
-  <li><code>/reload</code> recompiles all script files; <code>/unsetall</code> clears every variable.</li>
+  <li><code>/reload</code> recompiles all script files. <code>/unsetall</code> clears globals; <code>-l</code> clears the current routine's locals and <code>-gl</code> clears both. Called aliases have their own locals.</li>
 </ul>
 
 <h2 id="popups">Popup menus</h2>
@@ -830,10 +850,12 @@ Line and selection positions are one-based, matching mIRC.</p>
   <tr><td><code>/window @name</code></td><td>open a selectable listbox window</td></tr>
   <tr><td><code>/window -e @name</code></td><td>open a text window with an editbox; Enter fires <code>on INPUT</code> for <code>@name</code></td></tr>
   <tr><td><code>/window -p @name</code></td><td>open a detachable canvas-backed picture window</td></tr>
+  <tr><td><code>/window -ep @name</code></td><td>open a picture window with an editbox, including when detached</td></tr>
+  <tr><td><code>/window -a @name</code></td><td>activate an existing custom window while preserving its type and content</td></tr>
   <tr><td><code>/window -c @name</code></td><td>close the custom window</td></tr>
   <tr><td><code>/titlebar @name text</code></td><td>change the window's displayed title without changing its script name</td></tr>
   <tr><td><code>/aline</code> · <code>/iline</code> · <code>/rline</code> · <code>/dline</code> · <code>/clear</code></td><td>append, insert, replace, delete, or clear lines. Switches: <code>-n</code> skip the line if it is already there, <code>-i[N]</code> indent it (2 spaces by default), <code>-s</code> select it, <code>-a</code> select it while keeping the current selection. <code>-c</code> <code>-p</code> <code>-t</code> <code>-h</code> <code>-l</code> describe colour, wrapping and minimised-window behaviour jIRC does not model, and are accepted without effect</td></tr>
-  <tr><td><code>/echo [-switches] @name text</code></td><td>write output directly to a custom window; the line is also available through <code>$line()</code></td></tr>
+  <tr><td><code>/echo [-switches] @name text</code> · <code>/echo -a text</code></td><td>write output to a named or active custom window; the line is immediately available through <code>$line()</code>, including after opening or activating the window earlier in the same script</td></tr>
   <tr><td><code>/loadbuf [lines] [-r] @name file</code></td><td>append UTF-8 lines from <code>jIRC/scriptdata</code>; <code>-r</code> clears the window first, a number selects the last N lines, and <code>N-M</code> selects an inclusive range</td></tr>
   <tr><td><code>/savebuf [-a] [lines] @name file</code></td><td>save UTF-8 window lines under <code>jIRC/scriptdata</code>; <code>-a</code> appends and the optional line selection follows the same rules</td></tr>
   <tr><td><code>/sline [-a|-r] @name N</code></td><td>select, add, or remove a listbox row</td></tr>
@@ -925,6 +947,12 @@ controls use a responsive cross-platform layout rather than Windows dialog
 units.</p>
 
 <h3>Defining a dialog</h3>
+<p><code>$did(name,id)</code> reads the named open dialog even outside an event.
+Earlier <code>/did</code> mutations in the same routine are immediately visible.
+<code>/did -ra name id text</code> clears then adds text; <code>-c</code> selects
+a numbered list/combo item, and <code>-ck</code> keeps existing multiselections.
+Use <code>$did(name,id,0).sel</code> for the selection count and
+<code>$did(name,id,N).sel</code> for its Nth selected line.</p>
 <pre><code><span class="k">dialog</span> quicksay {
   <span class="k">title</span>  "Quick say"
   <span class="k">text</span>   info  "Type a message:"
@@ -1012,6 +1040,43 @@ are intentionally not exposed.</p>
 <code>$did</code> return the current dialog, event and control ID. Use
 <code>on *:DIALOG:name:init:0:</code> to populate controls before use.</div>
 
+<h2 id="http-downloads">HTTP downloads</h2>
+<p><code>$urlget(url,options,target,callback,[&amp;headers],[&amp;body])</code>
+starts a request and returns its ID, or <code>0</code> when its arguments or
+resource limits prevent registration. The callback alias receives the ID as
+<code>$1</code>, retains its source-file scope and connection, and runs after the
+caller's actions finish. Binary responses are available in the callback.</p>
+<table>
+  <tr><th>Option</th><th>Effect</th></tr>
+  <tr><td><code>h g p u a d</code></td><td>HEAD, GET, POST, PUT, PATCH or DELETE; choose one method</td></tr>
+  <tr><td><code>f b</code></td><td>write to a sandboxed script-data file or an <code>&amp;binvar</code>; choose one</td></tr>
+  <tr><td><code>t</code></td><td>keep a <code>.part</code> file until a successful download completes</td></tr>
+  <tr><td><code>r</code></td><td>resume partial data using HTTP Range; restart cleanly if the server ignores Range</td></tr>
+  <tr><td><code>k</code></td><td>prevent redirects; otherwise up to ten redirects are followed</td></tr>
+  <tr><td><code>i</code></td><td>explicitly ignore certificate errors for this request; certificate validation is enabled by default</td></tr>
+  <tr><td><code>e</code></td><td>save an HTTP error response body as well as its headers</td></tr>
+</table>
+<p><code>$urlget(ID,c)</code> cancels a running request, producing a failed
+completion; <code>$urlget(ID,r)</code> resumes a failed/cancelled request.
+<code>$urlget(0)</code> counts unfinished requests. Query an ID or active ordinal
+with <code>.url .redirect .method .type .target .alias .id .state .size .resume
+.rcvd .time .reply</code>. States are <code>connect</code>, <code>download</code>,
+<code>ok</code> and <code>fail</code>; times are milliseconds. Completed request
+metadata is retained for up to 64 records as memory permits, and remains available
+throughout its callback.</p>
+<p>Requests are limited to HTTP/HTTPS, eight unfinished requests, 32 MiB per
+request/response body, and 128 MiB of retained request/response data. Connection
+and total-request timeouts are ten and sixty seconds. File targets use the same
+script-data sandbox as <code>/write</code>.</p>
+<pre><code>alias fetch {
+  var %id = $urlget($1,gb,&amp;response,fetch.done)
+  echo -a Request: %id
+}
+alias fetch.done {
+  echo -a Result: $urlget($1).state Bytes: $urlget($1).rcvd
+  if ($urlget($1).state == ok) echo -a $bvar(&amp;response,1-300).text
+}</code></pre>
+
 <h2 id="timers">Timers</h2>
 <p><code>/timer[name] &lt;reps&gt; &lt;seconds&gt; &lt;command&gt;</code> runs a command repeatedly.
 <code>reps</code> of <code>0</code> means "keep repeating". Give a name to stop it later.</p>
@@ -1021,7 +1086,23 @@ are intentionally not exposed.</p>
   <tr><td><code>/timerNAME reps secs cmd</code></td><td>start a named timer (replaces same name)</td></tr>
   <tr><td><code>/timerNAME off</code></td><td>stop that timer</td></tr>
   <tr><td><code>/timers</code> · <code>/timers off</code></td><td>list all · stop all</td></tr>
+  <tr><td><code>/timerNAME -p</code></td><td>pause execution while the countdown continues; elapsed occurrences still consume finite repetitions</td></tr>
+  <tr><td><code>/timerNAME -P</code></td><td>pause execution and freeze the countdown, including <code>$timer(NAME).secs</code></td></tr>
+  <tr><td><code>/timerNAME -r</code></td><td>resume either pause mode; <code>-P</code> resumes with its saved remaining delay</td></tr>
+  <tr><td><code>/timerNAME -e</code></td><td>request one execution, even while paused, without resetting the countdown or clearing the pause</td></tr>
+  <tr><td><code>/timerNAME -c reps secs cmd</code></td><td>catch up missed occurrences using the existing schedule</td></tr>
+  <tr><td><code>/timerNAME -d reps secs cmd</code></td><td>order ready <code>-d</code> timers by deadline, then creation order for ties; each gets a turn before catch-up repeats</td></tr>
 </table>
+<p>New timers become eligible after the current alias or event and its resulting
+actions finish. A finite repetition is deducted before its command runs, so
+<code>$timer(NAME).reps</code> already reflects that execution. A timer cannot
+manually execute itself again from inside its own callback; requests from
+outside that callback remain queued.</p>
+<p>Long ready bursts yield to other work after at most 64 occurrences per timer
+loop; zero-interval timers yield after each occurrence. This provides scheduling
+opportunities, not a real-time guarantee: a long script or other application work
+can still delay timers. Timer commands retain their existing evaluation when
+scheduled and when fired; see <a href="#safety">deferred text handling</a>.</p>
 <pre><code><span class="c">; say "tick" 5 times, once per second</span>
 <span class="k">alias</span> ticker { <span class="k">/timer</span> 5 1 <span class="k">/msg</span> <span class="i">$chan</span> tick }
 <span class="c">; a named, repeating announcer you can stop with /stopann</span>
@@ -1032,7 +1113,7 @@ are intentionally not exposed.</p>
 <h2 id="commands">Command reference</h2>
 <table>
   <tr><th>Command</th><th>Description</th></tr>
-  <tr><td><code>/echo [-s] [#tgt] text</code></td><td>Print locally. <code>-s</code> = status window.</td></tr>
+  <tr><td><code>/echo [colour] [-as] [window] text</code></td><td>Print locally. Numeric colour (0–99) precedes switches. <code>-a</code> selects the active window; <code>-s</code> selects status; combined <code>-sa</code> prints once to each distinct destination. With these destination switches, a following window name is part of the text.</td></tr>
   <tr><td><code>/say text</code></td><td>Send text to the current channel/query.</td></tr>
   <tr><td><code>/msg &lt;tgt&gt; text</code></td><td>Send a message to a channel or user.</td></tr>
   <tr><td><code>/notice &lt;tgt&gt; text</code></td><td>Send a notice.</td></tr>
@@ -1078,21 +1159,28 @@ are intentionally not exposed.</p>
   <tr><td><code>/halt</code></td><td>Stop the script (in <code>on INPUT</code>, suppresses the line).</td></tr>
   <tr><td><code>/enable /disable /groups</code></td><td>Turn script groups on/off (wildcards); list them (see Script groups).</td></tr>
   <tr><td><code>/alias [-l] [file.mrc] &lt;name&gt; [cmds]</code></td><td>Define or remove a runtime alias; supports local aliases, a destination script, and names with an optional leading slash.</td></tr>
-  <tr><td><code>/signal &lt;name&gt; [params]</code></td><td>Fire matching <code>on SIGNAL</code> handlers (<code>$signal</code>, <code>$1-</code>).</td></tr>
+  <tr><td><code>/signal [-n] &lt;name&gt; [params]</code></td><td>Queue matching <code>on SIGNAL</code> handlers; <code>-n</code> runs them immediately (<code>$signal</code>, <code>$1-</code>).</td></tr>
   <tr><td><code>/anick /mnick /fullname</code></td><td>Set your alternate nick, main nick, full name.</td></tr>
-  <tr><td><code>/autojoin -n|-s|-dN</code></td><td>In <code>on CONNECT</code>: join now / skip / delay the autojoin.</td></tr>
-  <tr><td><code>/reload</code> · <code>/unsetall</code></td><td>Recompile all scripts · clear all variables.</td></tr>
-  <tr><td><code>/scon N cmd</code> · <code>/scid cid cmd</code></td><td>Run a command on another connection — by index / by <code>$cid</code> — in that connection's context.</td></tr>
+  <tr><td><code>/autojoin -n|-s|-dN</code></td><td>In <code>on CONNECT</code> or perform commands: join now / skip / delay automatic joins, including reconnect joins.</td></tr>
+  <tr><td><code>/reload</code> · <code>/unsetall [-gl]</code></td><td>Recompile all scripts · clear globals by default, current locals with <code>-l</code>, or both with <code>-gl</code>.</td></tr>
+  <tr><td><code>/scon [-rastN] [index] [cmd]</code> · <code>/scid [-rastN] [cid] [cmd]</code></td><td>Select a connection for the current routine, or run a scoped command there. <code>-r</code> restores the routine's original connection; <code>-a</code> broadcasts, <code>-tN</code> filters, and <code>-s</code> displays the CID.</td></tr>
   <tr><td><code>/ajinvite on|off</code> · <code>/donotdisturb on|off</code></td><td>Automatically join invited channels · toggle notification quiet mode.</td></tr>
   <tr><td><code>/flood on|off [messages seconds]</code></td><td>Configure the live outbound IRC rate limiter.</td></tr>
   <tr><td><code>/bindip address</code> · <code>/localinfo host ip</code></td><td>Set the local listener binding and script-visible local host/address.</td></tr>
   <tr><td><code>/creq ask|auto|ignore</code> · <code>/sreq ask|auto|ignore</code> · <code>/dccignore on|off</code></td><td>Control incoming DCC chat and file request handling.</td></tr>
-  <tr><td><code>/bigfloat</code> · <code>/dlevel</code> · <code>/debug</code> · <code>/emailaddr</code> · <code>/ebeeps</code></td><td>Set their corresponding compatibility state identifiers.</td></tr>
+  <tr><td><code>/bigfloat</code> · <code>/debug</code> · <code>/emailaddr</code> · <code>/ebeeps</code></td><td>Set their corresponding compatibility state identifiers.</td></tr>
+  <tr><td><code>/dlevel N</code></td><td>Set the default event access level for unlisted users, clamped to 1–999.</td></tr>
   <tr><td><code>/rlevel levels</code> · <code>/ulist [mask]</code> · <code>/uwho nick</code></td><td>Remove user-list levels globally, list matching entries, or request WHOIS.</td></tr>
   <tr><td><code>/beep</code> · <code>/vol N</code> · <code>/playctrl pause|resume|stop</code></td><td>Client alert, volume, and local playback control.</td></tr>
   <tr><td><code>/tray</code> · <code>/showmirc</code> · <code>/flash</code> · <code>/setlayer N</code></td><td>Minimize, restore/focus, request attention, or set application opacity (0–255).</td></tr>
   <tr><td><code>/perform</code> · <code>/proxy</code> · <code>/firewall</code></td><td>Open connection configuration for Perform and SOCKS settings.</td></tr>
 </table>
+<p>Combine connection switches in one token, for example
+<code>/scon -at1 echo -s $network</code>. Filter bits are <code>1</code> connected,
+<code>2</code> not connected, <code>4</code> connecting and <code>8</code> disconnected;
+combined bits match either state. Without a subcommand, selection lasts until
+the current alias or event returns. <code>/scon -r cmd</code> runs just that
+command on the routine's original connection.</p>
 <div class="note">Unrecognized <em>client-side</em> commands (unsupported display/launch
 commands such as <code>/run</code>) are quietly ignored
 so dropped-in scripts don't error. Anything else that isn't a built-in or one of your
@@ -1183,17 +1271,18 @@ people who've been seen/active. Handy for bans:</p>
   <tr><td><code>$chr(n)</code> · <code>$asc(c)</code></td><td>code &harr; character</td></tr>
   <tr><td><code>$+(a, b, c, …)</code></td><td>join the parts with no spaces, e.g. <code>$+(%a, -, %b)</code></td></tr>
   <tr><td><code>$strip(text)</code></td><td>remove colour/bold/etc. codes</td></tr>
-  <tr><td><code>$qt(text)</code></td><td>wrap in quotes if it has spaces</td></tr>
+  <tr><td><code>$qt(text)</code> · <code>$noqt(text)</code></td><td>add missing outer double quotes, or remove one outer quote at each edge; quotes inside the text remain unchanged</td></tr>
 </table>
 <h3>Numbers</h3>
 <table>
   <tr><th>Identifier</th><th>Returns</th></tr>
-  <tr><td><code>$calc(expr)</code></td><td>arithmetic, e.g. <code>$calc(2 + 3 * 4)</code></td></tr>
+  <tr><td><code>$calc(expr)</code></td><td>arithmetic, e.g. <code>$calc(2 + 3 * 4)</code>; null input and undefined numeric results return 0</td></tr>
   <tr><td><code>$rand(lo, hi)</code> · <code>$r(lo, hi)</code></td><td>random integer — or letter, e.g. <code>$rand(a, z)</code></td></tr>
   <tr><td><code>$base(n, from, to [,zeropad])</code></td><td>convert number bases, e.g. <code>$base(255, 10, 16)</code> → <code>FF</code></td></tr>
   <tr><td><code>$round(n, d)</code></td><td>round to d decimal places</td></tr>
+  <tr><td><code>$bytes(n[,bkmgtp3d])</code> · <code>.suf</code></td><td>format a byte count with automatic 1024-based units, or force bytes/kilobytes/megabytes/gigabytes/terabytes/petabytes. <code>3</code> selects automatic units and a three-digit presentation; <code>d</code> retains fractions; <code>.suf</code> adds the unit.</td></tr>
   <tr><td><code>$abs $int $ceil $floor</code></td><td><code>$abs(-3)</code> etc.</td></tr>
-  <tr><td><code>$min(a, b)</code> · <code>$max(a, b)</code></td><td>smaller / larger</td></tr>
+  <tr><td><code>$min(list)</code> · <code>$max(list)</code></td><td>minimum / maximum token from a space-delimited list or comma arguments; properties <code>.text</code>, <code>.textcs</code>, <code>.nick</code> select text or channel-prefix ordering</td></tr>
   <tr><td><code>$duration(secs)</code></td><td>e.g. <code>$duration(3661)</code> → <code>1hr1min1sec</code></td></tr>
   <tr><td><code>$iif(cond, a, b)</code></td><td>inline if: returns a if cond else b</td></tr>
 </table>
@@ -1254,7 +1343,7 @@ same as <code>$input(hi,eo)</code>.</p>
   <tr><td><code>$deltok(list, n, c)</code></td><td>delete token n (or range <code>n-m</code>)</td></tr>
   <tr><td><code>$remtok(list, tok, n, c)</code></td><td>remove the nth occurrence of tok</td></tr>
   <tr><td><code>$puttok(list, tok, n, c)</code></td><td>replace token n</td></tr>
-  <tr><td><code>$sorttok(list, c [,opts])</code></td><td>sort; opts <code>n</code>=numeric, <code>r</code>=reverse</td></tr>
+  <tr><td><code>$sorttok(list, c [,opts])</code></td><td>sort; <code>n</code>=numeric (including leading numbers in labelled tokens), <code>a</code>=text then numbers, <code>c</code>=channel prefixes, <code>r</code>=reverse direction. Equal tokens retain their original order.</td></tr>
   <tr><td><code>$wildtok(list, wild, n, c)</code></td><td>nth token matching a wildcard (n=0 → count)</td></tr>
   <tr><td><code>$matchtok(list, sub, n, c)</code></td><td>nth token containing sub</td></tr>
 </table>
@@ -1285,6 +1374,9 @@ same as <code>$input(hi,eo)</code>.</p>
 </code></pre>
 <div class="note">Uses PCRE2, including named captures, lookaround, backreferences,
 Unicode options, global matching, and mIRC's named regex contexts.</div>
+<p>The <code>S</code> modifier strips formatting for matching and substitution.
+If <code>$regsub</code> or <code>$regsubex</code> finds no match, its result keeps
+the original formatting. A successful replacement still uses the stripped text.</p>
 
 <h2 id="files">Files <span class="pill">sandboxed</span></h2>
 <p>Scripts can read and write small text files. For safety, file access is
@@ -1339,13 +1431,30 @@ starts with <em>Hello</em>. Two things worth knowing:</p>
 a new line anyway while the <code>-s</code>/<code>-w</code>/<code>-r</code> forms carry on at the end
 of it. <code>-m1</code> always starts a new line, <code>-m2</code> never does.</p>
 
+<h3>Open file handles</h3>
+<table>
+  <tr><th>Command / Identifier</th><th>Effect</th></tr>
+  <tr><td><code>/fopen [-nox] name file</code> · <code>/fclose name|wildcard</code></td><td>open a named file handle, or close matching handles; <code>-n</code> creates a missing file, <code>-o</code> creates or overwrites it, and <code>-x</code> excludes other writers while allowing readers</td></tr>
+  <tr><td><code>/fseek name position</code></td><td>move the read/write position to a byte offset</td></tr>
+  <tr><td><code>$fopen(name|N)</code> · <code>.pos</code> · <code>.eof</code> · <code>.err</code></td><td>inspect a handle; <code>N</code> selects the same numbered handle used by file-read identifiers; <code>0</code> returns the count</td></tr>
+  <tr><td><code>$fread(name|N)</code></td><td>read the next text line without its line break</td></tr>
+  <tr><td><code>$fread(name|N,M,&amp;buffer)</code></td><td>read up to <code>M</code> raw bytes into the binary variable, replacing its contents, and return the count read. Each request is limited to 32 MiB.</td></tr>
+  <tr><td><code>$feof</code> · <code>$ferr</code></td><td>results of the last file access. An empty read signals EOF; failed reads leave the position and prior binary data intact.</td></tr>
+</table>
+
+<p>File locks last until the final owning handle closes. A read-only handle
+opened while <code>-x</code> is held can read, but writes set <code>$ferr</code>;
+close and reopen it to obtain write access after release. Windows enforces writer
+exclusion through file sharing. On Unix, locks are advisory: other applications
+and path-based APIs must participate in locking. Failed locked overwrites leave
+the file contents intact.</p>
 <h2 id="hash">Hash tables</h2>
 <p>Key/value storage. Tables live for the session, but can be saved to / loaded
 from files (sandboxed, like <a href="#files">file I/O</a>).</p>
 <table>
   <tr><th>Command / Identifier</th><th>Effect</th></tr>
-  <tr><td><code>/hmake table [N]</code> · <code>/hfree [-w] table</code></td><td>create / delete a table (<code>-w</code> = wildcard name)</td></tr>
-  <tr><td><code>/hadd [-m] table item value</code></td><td>store a value (<code>-m</code> creates the table if needed)</td></tr>
+  <tr><td><code>/hmake [-smN] table [N]</code> · <code>/hfree [-sw] table</code></td><td>create / delete a table; <code>-s</code> reports the result, <code>-w</code> matches table names. Declared slot counts retain 1 or round upward to an odd prime (default 100 becomes 101).</td></tr>
+  <tr><td><code>/hadd [-ms] table item value</code></td><td>store a value (<code>-m</code> creates the table if needed; <code>-s</code> reports the assignment). Hash deletion/increment/decrement commands also support <code>-s</code>.</td></tr>
   <tr><td><code>/hdel [-w] table item</code></td><td>remove an item (<code>-w</code> = wildcard item)</td></tr>
   <tr><td><code>/hinc /hdec [-m] table item [n]</code></td><td>add / subtract from a numeric item</td></tr>
   <tr><td><code>/hclear table</code></td><td>remove all items, keep the table</td></tr>
@@ -1515,36 +1624,40 @@ is its IP address, and <code>$filename</code> is populated for Send. Use
 </code></pre>
 
 <h2 id="safety">Safety: other people's text stays text</h2>
-<p>This is one place jIRC deliberately behaves differently from mIRC — and it's
-in your favour. In mIRC, a few things get <strong>evaluated twice</strong>, which
-means a stranger's message (or a line in a file) can quietly turn into
-<em>commands your client then runs</em>. That's the source of many "my bot got
-hijacked" stories. jIRC evaluates once and treats data as data, so those tricks
-simply don't work here.</p>
+<p>jIRC connection subcommands evaluate once on their destination, and file reads
+return plain text. Timers retain deferred evaluation: their command is evaluated
+when scheduled and again when fired. Text inserted into a timer command can
+therefore become command syntax unless it is protected with <code>$unsafe</code>.</p>
 <div class="note">
 <p>Say you run a reminder bot:</p>
 <pre><code><span class="k">on</span> *:TEXT:!remind *:#:{ <span class="k">/timer</span> 1 <span class="i">$2</span> notice <span class="i">$nick</span> <span class="i">$3-</span> }</code></pre>
 <p>Now someone types:</p>
 <pre><code>!remind 5 hi there | quit hacked!</code></pre>
-<p>In <strong>mIRC</strong>, when the timer fires 5 seconds later it re-reads its
-command, sees the <code>|</code> as a command separator, and actually runs
-<code>/quit hacked!</code> — the attacker just quit your client. In
-<strong>jIRC</strong>, the reminder text is treated as plain text, so your bot
-just says "<code>hi there | quit hacked!</code>" and nothing bad happens.</p>
+<p>Both mIRC and jIRC timers parse the stored command again when it fires, so
+the inserted <code>|</code> can become a command separator. Protect the reminder
+text when scheduling it:</p>
+<pre><code><span class="k">on</span> *:TEXT:!remind *:#:{ <span class="k">/timer</span> 1 <span class="i">$2</span> notice <span class="i">$nick</span> <span class="i">$unsafe($3-)</span> }</code></pre>
+<p>Use <code>$!identifier</code> when an identifier should be looked up when the
+timer fires rather than when it is created.</p>
 </div>
-<p>The same protection applies elsewhere:</p>
+<p>Evaluation rules differ by operation:</p>
 <ul>
   <li><strong>Reading files</strong> (<code>$read</code>, <code>$readini</code>):
     mIRC treats each line of a file as code; jIRC returns the line as plain text.</li>
   <li><strong>Maths</strong> (<code>$calc</code>): in mIRC <code>$calc(%password)</code>
     can leak a variable's value; in jIRC <code>$calc</code> only does maths on what
     you actually give it.</li>
-  <li><strong>Running commands on other connections / after a delay</strong>
-    (<code>/timer</code>, <code>/scon</code>, <code>/scid</code>): the command text is
-    kept as-is instead of being re-run through the interpreter.</li>
+  <li><strong>Running commands on other connections</strong>
+    (<code>/scon</code>, <code>/scid</code>): the subcommand is evaluated once on its
+    destination. Text returned by parameters or identifiers stays text.</li>
+  <li><strong>Timers</strong> evaluate a command when scheduled and when it fires.
+    Use <code>$unsafe(text)</code> to carry untrusted text through that deferred
+    parse, or <code>$!identifier</code> to delay an identifier lookup.</li>
 </ul>
-<p>The upshot: you don't need mIRC's <code>$safe</code>/<code>$unsafe</code>
-work-arounds in jIRC — text from other people, or from files, stays text.</p>
+<p>Connection subcommands preserve jIRC's single-evaluation behaviour. For example,
+<code>/scon 2 msg #room $1-</code> sends the parameters as text. This intentionally
+differs from mIRC's two-pass expansion: use plain <code>$network</code> or
+<code>$cid</code> to read the destination in a jIRC subcommand.</p>
 
 <h2 id="limits">Compatibility limits</h2>
 

@@ -48,6 +48,7 @@ pub fn run() {
             let _ = storage::dcc_dir(app.handle());
             let _ = storage::plugins_dir(app.handle());
             let engine = app.state::<ScriptEngine>();
+            engine.set_connection_states(app.state::<irc::state::StateStore>().inner().clone());
             // Install the real socket backend so /socklisten/$sock(...) work.
             engine.set_sockets(std::sync::Arc::new(script::socket::EngineSockets::new(
                 app.handle().clone(),
@@ -176,6 +177,7 @@ pub fn run() {
             script::script_set_client_compat_state,
             script::script_window_open,
             script::script_window_close,
+            script::script_window_rename,
             script::script_popups,
             script::script_run_popup,
             script::script_window_mouse,

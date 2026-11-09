@@ -51,6 +51,14 @@ pub enum UiEvent {
     Connected { server_id: String },
     /// Registration completed (RPL_WELCOME received); `nick` is confirmed.
     Registered { server_id: String, nick: String },
+    /// Initial MOTD completed and CONNECT/perform actions have been applied.
+    /// Automatic reconnect joins use the same script controls as profile joins.
+    ConnectReady {
+        server_id: String,
+        autojoin_skip: bool,
+        autojoin_delay_secs: u32,
+        autojoin_channels: Vec<String>,
+    },
     /// Connection closed.
     Disconnected { server_id: String, reason: String },
     /// We were just granted channel ownership (`+q` on our own nick) — the client
@@ -343,6 +351,8 @@ pub enum UiEvent {
         name: String,
         kind: String,
         title: String,
+        editbox: bool,
+        activate: bool,
     },
     /// Close a custom window.
     WindowClose { server_id: String, name: String },
@@ -419,6 +429,22 @@ pub enum UiEvent {
     DccLocalHost { server_id: String, host: String },
 }
 
+/// Delivery metadata for an event whose state must reach the frontend even
+/// when a script has suppressed its default display. Ordinary events keep
+/// their existing wire shape by omitting the false flag.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiEventDelivery {
+    #[serde(flatten)]
+    pub event: UiEvent,
+    #[serde(skip_serializing_if = "is_false")]
+    pub suppress_default: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,6 +459,23 @@ mod tests {
         let json = serde_json::to_string(&ev).unwrap();
         assert!(json.contains("\"type\":\"registered\""), "{json}");
         assert!(json.contains("\"serverId\":\"s1\""), "{json}");
+
+        let ready = UiEvent::ConnectReady {
+            server_id: "s1".into(),
+            autojoin_skip: true,
+            autojoin_delay_secs: 5,
+            autojoin_channels: vec!["#room key".into()],
+        };
+        assert_eq!(
+            serde_json::to_value(ready).unwrap(),
+            serde_json::json!({
+                "type": "connectReady",
+                "serverId": "s1",
+                "autojoinSkip": true,
+                "autojoinDelaySecs": 5,
+                "autojoinChannels": ["#room key"],
+            })
+        );
 
         let topic = UiEvent::Topic {
             server_id: "s1".into(),
@@ -475,5 +518,34 @@ mod tests {
         assert!(json.contains("\"prefixModes\":\"ov\""), "{json}");
         assert!(json.contains("\"chanModes\":\"beI,k,l,imnst\""), "{json}");
         assert!(json.contains("\"modesPerLine\":4"), "{json}");
+    }
+
+    #[test]
+    fn delivery_metadata_preserves_event_shape_and_marks_only_suppressed_display() {
+        let event = UiEvent::Registered {
+            server_id: "s1".into(),
+            nick: "confirmed".into(),
+        };
+        let normal = UiEventDelivery {
+            event: event.clone(),
+            suppress_default: false,
+        };
+        assert_eq!(
+            serde_json::to_value(normal).unwrap(),
+            serde_json::to_value(&event).unwrap(),
+        );
+        let suppressed = UiEventDelivery {
+            event,
+            suppress_default: true,
+        };
+        assert_eq!(
+            serde_json::to_value(suppressed).unwrap(),
+            serde_json::json!({
+                "type": "registered",
+                "serverId": "s1",
+                "nick": "confirmed",
+                "suppressDefault": true,
+            }),
+        );
     }
 }

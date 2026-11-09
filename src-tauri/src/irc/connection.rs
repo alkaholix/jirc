@@ -9,12 +9,12 @@
 use irc_proto::{CapSubCommand, Command, Message, Response};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::config::ServerProfile;
 use crate::irc::auth::{self, AuthState};
-use crate::irc::event::{Direction, MessageKind, UiEvent, ACTIVE_TARGET, IRC_EVENT};
+use crate::irc::event::{Direction, MessageKind, UiEvent, UiEventDelivery, ACTIVE_TARGET, IRC_EVENT};
 use crate::irc::state::{SessionState, StateSnapshot};
 
 fn unix_now() -> u64 {
@@ -63,9 +63,187 @@ impl FloodLimiter {
     }
 }
 
+/// Profile joins belong to one socket attempt. Both their timer and queued
+/// controls become unusable when that attempt ends, even if its server id is
+/// reused by the reconnect supervisor.
+struct ProfileAutojoin {
+    attempt: String,
+    pending: Option<(tokio::time::Instant, Vec<String>)>,
+}
+
+impl Default for ProfileAutojoin {
+    fn default() -> Self {
+        Self {
+            attempt: uuid::Uuid::new_v4().to_string(),
+            pending: None,
+        }
+    }
+}
+
+impl ProfileAutojoin {
+    fn encode(&self, channels: Vec<String>) -> Vec<String> {
+        channels
+            .into_iter()
+            .map(|channel| {
+                format!(
+                    "\0AUTOJOIN {}",
+                    serde_json::to_string(&(&self.attempt, channel)).unwrap()
+                )
+            })
+            .collect()
+    }
+
+    fn schedule(&mut self, channels: Vec<String>, skip: bool, delay_secs: u32) -> Vec<String> {
+        self.pending = None;
+        if skip || channels.is_empty() {
+            return Vec::new();
+        }
+        if delay_secs == 0 {
+            return self.encode(channels);
+        }
+        self.pending = Some((
+            tokio::time::Instant::now() + Duration::from_secs(delay_secs as u64),
+            channels,
+        ));
+        Vec::new()
+    }
+
+    fn take_due(&mut self, now: tokio::time::Instant) -> Vec<String> {
+        if !self
+            .pending
+            .as_ref()
+            .is_some_and(|(deadline, _)| *deadline <= now)
+        {
+            return Vec::new();
+        }
+        let (_, channels) = self.pending.take().unwrap();
+        self.encode(channels)
+    }
+
+    /// None is an ordinary outgoing line. An error consumes a stale/malformed
+    /// internal join without sending any bytes to this socket.
+    fn outgoing_line(&self, line: &str) -> Result<Option<String>, ()> {
+        let Some(encoded) = line.strip_prefix("\0AUTOJOIN ") else {
+            return Ok(None);
+        };
+        let (attempt, channel): (String, String) = serde_json::from_str(encoded).map_err(|_| ())?;
+        if attempt != self.attempt {
+            return Err(());
+        }
+        Ok(Some(format!("JOIN {channel}")))
+    }
+}
+
+async fn wait_profile_autojoin(deadline: Option<tokio::time::Instant>) {
+    if let Some(deadline) = deadline {
+        tokio::time::sleep_until(deadline).await;
+    } else {
+        std::future::pending::<()>().await;
+    }
+}
+
+fn profile_autojoin_channels(state: &SessionState, channels: &[String]) -> Vec<String> {
+    let mut unique = Vec::<String>::new();
+    for entry in channels {
+        let entry = entry.trim();
+        let Some(channel) = entry.split_whitespace().next() else {
+            continue;
+        };
+        if !unique.iter().any(|known| {
+            state
+                .isupport
+                .names_equal(known.split_whitespace().next().unwrap_or(""), channel)
+        }) {
+            unique.push(entry.to_string());
+        }
+    }
+    unique
+}
+
+/// CONNECT and perform share one sequence of controls. Skip/delay replace each
+/// other until join-now consumes the profile list at its position in that
+/// sequence; later controls cannot undo or repeat those already queued joins.
+fn prepare_autojoin_actions(
+    actions: &mut Vec<crate::script::eval::Action>,
+    autojoin: &ProfileAutojoin,
+    channels: &[String],
+) -> (bool, u32, bool) {
+    use crate::script::eval::Action;
+    let mut control = (false, 0);
+    let mut joined_now = false;
+    let mut prepared = Vec::with_capacity(actions.len());
+    for action in std::mem::take(actions) {
+        match action {
+            Action::Autojoin { skip, delay_secs } if !joined_now => {
+                if !skip && delay_secs == 0 {
+                    prepared.extend(
+                        autojoin
+                            .encode(channels.to_vec())
+                            .into_iter()
+                            .map(Action::Send),
+                    );
+                    joined_now = true;
+                    control = (false, 0);
+                } else {
+                    control = (skip, delay_secs);
+                }
+            }
+            Action::Autojoin { .. } => {}
+            other => prepared.push(other),
+        }
+    }
+    *actions = prepared;
+    (control.0, control.1, joined_now)
+}
+
 fn emit(app: &AppHandle, ev: UiEvent) {
     if let Err(e) = app.emit(IRC_EVENT, ev) {
         tracing::warn!("failed to emit irc event: {e}");
+    }
+}
+
+/// Suppressing default text must not suppress the state consumed by the UI.
+/// Pure display events retain their existing behavior and are not delivered.
+fn frontend_delivery(event: UiEvent, suppress_default: bool) -> Option<UiEventDelivery> {
+    let required = matches!(
+        &event,
+        UiEvent::Registered { .. }
+            | UiEvent::Disconnected { .. }
+            | UiEvent::Join { .. }
+            | UiEvent::Part { .. }
+            | UiEvent::Quit { .. }
+            | UiEvent::Kick { .. }
+            | UiEvent::NickChange { .. }
+            | UiEvent::Names { .. }
+            | UiEvent::Topic { .. }
+            | UiEvent::Mode { .. }
+            | UiEvent::Isupport { .. }
+            | UiEvent::SelfAway { .. }
+            | UiEvent::OwnerGranted { .. }
+            | UiEvent::OwnerRevoked { .. }
+            | UiEvent::ListEntry { .. }
+            | UiEvent::ListEnd { .. }
+            | UiEvent::DccLocalHost { .. }
+            // The mode/list and notify routers consume these numerics as state.
+            | UiEvent::Numeric {
+                code: 303 | 324 | 346 | 348 | 367 | 728 | 730 | 731 | 734,
+                ..
+            }
+    );
+    if suppress_default && !required {
+        return None;
+    }
+    Some(UiEventDelivery {
+        event,
+        suppress_default,
+    })
+}
+
+fn emit_script_event(app: &AppHandle, event: UiEvent, suppress_default: bool) {
+    if let Some(delivery) = frontend_delivery(event, suppress_default) {
+        if let Err(error) = app.emit(IRC_EVENT, delivery) {
+            tracing::warn!("failed to emit irc event: {error}");
+        }
     }
 }
 
@@ -86,7 +264,7 @@ pub struct Effects {
     pub channel_state_changed: bool,
     /// Set when address/WHOX/mark state changes without a membership event.
     pub ial_changed: bool,
-    /// Channels to auto-join once `on CONNECT` has run (populated at RPL_WELCOME).
+    /// Channels to auto-join once `on CONNECT` has run (initial MOTD completion).
     /// The connection task performs the JOINs, honoring `/autojoin` (`-s` skip,
     /// `-dN` delay) — so a script can control them from within `on CONNECT`.
     pub autojoin: Vec<String>,
@@ -270,6 +448,66 @@ fn valid_utf8_char(b: &[u8]) -> Option<usize> {
     (1..=max).find(|&n| std::str::from_utf8(&b[..n]).is_ok())
 }
 
+/// An IRC line is bounded: 512 bytes classically, plus up to 8191 bytes of
+/// IRCv3 tags. Nothing legitimate comes close to this ceiling.
+const MAX_LINE_BYTES: usize = 32 * 1024;
+
+/// Reads one newline-terminated line, refusing to buffer more than
+/// [`MAX_LINE_BYTES`] for it. Plain `read_until` has no ceiling and does not
+/// return until it finds the delimiter, so a server that simply never sends a
+/// newline grows the buffer until the process is killed. Cancel-safe the same
+/// way `read_until` is: bytes already taken from the reader stay in `buf`.
+pub(crate) async fn read_capped_line<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+    buf: &mut Vec<u8>,
+) -> std::io::Result<usize> {
+    let start = buf.len();
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            return Ok(buf.len() - start);
+        }
+        let (chunk, complete) = match available.iter().position(|byte| *byte == b'\n') {
+            Some(index) => (&available[..=index], true),
+            None => (available, false),
+        };
+        let taken = chunk.len();
+        buf.extend_from_slice(chunk);
+        reader.consume(taken);
+        if complete {
+            return Ok(buf.len() - start);
+        }
+        if buf.len() > MAX_LINE_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "line exceeded 32 KB with no line ending",
+            ));
+        }
+    }
+}
+
+/// The exact bytes jIRC puts on the wire for one line it frames itself.
+///
+/// Trailing CR/LF go because the caller appends the real terminator. An
+/// *interior* CR, LF or NUL becomes a space, because it would otherwise split
+/// one intended command into two. Anything jIRC echoes back is the way in: a
+/// CTCP PING payload carrying a CR comes straight back inside our NOTICE, so a
+/// hostile server -- or a MITM on a plaintext link, where a bare CR survives a
+/// read loop that only splits on LF -- could pick the commands we send.
+fn framed_line(bytes: &[u8]) -> Vec<u8> {
+    let mut end = bytes.len();
+    while end > 0 && matches!(bytes[end - 1], b'\r' | b'\n') {
+        end -= 1;
+    }
+    bytes[..end]
+        .iter()
+        .map(|byte| match byte {
+            b'\r' | b'\n' | 0 => b' ',
+            other => *other,
+        })
+        .collect()
+}
+
 /// Byte-exact form used by `/parseline -b` and `-u0`.
 async fn write_bytes_line<W: AsyncWrite + Unpin>(
     w: &mut W,
@@ -278,13 +516,14 @@ async fn write_bytes_line<W: AsyncWrite + Unpin>(
     bytes: &[u8],
     append_crlf: bool,
 ) {
-    let mut end = bytes.len();
-    if append_crlf {
-        while end > 0 && matches!(bytes[end - 1], b'\r' | b'\n') {
-            end -= 1;
-        }
-    }
-    let bytes = &bytes[..end];
+    // A `/parseline -b`/`-u0` write owns its own framing, so it is sent as-is.
+    let framed;
+    let bytes = if append_crlf {
+        framed = framed_line(bytes);
+        framed.as_slice()
+    } else {
+        bytes
+    };
     if w.write_all(bytes).await.is_err() || (append_crlf && w.write_all(b"\r\n").await.is_err()) {
         return;
     }
@@ -324,6 +563,7 @@ async fn write_parsed_line<W: AsyncWrite + Unpin>(
         if let Some(engine) = app.try_state::<crate::script::ScriptEngine>() {
             let display = decode_irc_line(bytes);
             let ctx = crate::script::RunCtx {
+                server_id,
                 my_nick: &state.nick,
                 network: &profile.name,
                 server: &profile.host,
@@ -363,6 +603,7 @@ async fn handle_incoming_line<W: AsyncWrite + Unpin>(
     names_accum: &mut HashMap<String, Vec<String>>,
     whois_accum: &mut HashMap<String, Vec<String>>,
     auth: &mut AuthState,
+    autojoin: &mut ProfileAutojoin,
     raw_bytes: &[u8],
     trigger_parseline: bool,
     parse_utf: bool,
@@ -378,6 +619,7 @@ async fn handle_incoming_line<W: AsyncWrite + Unpin>(
     if trigger_parseline {
         if let Some(engine) = app.try_state::<crate::script::ScriptEngine>() {
             let ctx = crate::script::RunCtx {
+                server_id,
                 my_nick: &state.nick,
                 network: &profile.name,
                 server: &profile.host,
@@ -472,23 +714,11 @@ async fn handle_incoming_line<W: AsyncWrite + Unpin>(
         Some(line),
         Some(&final_bytes),
     );
-    let mut autojoin_skip = false;
-    let mut autojoin_delay = 0u32;
-    script_actions.retain(|action| {
-        if let crate::script::eval::Action::Autojoin { skip, delay_secs } = action {
-            autojoin_skip |= *skip;
-            if *delay_secs > 0 {
-                autojoin_delay = *delay_secs;
-            }
-            false
-        } else {
-            true
-        }
-    });
     if !effects.perform.is_empty() {
         if let Some(engine) = app.try_state::<crate::script::ScriptEngine>() {
             let snapshot = state.snapshot();
             let run_ctx = crate::script::RunCtx {
+                server_id,
                 my_nick: &state.nick,
                 network: &profile.name,
                 server: &profile.host,
@@ -498,6 +728,9 @@ async fn handle_incoming_line<W: AsyncWrite + Unpin>(
             script_actions.extend(run_perform_commands(&engine, &run_ctx, &effects.perform));
         }
     }
+    let autojoin_channels = profile_autojoin_channels(state, &effects.autojoin);
+    let (autojoin_skip, autojoin_delay, joined_now) =
+        prepare_autojoin_actions(&mut script_actions, autojoin, &autojoin_channels);
 
     for out in effects.outgoing {
         write_parsed_line(
@@ -513,9 +746,19 @@ async fn handle_incoming_line<W: AsyncWrite + Unpin>(
         )
         .await;
     }
+    let mut ready_server_id = None;
     for (index, event) in effects.events.into_iter().enumerate() {
-        if !parse_em && !suppressed_events.get(index).copied().unwrap_or(false) {
-            emit(app, event);
+        if let UiEvent::ConnectReady { server_id, .. } = event {
+            // This lifecycle signal must reach the UI even when display output
+            // is halted. Reconnect joins may only start after script/perform
+            // actions and profile joins have been queued below.
+            ready_server_id = Some(server_id);
+        } else if !parse_em {
+            emit_script_event(
+                app,
+                event,
+                suppressed_events.get(index).copied().unwrap_or(false),
+            );
         }
     }
     if !script_actions.is_empty() {
@@ -529,26 +772,26 @@ async fn handle_incoming_line<W: AsyncWrite + Unpin>(
         );
     }
 
-    if !effects.autojoin.is_empty() && !autojoin_skip {
-        if autojoin_delay > 0 {
-            let app2 = app.clone();
-            let sid = server_id.to_string();
-            let channels = effects.autojoin;
-            tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_secs(autojoin_delay as u64)).await;
-                if let Some(manager) = app2.try_state::<crate::irc::ConnectionManager>() {
-                    for channel in channels {
-                        let _ = manager.send(&sid, format!("JOIN {channel}"));
-                    }
-                }
-            });
+    if let Some(server_id) = ready_server_id {
+        let queued = if joined_now {
+            Vec::new()
         } else {
-            if let Some(manager) = app.try_state::<crate::irc::ConnectionManager>() {
-                for channel in effects.autojoin {
-                    let _ = manager.send(server_id, format!("JOIN {channel}"));
-                }
+            autojoin.schedule(autojoin_channels.clone(), autojoin_skip, autojoin_delay)
+        };
+        if let Some(manager) = app.try_state::<crate::irc::ConnectionManager>() {
+            for line in queued {
+                let _ = manager.send(&server_id, line);
             }
         }
+        emit(
+            app,
+            UiEvent::ConnectReady {
+                server_id,
+                autojoin_skip,
+                autojoin_delay_secs: autojoin_delay,
+                autojoin_channels,
+            },
+        );
     }
 }
 
@@ -628,6 +871,11 @@ async fn run_once(
     }
     // The status connection exists before registration lines are sent, so
     // PARSELINE handlers on CAP/NICK/USER already see this connection's cid.
+    // Publish its connecting state before the CID becomes visible to scripts
+    // on other connections (notably /scon -at4 during registration).
+    if let Some(store) = app.try_state::<crate::irc::state::StateStore>() {
+        store.set(server_id, state.snapshot());
+    }
     if let Some(engine) = app.try_state::<crate::script::ScriptEngine>() {
         engine.assign_cid(server_id);
         engine.set_connection_context(server_id, &profile.name, &profile.host);
@@ -778,10 +1026,22 @@ async fn run_once(
     let mut whois_accum: HashMap<String, Vec<String>> = HashMap::new();
     let mut auth = AuthState::default();
     let mut flood = FloodLimiter::default();
+    let mut autojoin = ProfileAutojoin::default();
 
     let reason = loop {
+        let autojoin_deadline = autojoin.pending.as_ref().map(|(deadline, _)| *deadline);
         tokio::select! {
-            read = reader.read_until(b'\n', &mut buf) => match read {
+            _ = wait_profile_autojoin(autojoin_deadline) => {
+                // Join controls enter the ordinary FIFO after CONNECT/perform
+                // output; attempt tags also cover a drop after this enqueue.
+                let queued = autojoin.take_due(tokio::time::Instant::now());
+                if let Some(manager) = app.try_state::<crate::irc::ConnectionManager>() {
+                    for line in queued {
+                        let _ = manager.send(server_id, line);
+                    }
+                }
+            },
+            read = read_capped_line(&mut reader, &mut buf) => match read {
                 Ok(0) => break ("connection closed by server".to_string(), Outcome::Dropped),
                 Ok(_) => {
                     // Partial line (EOF mid-line) — keep buffering; processed on next Ok(0).
@@ -798,6 +1058,7 @@ async fn run_once(
                         &mut names_accum,
                         &mut whois_accum,
                         &mut auth,
+                        &mut autojoin,
                         &line_bytes,
                         true,
                         true,
@@ -833,6 +1094,11 @@ async fn run_once(
             },
             cmd = outgoing_rx.recv() => match cmd {
                 Some(line) => {
+                    let line = match autojoin.outgoing_line(&line) {
+                        Ok(Some(join)) => join,
+                        Ok(None) => line,
+                        Err(()) => continue,
+                    };
                     if let Some(crate::script::eval::Action::ParseLine {
                         direction,
                         bytes,
@@ -852,6 +1118,7 @@ async fn run_once(
                                 &mut names_accum,
                                 &mut whois_accum,
                                 &mut auth,
+                                &mut autojoin,
                                 &bytes,
                                 trigger,
                                 utf8,
@@ -957,9 +1224,7 @@ async fn run_once(
             actions,
         );
     }
-    if !suppressed.first().copied().unwrap_or(false) {
-        emit(app, disc);
-    }
+    emit_script_event(app, disc, suppressed.first().copied().unwrap_or(false));
     if let Some(store) = app.try_state::<crate::irc::state::StateStore>() {
         store.remove(server_id);
     }
@@ -982,6 +1247,10 @@ fn is_state_event(ev: &UiEvent) -> bool {
             | UiEvent::NickChange { .. }
             | UiEvent::Mode { .. }
             | UiEvent::Registered { .. }
+            | UiEvent::ConnectReady { .. }
+            | UiEvent::Topic { .. }
+            | UiEvent::Isupport { .. }
+            | UiEvent::SelfAway { .. }
     )
 }
 
@@ -1017,6 +1286,7 @@ fn fire_connectfail(app: &AppHandle, server_id: &str, profile: &ServerProfile, r
         ..Default::default()
     };
     let ctx = crate::script::RunCtx {
+        server_id,
         my_nick: &state.nick,
         network: &profile.name,
         server: &profile.host,
@@ -1053,12 +1323,31 @@ fn run_scripts(
     };
     let state_snapshot = script_state.cloned().unwrap_or_else(|| state.snapshot());
     let ctx = crate::script::RunCtx {
+        server_id: &state.server_id,
         my_nick: &state.nick,
         network: &profile.name,
         server: &profile.host,
         data_dir: crate::script::script_data_dir(app),
         state: std::sync::Arc::new(state_snapshot),
     };
+    dispatch_message_scripts(
+        &engine,
+        &ctx,
+        events,
+        script_events,
+        raw_line,
+        raw_bytes,
+    )
+}
+
+fn dispatch_message_scripts(
+    engine: &crate::script::ScriptEngine,
+    ctx: &crate::script::RunCtx<'_>,
+    events: &[UiEvent],
+    script_events: &[UiEvent],
+    raw_line: Option<&str>,
+    raw_bytes: Option<&[u8]>,
+) -> (Vec<crate::script::eval::Action>, Vec<bool>) {
     let mut actions = Vec::new();
     let raw_context = raw_line.map(|line| {
         crate::script::raw_event_context(line, raw_bytes.unwrap_or_else(|| line.as_bytes()))
@@ -1071,8 +1360,8 @@ fn run_scripts(
             if let Some(kind) = named_event_kind(&command) {
                 let text = params.last().cloned().unwrap_or_default();
                 actions.extend(crate::script::dispatch_named_with_context(
-                    &engine,
-                    &ctx,
+                    engine,
+                    ctx,
                     kind,
                     &source_nick(line),
                     &text,
@@ -1080,8 +1369,8 @@ fn run_scripts(
                 ));
             }
             let (more, halted) = crate::script::dispatch_raw_with_context(
-                &engine,
-                &ctx,
+                engine,
+                ctx,
                 &command,
                 params,
                 raw_context.as_ref(),
@@ -1093,13 +1382,13 @@ fn run_scripts(
     let mut suppressed = Vec::with_capacity(events.len());
     for ev in events {
         let (more, halted) =
-            crate::script::drive_event_halt_raw(&engine, &ctx, ev, raw_context.as_ref());
+            crate::script::drive_event_halt_raw(engine, ctx, ev, raw_context.as_ref());
         actions.extend(more);
         suppressed.push(halted || raw_halted);
     }
     for ev in script_events {
         actions
-            .extend(crate::script::drive_event_halt_raw(&engine, &ctx, ev, raw_context.as_ref()).0);
+            .extend(crate::script::drive_event_halt_raw(engine, ctx, ev, raw_context.as_ref()).0);
     }
     (actions, suppressed)
 }
@@ -2200,10 +2489,26 @@ fn handle_numeric(ctx: &mut Context, fx: &mut Effects, resp: Response, args: &[S
             if ctx.profile.ircx {
                 fx.outgoing.push("IRCX".to_string());
             }
-            // Defer the autojoin until after `on CONNECT` runs, so a script can
-            // skip/delay it with `/autojoin`. The connection task does the JOINs.
-            fx.autojoin = ctx.profile.autojoin.clone();
-            fx.perform = ctx.profile.perform.clone();
+        }
+        Response::RPL_ENDOFMOTD | Response::ERR_NOMOTD => {
+            fx.events.push(UiEvent::Numeric {
+                server_id: server_id.clone(),
+                code,
+                args: args.to_vec(),
+            });
+            if ctx.state.registered && !ctx.state.connect_ready {
+                ctx.state.connect_ready = true;
+                fx.events.push(UiEvent::ConnectReady {
+                    server_id,
+                    autojoin_skip: false,
+                    autojoin_delay_secs: 0,
+                    autojoin_channels: profile_autojoin_channels(ctx.state, &ctx.profile.autojoin),
+                });
+                // Raw handlers and CONNECT run before profile perform and
+                // automatic joins. A later /MOTD response cannot repeat them.
+                fx.autojoin = ctx.profile.autojoin.clone();
+                fx.perform = ctx.profile.perform.clone();
+            }
         }
         Response::RPL_SASLSUCCESS => {
             fx.outgoing.extend(auth::on_sasl_result(ctx.auth, true));
@@ -2816,6 +3121,7 @@ mod tests {
         };
         let data_dir = std::env::temp_dir().join("jirc-perform-test");
         let ctx = crate::script::RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "TestNet",
             server: "irc.example.test",
@@ -3970,7 +4276,7 @@ mod tests {
     }
 
     #[test]
-    fn welcome_triggers_autojoin() {
+    fn welcome_registers_without_connect_perform_or_autojoin() {
         let mut p = profile();
         p.autojoin = vec!["#jirc".into()];
         p.perform = vec!["mode $me +i".into(), "msg NickServ STATUS".into()];
@@ -3991,15 +4297,303 @@ mod tests {
             ":srv 001 me :Welcome",
             ":srv 001 me :Welcome".parse().unwrap(),
         );
-        // The autojoin is deferred to the connection task (after `on CONNECT`),
-        // so it's reported via `fx.autojoin`, not sent inline.
-        assert_eq!(fx.autojoin, vec!["#jirc".to_string()]);
-        assert_eq!(
-            fx.perform,
-            vec!["mode $me +i".to_string(), "msg NickServ STATUS".to_string()]
-        );
+        assert!(fx.autojoin.is_empty());
+        assert!(fx.perform.is_empty());
+        assert!(fx.events.iter().any(|event| matches!(
+            event,
+            UiEvent::Registered { nick, .. } if nick == "me"
+        )));
+        assert!(!fx
+            .events
+            .iter()
+            .any(|event| matches!(event, UiEvent::ConnectReady { .. })));
+        assert!(s.registered);
+        assert!(s.connect_time > 0);
+        assert!(!s.connect_ready);
+        assert!(fx.outgoing.contains(&"USERHOST me".to_string()));
         assert!(!fx.outgoing.iter().any(|l| l.starts_with("JOIN")));
         assert_eq!(s.nick, "me");
+    }
+
+    #[test]
+    fn initial_motd_end_or_missing_motd_readies_once_per_connection() {
+        for ending in [376, 422] {
+            let mut p = profile();
+            p.autojoin = vec!["#jirc".into()];
+            p.perform = vec!["mode $me +i".into()];
+            let mut state = SessionState::default();
+            let mut names = HashMap::new();
+            run_line_with_profile(&mut state, &mut names, ":srv 001 me :Welcome", &p);
+            let ready = run_line_with_profile(
+                &mut state,
+                &mut names,
+                &format!(":srv {ending} me :MOTD complete"),
+                &p,
+            );
+            assert!(state.connect_ready);
+            assert!(ready.events.iter().any(|event| matches!(
+                event,
+                UiEvent::ConnectReady {
+                    autojoin_skip: false,
+                    autojoin_delay_secs: 0,
+                    ..
+                }
+            )));
+            assert!(ready.events.iter().any(|event| matches!(
+                event, UiEvent::Numeric { code, .. } if *code == ending
+            )));
+            assert_eq!(ready.autojoin, p.autojoin);
+            assert_eq!(ready.perform, p.perform);
+            assert!(ready.outgoing.is_empty());
+
+            // A repeated MOTD, the alternate terminator, or a duplicated welcome
+            // cannot restart connection scripts/perform/autojoin in this session.
+            for repeated in [
+                ":srv 376 me :again",
+                ":srv 422 me :missing",
+                ":srv 001 me :again",
+                ":srv 376 me :again",
+            ] {
+                let repeated = run_line_with_profile(&mut state, &mut names, repeated, &p);
+                assert!(!repeated
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, UiEvent::ConnectReady { .. })));
+                assert!(repeated.autojoin.is_empty());
+                assert!(repeated.perform.is_empty());
+            }
+
+            // run_once creates fresh state when the socket is reconnected.
+            let mut fresh = SessionState::default();
+            run_line_with_profile(&mut fresh, &mut names, ":srv 001 me :Welcome", &p);
+            let ready = run_line_with_profile(&mut fresh, &mut names, ":srv 376 me :done", &p);
+            assert!(ready
+                .events
+                .iter()
+                .any(|event| matches!(event, UiEvent::ConnectReady { .. })));
+        }
+    }
+
+    #[test]
+    fn motd_before_registration_does_not_consume_connect_readiness() {
+        let p = profile();
+        let mut state = SessionState::default();
+        let mut names = HashMap::new();
+        for line in [":srv 376 me :early", ":srv 422 me :early"] {
+            let effects = run_line_with_profile(&mut state, &mut names, line, &p);
+            assert!(!state.connect_ready);
+            assert!(!effects
+                .events
+                .iter()
+                .any(|event| matches!(event, UiEvent::ConnectReady { .. })));
+        }
+        run_line_with_profile(&mut state, &mut names, ":srv 001 me :Welcome", &p);
+        let effects = run_line_with_profile(&mut state, &mut names, ":srv 422 me :missing", &p);
+        assert!(effects
+            .events
+            .iter()
+            .any(|event| matches!(event, UiEvent::ConnectReady { .. })));
+    }
+
+    #[test]
+    fn raw_precedes_connect_with_confirmed_nick_and_isupport_then_perform() {
+        use crate::script::eval::Action;
+        let engine = crate::script::ScriptEngine::new();
+        engine.load(
+            "raw 001:*:{ echo -a raw001 }\n\
+             raw 376:*:{ echo -a raw376 | haltdef }\n\
+             on *:CONNECT:{ echo -a connect $me $chantypes $prefix $status | autojoin -d3 }",
+        );
+        let mut p = profile();
+        p.perform = vec!["echo -a perform $me".into()];
+        let mut state = SessionState {
+            server_id: "s1".into(),
+            ..Default::default()
+        };
+        let mut names = HashMap::new();
+        let mut output = Vec::new();
+        let mut controls = Vec::new();
+        for line in [
+            ":srv 001 confirmed :Welcome",
+            ":srv 005 confirmed CHANTYPES=! PREFIX=(ov)@+ :supported",
+            ":confirmed!u@h NICK renamed",
+            ":srv 376 renamed :MOTD complete",
+        ] {
+            let effects = run_line_with_profile(&mut state, &mut names, line, &p);
+            let ctx = crate::script::RunCtx {
+                server_id: "s1",
+                my_nick: &state.nick,
+                network: &p.name,
+                server: &p.host,
+                data_dir: std::env::temp_dir().join("jirc-connect-order-test"),
+                state: std::sync::Arc::new(state.snapshot()),
+            };
+            let (mut actions, suppressed) = dispatch_message_scripts(
+                &engine,
+                &ctx,
+                &effects.events,
+                &effects.script_events,
+                Some(line),
+                Some(line.as_bytes()),
+            );
+            if line.contains(" 376 ") {
+                assert!(suppressed.iter().all(|halted| *halted));
+            }
+            actions.extend(run_perform_commands(&engine, &ctx, &effects.perform));
+            for action in actions {
+                match action {
+                    Action::Echo { text, .. } => output.push(text),
+                    Action::Autojoin { skip, delay_secs } => controls.push((skip, delay_secs)),
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(
+            output,
+            vec![
+                "raw001",
+                "raw376",
+                "connect renamed ! (ov)@+ connected",
+                "perform renamed",
+            ]
+        );
+        assert_eq!(controls, vec![(false, 3)]);
+    }
+
+    #[test]
+    fn perform_autojoin_controls_follow_connect_and_keep_other_actions_ordered() {
+        use crate::script::eval::Action;
+        for (connect, perform, expected) in [
+            ("-d7", "-s", (true, 0, false)),
+            ("-d7", "-d2", (false, 2, false)),
+            ("-s", "-n", (false, 0, true)),
+            ("-d7", "-n", (false, 0, true)),
+            ("-n", "-s", (false, 0, true)),
+            ("-n", "-n", (false, 0, true)),
+            ("-s", "-d3", (false, 3, false)),
+            ("-d7", "-d1", (false, 1, false)),
+        ] {
+            let engine = crate::script::ScriptEngine::new();
+            engine.load(&format!(
+                "on *:CONNECT:{{ echo -a connect | autojoin {connect} }}\n\
+                 alias performjoin {{ echo -a perform | autojoin {perform} | echo -a after }}"
+            ));
+            let mut p = profile();
+            p.perform = vec!["performjoin".into()];
+            p.autojoin = vec!["#profile key".into()];
+            let mut state = SessionState {
+                server_id: "s1".into(),
+                ..Default::default()
+            };
+            let mut names = HashMap::new();
+            run_line_with_profile(&mut state, &mut names, ":srv 001 me :Welcome", &p);
+            let line = ":srv 376 me :MOTD complete";
+            let effects = run_line_with_profile(&mut state, &mut names, line, &p);
+            let ctx = crate::script::RunCtx {
+                server_id: "s1",
+                my_nick: &state.nick,
+                network: &p.name,
+                server: &p.host,
+                data_dir: std::env::temp_dir().join("jirc-perform-autojoin-test"),
+                state: std::sync::Arc::new(state.snapshot()),
+            };
+            let (mut actions, _) = dispatch_message_scripts(
+                &engine,
+                &ctx,
+                &effects.events,
+                &effects.script_events,
+                Some(line),
+                Some(line.as_bytes()),
+            );
+            actions.extend(run_perform_commands(&engine, &ctx, &effects.perform));
+            let autojoin = ProfileAutojoin::default();
+            assert_eq!(
+                prepare_autojoin_actions(&mut actions, &autojoin, &p.autojoin),
+                expected,
+                "{connect} -> {perform}"
+            );
+            let output: Vec<_> = actions
+                .into_iter()
+                .filter_map(|action| match action {
+                    Action::Echo { text, .. } => Some(text),
+                    Action::Send(line) => {
+                        Some(autojoin.outgoing_line(&line).unwrap().unwrap_or(line))
+                    }
+                    Action::Autojoin { .. } => {
+                        panic!("autojoin controls must not reach apply_actions")
+                    }
+                    _ => None,
+                })
+                .collect();
+            let expected_output = if connect == "-n" {
+                vec!["connect", "JOIN #profile key", "perform", "after"]
+            } else if perform == "-n" {
+                vec!["connect", "perform", "JOIN #profile key", "after"]
+            } else {
+                vec!["connect", "perform", "after"]
+            };
+            assert_eq!(output, expected_output, "{connect} -> {perform}");
+        }
+    }
+
+    #[test]
+    fn profile_joins_deduplicate_channel_names_using_server_casemapping() {
+        let mut state = SessionState::default();
+        let channels = vec![
+            "#Room[ first-key".into(),
+            "#room{ second-key".into(),
+            "#other".into(),
+            "#OTHER another-key".into(),
+            "  ".into(),
+        ];
+        assert_eq!(
+            profile_autojoin_channels(&state, &channels),
+            vec!["#Room[ first-key", "#other"],
+        );
+        state.isupport.parse_token("CASEMAPPING=ascii");
+        assert_eq!(
+            profile_autojoin_channels(&state, &channels),
+            vec!["#Room[ first-key", "#room{ second-key", "#other"],
+        );
+    }
+
+    #[tokio::test]
+    async fn delayed_profile_joins_wait_once_and_cannot_cross_socket_attempts() {
+        let mut first = ProfileAutojoin::default();
+        assert!(first.schedule(vec!["#old key".into()], false, 5).is_empty());
+        let deadline = first.pending.as_ref().unwrap().0;
+        assert!(first.take_due(deadline - Duration::from_millis(1)).is_empty());
+        let queued = first.take_due(deadline);
+        assert_eq!(queued.len(), 1);
+        assert_eq!(
+            first.outgoing_line(&queued[0]),
+            Ok(Some("JOIN #old key".into()))
+        );
+        assert!(first.take_due(deadline + Duration::from_secs(1)).is_empty());
+
+        // Cover the race where the timer fired and queued its join just before
+        // the old socket dropped: the supervisor retains its outgoing receiver.
+        drop(first);
+        let mut replacement = ProfileAutojoin::default();
+        assert_eq!(replacement.outgoing_line(&queued[0]), Err(()));
+        let current = replacement.schedule(vec!["#current".into()], false, 0);
+        assert_eq!(
+            replacement.outgoing_line(&current[0]),
+            Ok(Some("JOIN #current".into()))
+        );
+        assert_eq!(
+            replacement.outgoing_line("PRIVMSG #current :hello"),
+            Ok(None)
+        );
+        assert_eq!(replacement.outgoing_line("\0AUTOJOIN malformed"), Err(()));
+
+        // Dropping a still-pending plan does not leave a spawned timer behind.
+        let mut pending = ProfileAutojoin::default();
+        assert!(pending.schedule(vec!["#never".into()], false, 5).is_empty());
+        drop(pending);
+        assert!(replacement.pending.is_none());
+        assert!(replacement.schedule(vec!["#skip".into()], true, 1).is_empty());
+        assert!(replacement.pending.is_none());
     }
 
     fn feed_line(line: &str) -> Effects {
@@ -4022,6 +4616,60 @@ mod tests {
     /// `+q` on an IRCX server displayed as a bare "Snue sets mode: +q", with the
     /// nick missing and the member's owner status never recorded. Two separate
     /// causes, both reproduced here.
+    /// A CTCP PING payload is echoed straight back inside our NOTICE. With a
+    /// bare CR in it -- which a hostile server, or a MITM on a plaintext link,
+    /// can put there, since the read loop only splits on LF -- the reply used
+    /// to reach the wire as two commands, letting the attacker pick the second.
+    #[test]
+    fn framed_line_neutralises_injected_commands_in_an_echoed_ctcp_reply() {
+        let mut state = SessionState::default();
+        state.nick = "me".into();
+        let mut accum = Default::default();
+        let effects = run_line(
+            &mut state,
+            &mut accum,
+            ":evil!u@h PRIVMSG me :\u{1}PING x\rQUIT :owned\u{1}",
+        );
+        let reply = effects.outgoing.first().expect("a CTCP PING reply");
+        assert!(reply.contains('\r'), "the payload still reaches the writer");
+        let wire = framed_line(reply.as_bytes());
+        assert_eq!(
+            String::from_utf8(wire).unwrap(),
+            "NOTICE evil :\u{1}PING x QUIT :owned\u{1}"
+        );
+    }
+
+    #[test]
+    fn framed_line_trims_the_terminator_but_keeps_the_rest_intact() {
+        assert_eq!(framed_line(b"PRIVMSG #c :hi\r\n"), b"PRIVMSG #c :hi".to_vec());
+        assert_eq!(framed_line(b"PRIVMSG #c :hi"), b"PRIVMSG #c :hi".to_vec());
+        // Interior control bytes become spaces rather than new commands.
+        assert_eq!(framed_line(b"A\nB\rC\0D"), b"A B C D".to_vec());
+        assert_eq!(framed_line(b""), Vec::<u8>::new());
+    }
+
+    #[tokio::test]
+    async fn read_capped_line_reads_a_line_and_refuses_an_endless_one() {
+        let data = b"PING :one\r\nPING :two\r\n";
+        let mut reader = BufReader::new(&data[..]);
+        let mut buf = Vec::new();
+        assert_eq!(read_capped_line(&mut reader, &mut buf).await.unwrap(), 11);
+        assert_eq!(buf, b"PING :one\r\n".to_vec());
+        buf.clear();
+        assert_eq!(read_capped_line(&mut reader, &mut buf).await.unwrap(), 11);
+
+        // A server that never sends a line ending used to grow the buffer until
+        // the process died; now it is a read error that drops the connection.
+        let flood = vec![b'x'; MAX_LINE_BYTES + 1024];
+        let mut reader = BufReader::new(&flood[..]);
+        let mut buf = Vec::new();
+        let error = read_capped_line(&mut reader, &mut buf)
+            .await
+            .expect_err("an overlong line is a protocol error");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(buf.len() <= MAX_LINE_BYTES + 8192, "buffer stayed bounded");
+    }
+
     #[test]
     fn ircx_owner_mode_keeps_its_nick() {
         use crate::irc::state::Isupport;

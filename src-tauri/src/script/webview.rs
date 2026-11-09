@@ -447,6 +447,7 @@ fn fire(app: &AppHandle, owner: &Owner, name: &str, event: &str, args: Vec<Strin
         state.nick.clone()
     };
     let ctx = RunCtx {
+        server_id: &owner.server_id,
         my_nick: &nick,
         network: &owner.network,
         server: &owner.server,

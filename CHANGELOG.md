@@ -12,6 +12,62 @@ Versions use CalVer (`YY.M.D`) — newest first.
 
 ---
 
+## Unreleased — mSL migration compatibility
+
+- Preserve formatting when `/S` regex substitutions find no match. Implement
+  `/fopen -x` writer exclusion with retained OS handles and read sharing. Apply
+  perform-command autojoin controls in order, deduplicate reconnect joins against
+  profile channels, and discard old connection attempts' delayed/queued joins.
+
+- Run `on CONNECT`, profile perform commands and automatic channel joins after
+  the initial MOTD/no-MOTD reply instead of the welcome numeric. Registration
+  status and authentication remain available at welcome. Reconnect rejoins now
+  wait for CONNECT and respect its autojoin skip/delay controls; repeated MOTD
+  replies do not repeat startup actions.
+
+- Support binary and numbered-handle file reads with bounded byte counts and
+  consistent position/EOF/error results. Preserve window IDs and focus across
+  query renames and whole-server closes. Correct independent quote edges and
+  `$bytes` unit/decimal/precision options.
+- Make `/echo -a` output immediately readable through `$line()` in active custom
+  windows, including script-driven activation and close fallback; avoid duplicate
+  combined `-sa` status output.
+- Keep named dialog controls readable between events and immediately after script
+  mutations; correct text/reset-add operations and indexed list/combo selection.
+- Add automatic script error handlers and caller propagation for missing required
+  identifier arguments, independent halt/display flags, and effective default access levels.
+- Implement asynchronous `$urlget` methods, callbacks, file/binary output,
+  request/response headers, redirects, cancellation and partial resumption.
+- Preserve DCC completion snapshots and independent activity clocks; pass
+  disconnect text to scripts, expose the current server port, and correct HOTLINK
+  offsets plus picture/editbox window activation and detached rendering.
+- Bound ready timer bursts, order due `-d` timers, and defer new timers until
+  the caller's actions finish. Correct finite `-p` repetitions, frozen `-P`
+  countdowns and manual `-e` state while preserving timer evaluation semantics.
+- Add routine-scoped `/scid` and `/scon` selection, reset and broadcast switches,
+  status filters, native feedback, and connection-bound action routing. Preserve
+  caller locals/source and jIRC's safer single evaluation on the destination.
+- Run `/signal -n` handlers before the caller continues, with isolated local
+  variables and event metadata and a 24-level nesting limit. Queue ordinary
+  signals after the outer action list, preserving connection context and FIFO
+  order while yielding between batches.
+- Correct routine-local isolation, variable namespace switches, initialization,
+  wildcard removal and `/unsetall` defaults using native mIRC analysis.
+- Accept documented parenthesis-free `if` forms while preserving single
+  evaluation and command boundaries.
+- Complete min/max list and property handling, numeric token sorting and stable
+  reverse ties; preserve observed native two-argument numeric quirks.
+- Return zero for null/undefined `$calc` results and accept `$int` D exponents.
+- Correct `/echo` numeric colours, expanded targets and destination-switch
+  precedence without changing the frontend event format.
+- Preserve destination network/server context when executing `/scid` and `/scon`.
+- Add native hash-command feedback, quoted save messages and odd-prime slot
+  metadata, including quiet command forms.
+- Add regression coverage for these behaviours; retain the existing portable
+  scripting and data-handling boundaries.
+
+---
+
 ## 🔧 26.8.36 — Switches that were being thrown away
 
 Three more commands from the per-command sweep, all of them the same shape: the

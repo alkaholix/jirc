@@ -11,6 +11,9 @@ use super::ident;
 pub enum Action {
     /// A raw line to send to the server.
     Send(String),
+    /// Start or resume a registered HTTP request after the script run completes.
+    UrlGet { id: u32 },
+    UrlGetControl { id: u32, resume: bool },
     /// Configure the application DCC Server listener.
     DccServer {
         args: String,
@@ -227,6 +230,8 @@ pub enum Action {
         name: String,
         kind: String,
         title: String,
+        editbox: bool,
+        activate: bool,
     },
     /// Close a custom `@window` (`/window -c`).
     WindowClose {
@@ -304,7 +309,8 @@ pub enum Action {
         file: Option<String>,
         local: bool,
     },
-    /// Fire `on SIGNAL` handlers matching `name` (`/signal`); `params` become `$1-`.
+    /// Queue ordinary `on SIGNAL` handlers; `params` become `$1-`. The `-n`
+    /// form runs in the interpreter and never emits this deferred action.
     Signal {
         name: String,
         params: Vec<String>,
@@ -320,6 +326,14 @@ pub enum Action {
     RunOn {
         server_id: String,
         command: String,
+    },
+    /// Already evaluated actions bound to the connection selected by a script.
+    WithConnection {
+        server_id: String,
+        my_nick: String,
+        network: String,
+        server: String,
+        actions: Vec<Action>,
     },
     /// Replace the line currently being handled by `on PARSELINE`, or enqueue a
     /// synthetic incoming/outgoing line when `queue` is set (`/parseline -q`).
@@ -504,6 +518,8 @@ pub struct EventVars {
     pub hotlink_line_text: String,
     pub hotlink_line: usize,
     pub hotlink_pos: usize,
+    /// Zero-based character offset of the raw hovered word in the line.
+    pub hotlink_char_pos: usize,
     /// `$nonstdmsg` — true when a PRIVMSG/NOTICE arrived with a source/target
     /// combination a server would not normally send, i.e. the target is neither
     /// a channel we know nor our own nick.
@@ -536,6 +552,9 @@ pub struct EventVars {
     /// Whether an earlier `^` handler suppressed mIRC's default event text.
     /// `/haltdef` updates this without stopping the current routine.
     pub default_halted: bool,
+    /// A previous handler used /halt or /haltdef. Unlike default_halted this
+    /// also applies to ordinary handlers, and backs $halted and the & gate.
+    pub event_halted: bool,
     /// The numeric of a raw server line (`on RAW`) — exposed as `$numeric`.
     pub numeric: String,
     /// Raw protocol context retained for server-driven events.
@@ -572,6 +591,8 @@ pub struct EventVars {
     pub peer_address: String,
     /// Transfer/session id for DCC event-local identifiers.
     pub dcc_id: String,
+    /// Frozen transfer metadata retained for a completion/failure callback.
+    pub dcc_snapshot: Option<DccInfo>,
     pub dns_query: String,
     pub dns_ips: Vec<String>,
     /// Restricts lifecycle dispatch to one loaded source file.
@@ -1071,8 +1092,9 @@ impl ScriptPlay for NoPlay {
 }
 
 /// One DCC chat/send/get item exposed to `$chat`/`$send`/`$get`.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct DccInfo {
+    pub id: String,
     pub kind: String,
     pub nick: String,
     pub filename: String,
@@ -1084,6 +1106,7 @@ pub struct DccInfo {
     pub resume: u64,
     pub last_ack: u64,
     pub secs: u64,
+    pub idle: u64,
 }
 
 pub trait ScriptDcc: Send + Sync {
@@ -1139,6 +1162,8 @@ pub struct ConnsView {
     pub entries: Vec<(u32, String)>,
     /// The active window's connection cid (0 = none reported).
     pub active_cid: u32,
+    pub(crate) source_server_id: String,
+    pub(crate) contexts: HashMap<String, super::connections::ConnectionContext>,
 }
 
 impl ConnsView {
@@ -1163,6 +1188,11 @@ pub struct WinView {
     pub last_active_wid: u32,
     /// Most recently closed window, retained after its registry entry is gone.
     pub last_closed: Option<(u32, String, String)>,
+    /// Echo destination predicted from the UI snapshot and this run's window
+    /// commands. Numeric window IDs remain owned by the frontend registry.
+    pub active_window: Option<(String, String)>,
+    /// Initialized only when a command changes window focus/order.
+    pub(super) focus_order: Option<Vec<(String, String)>>,
 }
 
 impl WinView {
@@ -1180,21 +1210,68 @@ impl WinView {
             .iter()
             .find(|(candidate, _, _)| *candidate == wid)
     }
+
+    fn focus_order(&mut self) -> &mut Vec<(String, String)> {
+        self.focus_order.get_or_insert_with(|| {
+            self.entries
+                .iter()
+                .map(|(_, server_id, name)| (server_id.clone(), name.clone()))
+                .collect()
+        })
+    }
+
+    fn window_opened(&mut self, server_id: &str, name: &str, activate: bool) {
+        let order = self.focus_order();
+        let is_new = !order
+            .iter()
+            .any(|(sid, window)| sid == server_id && window.eq_ignore_ascii_case(name));
+        if is_new {
+            order.push((server_id.into(), name.into()));
+        }
+        // Match the frontend: new windows activate, existing ones need -a.
+        if is_new || activate {
+            self.active_window = Some((server_id.into(), name.into()));
+        }
+    }
+
+    fn window_closed(&mut self, server_id: &str, name: &str) {
+        let was_active = self.active_window.as_ref().is_some_and(|(sid, window)| {
+            sid == server_id && window.eq_ignore_ascii_case(name)
+        });
+        let order = self.focus_order();
+        order.retain(|(sid, window)| !(sid == server_id && window.eq_ignore_ascii_case(name)));
+        if was_active {
+            // closeBuffer selects the last remaining buffer in its order.
+            self.active_window = order.last().cloned();
+        }
+    }
+}
+
+/// One script error, retained while it unwinds through calling routines.
+#[derive(Debug, Clone)]
+pub(crate) struct ScriptError {
+    message: String,
+    pending: bool,
+    /// Local-frame depth at which :error caught it. A /return from that frame
+    /// propagates to its caller instead of entering the same handler again.
+    handled_at: Option<usize>,
+    actions_at_error: usize,
 }
 
 /// The execution context for a single alias/event run.
 pub struct Runtime<'a> {
     pub script: &'a Script,
-    pub my_nick: &'a str,
-    pub network: &'a str,
-    pub server: &'a str,
+    pub my_nick: String,
+    pub network: String,
+    pub server: String,
+    pub(crate) connection_scope: super::connections::ConnectionScope,
     /// The name of the frontend's currently-focused window/buffer, for `$active`
     /// (empty when unknown — mIRC's `$active` may be `$null` too).
     pub active: String,
     pub vars: &'a mut HashMap<String, String>,
     /// Routine-local `/var` frames. The last frame is the current alias/event
-    /// routine; nested aliases push their own frame so locals shadow, rather
-    /// than overwrite, the caller's locals and engine-global `/set` values.
+    /// routine; nested aliases cannot access their caller's locals. A current
+    /// local shadows an engine-global `/set` value with the same name.
     pub(crate) local_scopes: Vec<HashMap<String, String>>,
     pub hashes: &'a mut HashMap<String, HashMap<String, String>>,
     /// `-uN` metadata, kept separate so the existing variable/hash storage and
@@ -1208,8 +1285,21 @@ pub struct Runtime<'a> {
     /// mIRC command-separator order.
     pub(crate) pending_pipe_commands: Vec<String>,
     pub halted: bool,
+    /// Set while a command is being expanded when mIRC would not run it: a
+    /// `$$` value came up empty, or an alias used as an identifier halted.
+    /// Holds the action count at that moment: output identifier aliases
+    /// produced before it stays, the command's own output is dropped, and the
+    /// script halts.
+    pub(crate) abandoned_at: Option<usize>,
+    /// True only while `$calc`'s own arguments are expanded. mIRC keeps text
+    /// glued after an identifier call there (`$calc($len(ab)*2)` is 4), while
+    /// everywhere else it drops it (`$len($upper(ab)cd)` is 2).
+    pub(crate) calc_args: bool,
+    pub(crate) script_error: Option<ScriptError>,
     pub steps: u32,
     pub depth: u32,
+    /// Immediate SIGNAL nesting is bounded separately from script block depth.
+    pub(crate) signal_depth: u32,
     /// Active alias names; mIRC aliases cannot recurse directly or indirectly.
     pub alias_stack: Vec<String>,
     /// Value set by `/return`, consumed when an alias is used as `$identifier`.
@@ -1237,6 +1327,10 @@ pub struct Runtime<'a> {
     pub webviews: std::sync::Arc<dyn ScriptWebviews>,
     /// Backend for `$input` prompts.
     pub input: std::sync::Arc<dyn ScriptInput>,
+    /// Authoritative portable dialog state, shared with subsequent script runs.
+    pub(crate) dialogs: std::sync::Arc<std::sync::Mutex<super::dialogs::DialogStore>>,
+    /// Registered HTTP requests, visible synchronously before async execution.
+    pub(crate) urlgets: std::sync::Arc<super::urlget::UrlGets>,
     /// Open file handles for `/fopen`/`/fwrite`/`$fread`/`$fopen(...)`.
     pub files: &'a mut crate::script::files::FileStore,
     /// Binary variables for `/bset`/`/bunset`/`$bvar`/`$bfind`/`&binvar`.
@@ -1254,6 +1348,77 @@ pub struct Runtime<'a> {
 }
 
 impl<'a> Runtime<'a> {
+    fn window_server_id(&self) -> &str {
+        if self.state.server_id.is_empty() {
+            &self.conns.source_server_id
+        } else {
+            &self.state.server_id
+        }
+    }
+
+    pub(crate) fn error_pending(&self) -> bool {
+        self.script_error.as_ref().is_some_and(|error| error.pending)
+    }
+
+    pub(crate) fn script_error_message(&self) -> &str {
+        self.script_error.as_ref().map_or("", |error| error.message.as_str())
+    }
+
+    pub(crate) fn raise_script_error(&mut self, message: impl Into<String>) {
+        if self.error_pending() {
+            return; // retain the first failed subexpression and its source
+        }
+        let message = message.into();
+        let context = match (self.event.script_line, self.event.script_source.as_str()) {
+            (0, "") => String::new(),
+            (0, source) => format!(" (file {source})"),
+            (line, "") => format!(" (line {line})"),
+            (line, source) => format!(" (line {line}, {source})"),
+        };
+        self.script_error = Some(ScriptError {
+            message: format!("* {message}{context}"),
+            pending: true,
+            handled_at: None,
+            actions_at_error: self.actions.len(),
+        });
+        self.ret = None;
+        self.goto = None;
+        self.pending_pipe_commands.clear();
+    }
+
+    pub(crate) fn finish_script_error(&mut self) {
+        if let Some(error) = self.script_error.take() {
+            self.actions.push(Action::Echo {
+                target: self.active.clone(),
+                text: error.message,
+            });
+        }
+    }
+
+    fn discard_failed_actions(&mut self, from: usize) {
+        fn abandon(action: &Action, requests: &super::urlget::UrlGets) -> bool {
+            match action {
+                Action::UrlGet { id } => {
+                    requests.abandon(*id);
+                    true
+                }
+                Action::WithConnection { actions, .. } => actions.iter().fold(false, |found, action| abandon(action, requests) || found),
+                _ => false,
+            }
+        }
+        let failed_at = self.script_error.as_ref().map_or(from, |error| error.actions_at_error);
+        let mut retained = Vec::new();
+        for (offset, action) in self.actions.drain(from..).enumerate() {
+            // Output already emitted by an alias before its failing expression
+            // remains observable. A URL registration in the failed expression
+            // is still queued, so it must not survive as an orphan request.
+            if !abandon(&action, &self.urlgets) && from + offset < failed_at {
+                retained.push(action);
+            }
+        }
+        self.actions.extend(retained);
+    }
+
     pub fn run(&mut self, body: &[Stmt]) {
         self.purge_expired();
         // Top-level aliases/events enter through `run()` directly. Nested alias
@@ -1267,8 +1432,25 @@ impl<'a> Runtime<'a> {
             self.halted = true;
         }
         let mut i = 0;
-        while i < body.len() {
+        while i < body.len() || self.error_pending() {
             self.refresh_nicklist_state();
+            if self.error_pending() {
+                let frame = self.local_scopes.len();
+                if self.script_error.as_ref().is_some_and(|error| error.handled_at == Some(frame)) {
+                    break; // /return from :error must unwind to another routine
+                }
+                if let Some(label) = find_label(body, "error") {
+                    let error = self.script_error.as_mut().unwrap();
+                    error.pending = false;
+                    error.handled_at = Some(frame);
+                    self.halted = false;
+                    self.ret = None;
+                    self.goto = None;
+                    i = label + 1;
+                    continue;
+                }
+                break; // an enclosing block or caller may own the handler
+            }
             if self.halted || self.steps > STEP_LIMIT {
                 break;
             }
@@ -1292,7 +1474,12 @@ impl<'a> Runtime<'a> {
             }
             match &body[i] {
                 Stmt::Command { name, args, .. } if name.eq_ignore_ascii_case("goto") => {
-                    self.goto = Some(self.expand(args));
+                    let outer_abandoned = self.abandoned_at.take();
+                    let label = self.expand(args);
+                    // `goto $$2` with `$2` empty halts (already flagged) and jumps nowhere.
+                    if std::mem::replace(&mut self.abandoned_at, outer_abandoned).is_none() {
+                        self.goto = Some(label);
+                    }
                     // The loop top resolves it (jump here or bubble up).
                 }
                 Stmt::Command { name, .. } if name.eq_ignore_ascii_case("break") => {
@@ -1317,17 +1504,18 @@ impl<'a> Runtime<'a> {
             self.local_scopes.pop();
         }
         if self.depth == 0 {
+            self.finish_script_error();
             self.finish_timed_values();
+            self.flush_connection_actions();
         }
     }
 
-    /// Returns the visible value for a user variable: the innermost routine
+    /// Returns the visible value for a user variable: the current routine's
     /// local wins, followed by an engine-global `/set` value.
     pub(crate) fn var_value(&self, name: &str) -> Option<&String> {
         self.local_scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.get(name))
+            .last()
+            .and_then(|scope| scope.get(name))
             .or_else(|| self.vars.get(name))
     }
 
@@ -1340,15 +1528,13 @@ impl<'a> Runtime<'a> {
         self.local_scopes.last_mut().unwrap().insert(name, value);
     }
 
-    /// Assigns the nearest visible local, or the global variable when no local
-    /// declaration exists. Used by mutating commands such as `/inc` and
-    /// `/sockread`; `/set` deliberately continues to write the global map.
+    /// Assigns a current routine-local, or the global variable when no local
+    /// declaration exists. Used by `/set`, `/inc`, and `/sockread`.
     pub(super) fn set_visible_var(&mut self, name: String, value: String) -> bool {
         if let Some(scope) = self
             .local_scopes
-            .iter_mut()
-            .rev()
-            .find(|s| s.contains_key(&name))
+            .last_mut()
+            .filter(|scope| scope.contains_key(&name))
         {
             scope.insert(name, value);
             true
@@ -1365,7 +1551,7 @@ impl<'a> Runtime<'a> {
             .filter(|(name, _)| !name.contains('\u{0}'))
             .map(|(name, value)| (name.clone(), (value.clone(), false)))
             .collect();
-        for scope in &self.local_scopes {
+        if let Some(scope) = self.local_scopes.last() {
             for (name, value) in scope {
                 visible.insert(name.clone(), (value.clone(), true));
             }
@@ -1504,8 +1690,21 @@ impl<'a> Runtime<'a> {
     fn exec(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Command { name, args, .. } => {
+                let actions_before = self.actions.len();
+                let outer_abandoned = self.abandoned_at.take();
                 self.dispatch(name, args);
-                self.run_pending_pipe_commands();
+                if self.error_pending() {
+                    self.discard_failed_actions(actions_before);
+                } else if let Some(at) = self.abandoned_at {
+                    // mIRC halts without running the command: drop what it
+                    // produced, keep what identifier aliases echoed before.
+                    self.discard_failed_actions(at.max(actions_before));
+                    self.pending_pipe_commands.clear();
+                    self.halted = true;
+                } else {
+                    self.run_pending_pipe_commands();
+                }
+                self.abandoned_at = outer_abandoned;
             }
             Stmt::If {
                 branches,
@@ -1513,7 +1712,18 @@ impl<'a> Runtime<'a> {
                 ..
             } => {
                 for (cond, body) in branches {
-                    if self.eval_cond(cond) {
+                    let outer_abandoned = self.abandoned_at.take();
+                    let matches = self.eval_cond(cond);
+                    let abandoned =
+                        std::mem::replace(&mut self.abandoned_at, outer_abandoned).is_some();
+                    if self.error_pending() {
+                        return;
+                    }
+                    if abandoned {
+                        // `if ($$1 …)` halts like any other empty `$$`.
+                        return;
+                    }
+                    if matches {
                         let body = body.clone();
                         self.run(&body);
                         return;
@@ -1525,9 +1735,13 @@ impl<'a> Runtime<'a> {
                 }
             }
             Stmt::While { cond, body, .. } => {
+                let outer_abandoned = self.abandoned_at.take();
                 while !self.halted
+                    && !self.error_pending()
                     && self.goto.is_none()
                     && self.eval_cond(cond)
+                    && self.abandoned_at.is_none()
+                    && !self.error_pending()
                     && self.steps <= STEP_LIMIT
                 {
                     self.steps += 1;
@@ -1543,16 +1757,18 @@ impl<'a> Runtime<'a> {
                         None => {}
                     }
                 }
+                // An empty `$$` in the condition has already halted the loop.
+                self.abandoned_at = outer_abandoned;
             }
             Stmt::Label { .. } => {} // a jump target; no-op when reached normally
         }
     }
 
     fn run_pending_pipe_commands(&mut self) {
-        while !self.halted && !self.pending_pipe_commands.is_empty() {
+        while !self.halted && !self.error_pending() && !self.pending_pipe_commands.is_empty() {
             let pending = std::mem::take(&mut self.pending_pipe_commands);
             for command in pending {
-                if self.halted {
+                if self.halted || self.error_pending() {
                     break;
                 }
                 let body = super::parser::parse_body(command.trim());
@@ -1587,6 +1803,9 @@ impl<'a> Runtime<'a> {
                 .filter(|_| !key.is_empty())
             {
                 let mut value = self.expand(value.trim_start());
+                if self.error_pending() || self.abandoned_at.is_some() {
+                    return;
+                }
                 value = try_var_math(&value).unwrap_or(value);
                 let is_local = self.set_visible_var(key.to_string(), value);
                 if !is_local {
@@ -1639,6 +1858,9 @@ impl<'a> Runtime<'a> {
                 .map(|alias| (alias.body.clone(), alias.source.clone(), alias.source_line))
             {
                 let params = split_params(&self.expand(raw_args));
+                if self.error_pending() || self.abandoned_at.is_some() {
+                    return;
+                }
                 let saved = self.caller;
                 let saved_show = self.show;
                 self.caller = "command";
@@ -2015,13 +2237,20 @@ impl<'a> Runtime<'a> {
             "disable" => self.cmd_set_group(raw_args, false),
             "groups" => self.cmd_groups(raw_args),
             "unsetall" => {
-                // Remove all user %variables; engine-internal reserved keys (group
-                // state, etc.) are NUL-prefixed and kept.
-                for scope in &mut self.local_scopes {
-                    scope.clear();
+                let (flags, _) = split_switches(raw_args);
+                let clear_local = flags.contains('l');
+                let clear_global = flags.contains('g') || !clear_local;
+                if clear_local {
+                    if let Some(scope) = self.local_scopes.last_mut() {
+                        scope.clear();
+                    }
                 }
-                self.vars.retain(|k, _| k.starts_with('\u{0}'));
-                self.var_expiry.retain(|k, _| k.starts_with('\u{0}'));
+                // Bare /unsetall clears globals; -l selects current locals and
+                // -gl clears both. Engine-internal reserved keys are kept.
+                if clear_global {
+                    self.vars.retain(|k, _| k.starts_with('\u{0}'));
+                    self.var_expiry.retain(|k, _| k.starts_with('\u{0}'));
+                }
             }
             "anick" => self.set_identity("anick", raw_args),
             "mnick" => self.set_identity("mnick", raw_args),
@@ -2059,43 +2288,19 @@ impl<'a> Runtime<'a> {
                     }
                 }
             }
-            // /scon N command  — run `command` on the Nth connection.
-            // /scid cid command — run `command` on the connection with that cid.
-            // The number is evaluated now; the command runs in the target's context.
-            "scon" | "scid" => {
-                let raw = raw_args.trim();
-                let (sel, rest) = raw.split_once(char::is_whitespace).unwrap_or((raw, ""));
-                let sel = self.expand(sel);
-                let target = if lname == "scon" {
-                    sel.trim()
-                        .parse::<usize>()
-                        .ok()
-                        .and_then(|n| n.checked_sub(1))
-                        .and_then(|i| self.conns.entries.get(i))
-                        .map(|(_, s)| s.clone())
-                } else {
-                    sel.trim()
-                        .parse::<u32>()
-                        .ok()
-                        .and_then(|cid| self.conns.entries.iter().find(|(c, _)| *c == cid))
-                        .map(|(_, s)| s.clone())
-                };
-                if let (Some(server_id), false) = (target, rest.is_empty()) {
-                    self.actions.push(Action::RunOn {
-                        server_id,
-                        command: rest.to_string(),
-                    });
-                }
-            }
+            "scon" | "scid" => self.cmd_connection(lname, raw_args, !silent),
             "signal" => {
-                // `/signal [-n] [-d] <name> [parameters]` fires `on *:SIGNAL:<name>`
-                // handlers ($signal = name, $1- = params). Switches are accepted
-                // but the signal is always dispatched after the current run (mIRC's
-                // default, non-`-n`, behaviour).
+                // Immediate handlers run inside this interpreter, before later
+                // caller expressions expand. Ordinary signals become queued
+                // actions, applied after the whole current script turn.
                 let mut rest = self.expand(raw_args).trim().to_string();
+                let mut immediate = false;
                 while rest.starts_with('-') {
                     match rest.split_once(char::is_whitespace) {
-                        Some((_, after)) => rest = after.trim().to_string(),
+                        Some((flags, after)) => {
+                            immediate |= flags.contains('n');
+                            rest = after.trim().to_string();
+                        }
                         None => {
                             rest.clear();
                             break;
@@ -2109,8 +2314,23 @@ impl<'a> Runtime<'a> {
                     ),
                     None => (rest.clone(), Vec::new()),
                 };
-                if !name.is_empty() {
-                    self.actions.push(Action::Signal { name, params });
+                if !name.is_empty() && super::dispatch::remote_enabled(self.vars, "SIGNAL") {
+                    if immediate {
+                        if self.signal_depth < 24 {
+                            let event = EventVars {
+                                nick: self.my_nick.to_string(),
+                                chan: name.clone(),
+                                target: name,
+                                params,
+                                ..Default::default()
+                            };
+                            self.signal_depth += 1;
+                            super::dispatch::dispatch_handlers(self, "SIGNAL", &event, None);
+                            self.signal_depth -= 1;
+                        }
+                    } else {
+                        self.actions.push(Action::Signal { name, params });
+                    }
                 }
             }
             "autojoin" => {
@@ -2223,7 +2443,7 @@ impl<'a> Runtime<'a> {
                 // recoverable than mIRC.
                 let expanded = self.expand(raw_args);
                 let (_flags, rest) = split_switches(&expanded);
-                if !rest.trim().is_empty() {
+                if !rest.trim().is_empty() && self.abandoned_at.is_none() {
                     let _ = std::fs::remove_file(sandbox_path(&self.data_dir, rest.trim()));
                 }
             }
@@ -2361,15 +2581,15 @@ impl<'a> Runtime<'a> {
                     self.actions.push(Action::NickIcon { nick, icon });
                 }
             }
-            "hadd" => self.cmd_hadd(raw_args),
-            "hdel" => self.cmd_hdel(raw_args),
-            "hmake" => self.cmd_hmake(raw_args),
-            "hfree" => self.cmd_hfree(raw_args),
+            "hadd" => self.cmd_hadd(raw_args, !silent),
+            "hdel" => self.cmd_hdel(raw_args, !silent),
+            "hmake" => self.cmd_hmake(raw_args, !silent),
+            "hfree" => self.cmd_hfree(raw_args, !silent),
             "hclear" => self.cmd_hclear(raw_args),
-            "hinc" => self.cmd_hincdec(raw_args, 1),
-            "hdec" => self.cmd_hincdec(raw_args, -1),
-            "hsave" => self.cmd_hsave(raw_args),
-            "hload" => self.cmd_hload(raw_args),
+            "hinc" => self.cmd_hincdec(raw_args, 1, !silent),
+            "hdec" => self.cmd_hincdec(raw_args, -1, !silent),
+            "hsave" => self.cmd_hsave(raw_args, !silent),
+            "hload" => self.cmd_hload(raw_args, !silent),
             "tokenize" => self.cmd_tokenize(raw_args),
             // /noop evaluates its parameters (for identifier side effects) and
             // does nothing else.
@@ -2406,14 +2626,30 @@ impl<'a> Runtime<'a> {
             }
             "halt" => {
                 self.halted = true;
+                // An explicit halt in an error handler consumes the error;
+                // /return, in contrast, asks a calling routine to catch it.
+                if self.script_error.as_ref().is_some_and(|error| !error.pending) {
+                    self.script_error = None;
+                }
             }
             // `/haltdef` suppresses mIRC's default event display without
             // stopping the remainder of this handler.
             "haltdef" => {
                 self.event.default_halted = true;
+                self.event.event_halted = true;
             }
             "return" | "returnex" => {
+                if let Some(error) = self.script_error.as_mut() {
+                    error.pending = true;
+                    error.actions_at_error = self.actions.len();
+                    self.ret = None;
+                    return;
+                }
                 let value = self.expand(raw_args);
+                if self.error_pending() || self.abandoned_at.is_some() {
+                    // `return $$2` with `$2` empty halts instead of returning.
+                    return;
+                }
                 // Ordinary /return passes through mIRC's command-token
                 // whitespace normalization. /returnex is the intentionally
                 // space-preserving variant used by custom identifiers and
@@ -2734,6 +2970,7 @@ impl<'a> Runtime<'a> {
             }
             "reseterror" => {
                 self.vars.remove(CLIENT_ERROR_KEY);
+                self.script_error = None;
             }
             "ebeeps" => {
                 let value = self.expand(raw_args);
@@ -2766,8 +3003,8 @@ impl<'a> Runtime<'a> {
                     }
                     "dlevel" => {
                         if let Some(value) = parts.next() {
-                            self.vars
-                                .insert(CLIENT_DLEVEL_KEY.into(), value.to_string());
+                            let level = value.parse::<i64>().unwrap_or(1).clamp(1, 999);
+                            self.vars.insert(CLIENT_DLEVEL_KEY.into(), level.to_string());
                         }
                     }
                     "debug" => {
@@ -2929,6 +3166,14 @@ impl<'a> Runtime<'a> {
                 let _ = self.expand(raw_args);
             }
             "hotlink" => self.cmd_hotlink(raw_args),
+            // DLL, DDE and COM are Windows-only interfaces and a permanent
+            // non-goal: jIRC runs on every OS. They are rejected here so they
+            // can never fall through to the server as raw lines.
+            "dll" | "dde" | "ddeserver" | "comopen" | "comclose" | "comlist" | "comreg" => {
+                self.raise_script_error(format!(
+                    "/{lname}: not supported in jIRC (Windows-only interface)"
+                ));
+            }
             _ => {
                 // Unknown client command: pass it to the IRC server. When `!`
                 // bypassed an alias, send the command without the prefix.
@@ -2972,6 +3217,7 @@ impl<'a> Runtime<'a> {
             return;
         }
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let force = expanded
             .split_whitespace()
             .any(|token| token.starts_with('-') && token[1..].contains('f'));
@@ -3022,6 +3268,7 @@ impl<'a> Runtime<'a> {
     /// connection so all later scripts/timers see the updated snapshot.
     fn cmd_ialmark(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut tokens = expanded.split_whitespace();
         let first = tokens.next().unwrap_or("");
         let (flags, nick) = if first.starts_with('-') {
@@ -3157,6 +3404,10 @@ impl<'a> Runtime<'a> {
         source: &str,
         source_line: usize,
     ) -> String {
+        if self.error_pending() {
+            return String::new();
+        }
+        let connection = self.enter_connection_routine();
         let saved_params = std::mem::replace(&mut self.event.params, params);
         let saved_source = std::mem::replace(&mut self.event.script_source, source.to_string());
         let saved_line = std::mem::replace(&mut self.event.script_line, source_line);
@@ -3167,7 +3418,14 @@ impl<'a> Runtime<'a> {
                                            // the whole alias command, not after the alias body's first statement.
         let saved_pipe_commands = std::mem::take(&mut self.pending_pipe_commands);
         self.local_scopes.push(HashMap::new());
+        let frame = self.local_scopes.len();
         self.run(body);
+        if let Some(error) = self.script_error.as_mut() {
+            if error.handled_at == Some(frame) {
+                error.pending = true; // fell out of :error without /reseterror
+                error.actions_at_error = self.actions.len();
+            }
+        }
         self.local_scopes.pop();
         self.pending_pipe_commands.clear();
         self.pending_pipe_commands = saved_pipe_commands;
@@ -3180,7 +3438,8 @@ impl<'a> Runtime<'a> {
         self.event.script_line = saved_line;
         self.ret = saved_ret;
         // Restore the caller's halt state, but let a non-return /halt bubble up.
-        self.halted = saved_halted || (halted_in_alias && !returned);
+        self.halted = saved_halted || (halted_in_alias && !returned && !self.error_pending());
+        self.leave_connection_routine(connection);
         result
     }
 
@@ -3222,65 +3481,157 @@ impl<'a> Runtime<'a> {
         }
     }
 
-    /// `/echo [switches] [colour] [target] <text>`.
-    ///
-    /// The switches that change *where* the line goes had been collapsed into
-    /// "any switch means the status window", so `/echo -a` — the most common
-    /// line in mSL — printed to the status window instead of the active one.
+    /// `/echo [colour] [switches] [window] <text>`.
     fn cmd_echo(&mut self, raw: &str) {
-        let raw = raw.trim();
-        let mut rest = raw;
+        fn text_tail(after: &str) -> &str {
+            let trimmed = after.trim_start_matches(' ');
+            // A supplied blank/control-only value (notably $crlf) is still
+            // echo text. Only spaces separating syntax from text are skipped.
+            if trimmed.is_empty() { after } else { trimmed }
+        }
+
+        let expanded = self.expand(raw.trim());
+        if self.error_pending() { return; }
+        let mut rest = expanded.as_str();
         let mut target = self.reply_target();
+        // mIRC checks the numeric colour before the switch token. Expand once
+        // first so variable/identifier colours and window names work too.
+        let (first, after_first) = rest
+            .split_once(char::is_whitespace)
+            .unwrap_or((rest, ""));
+        let color = first
+            .parse::<u8>()
+            .ok()
+            .filter(|color| *color <= 99 && first.bytes().all(|b| b.is_ascii_digit()));
+        if color.is_some() {
+            rest = text_tail(after_first);
+        }
+        let mut flags = "";
         if rest.starts_with('-') {
-            let (flags, after) = split_switches(rest);
-            rest = after;
+            let (switches, after) = rest[1..]
+                .split_once(char::is_whitespace)
+                .unwrap_or((&rest[1..], ""));
+            flags = switches;
+            rest = text_tail(after);
             // `-q` honours `$show`: silent when the alias was called with the
             // `.` prefix, exactly as mIRC documents it.
             if flags.contains('q') && !self.show {
                 return;
             }
-            // `-a` is the active window, `-s` the status window. `-d` targets
-            // mIRC's dedicated-query window, which jIRC does not have and is
-            // not adding — it belongs with the MDI window-state switches, so it
-            // is consumed and the default target stands.
-            if flags.contains('a') {
-                target = crate::irc::event::ACTIVE_TARGET.to_string();
-            } else if flags.contains('s') {
-                target = STATUS.to_string();
-            }
             // `-c` says the *next* parameter names a colour, not text. Without
             // consuming it the colour name was printed as part of the message.
+            // Named role colours are not represented by the current palette.
             if flags.contains('c') {
-                if let Some((_colour, after_colour)) = rest.split_once(char::is_whitespace) {
-                    rest = after_colour.trim();
+                if let Some(quoted) = rest.strip_prefix('"') {
+                    let Some(end) = quoted.find('"') else { return };
+                    rest = quoted[end + 1..]
+                        .split_once(char::is_whitespace)
+                        .map(|(_, after)| text_tail(after))
+                        .unwrap_or("");
                 } else {
-                    rest = "";
+                    rest = rest
+                        .split_once(char::is_whitespace)
+                        .map(|(_, after)| text_tail(after))
+                        .unwrap_or("");
                 }
             }
         }
-        // An explicit channel or custom-window target.
-        if let Some((maybe_target, after)) = rest.split_once(char::is_whitespace) {
-            if maybe_target.starts_with('#') || maybe_target.starts_with('@') {
-                target = maybe_target.to_string();
-                rest = after.trim();
+        // Destination switches bypass explicit-window parsing in mIRC, so
+        // `echo -a #room hello` prints the channel name as part of the text.
+        let destination_switch = flags.contains('a') || flags.contains('s') || flags.contains('d');
+        if !destination_switch {
+            if let Some((maybe_target, after)) = rest.split_once(char::is_whitespace) {
+                let known_window = self.wins.entries.iter().find(|(_, server_id, name)| {
+                    server_id == &self.state.server_id
+                        && self.state.isupport.names_equal(name, maybe_target)
+                });
+                if maybe_target.starts_with('@')
+                    || self.state.isupport.is_channel(maybe_target)
+                    || known_window.is_some()
+                {
+                    target = known_window
+                        .map(|(_, _, name)| name.clone())
+                        .unwrap_or_else(|| maybe_target.to_string());
+                    rest = text_tail(after);
+                }
             }
         }
         if target.is_empty() {
             target = STATUS.to_string();
         }
-        let text = self.expand(rest);
-        if target.starts_with('@') {
-            if self.windows.exists(&target) {
-                self.windows.aline(&target, &text);
-                self.actions.push(Action::WindowLine {
-                    name: target,
-                    op: "add".to_string(),
-                    n: 0,
-                    text,
+        if rest.is_empty() {
+            return;
+        }
+        // Reuse the existing colour-code renderer without adding a new action
+        // or UI event. Ctrl-O must return to the echo's requested base colour.
+        let text = if let Some(color) = color.filter(|_| !flags.contains('c')) {
+            let prefix = format!("\u{3}{color:02}");
+            let mut text = String::new();
+            for (index, part) in rest.split('\u{f}').enumerate() {
+                if index != 0 {
+                    text.push('\u{f}');
+                }
+                text.push_str(&prefix);
+                if part.starts_with(',') && part.as_bytes().get(1).is_some_and(u8::is_ascii_digit) {
+                    // Keep a literal `,12` from becoming a background colour.
+                    text.push_str("\u{2}\u{2}");
+                }
+                text.push_str(part);
+            }
+            text
+        } else {
+            rest.to_string()
+        };
+        let mut targets = Vec::new();
+        if flags.contains('s') {
+            targets.push(STATUS.to_string());
+        }
+        if flags.contains('a') {
+            let active = self.wins.active_window.as_ref();
+            let current_server_id = self.window_server_id();
+            // ACTIVE_TARGET falls back to this connection's status when the
+            // focused buffer belongs to another connection. The UI reports
+            // its own status buffer as "Status Window".
+            let active_is_status = active.is_some_and(|(server_id, name)| {
+                server_id.as_str() != current_server_id
+                    || name == STATUS
+                    || name.eq_ignore_ascii_case("Status Window")
+            });
+            if targets.is_empty() || !active_is_status {
+                let custom = active.filter(|(server_id, name)| {
+                    server_id.as_str() == current_server_id
+                        && name.starts_with('@')
+                        && self.windows.exists(name)
+                });
+                // Use the same synchronous store update and single UI action
+                // as an explicitly named custom-window echo.
+                targets.push(custom.map_or_else(
+                    || crate::irc::event::ACTIVE_TARGET.to_string(),
+                    |(_, name)| name.clone(),
+                ));
+            }
+        }
+        if targets.is_empty() {
+            // -d is consumed: jIRC has no dedicated single-message window.
+            targets.push(target);
+        }
+        for target in targets {
+            if target.starts_with('@') {
+                if self.windows.exists(&target) {
+                    self.windows.aline(&target, &text);
+                    self.actions.push(Action::WindowLine {
+                        name: target,
+                        op: "add".to_string(),
+                        n: 0,
+                        text: text.clone(),
+                    });
+                }
+            } else {
+                self.actions.push(Action::Echo {
+                    target,
+                    text: text.clone(),
                 });
             }
-        } else {
-            self.actions.push(Action::Echo { target, text });
         }
     }
 
@@ -3289,6 +3640,7 @@ impl<'a> Runtime<'a> {
     /// a leading `#` is optional. The state is stored under a reserved `%var`.
     fn cmd_set_group(&mut self, raw: &str, on: bool) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let patterns: Vec<String> = expanded.split_whitespace().map(String::from).collect();
         if patterns.is_empty() {
             return;
@@ -3345,6 +3697,31 @@ impl<'a> Runtime<'a> {
         }
     }
 
+    /// Reads a variable name built with `$+` the way mIRC's /set, /var, /inc,
+    /// /dec and /unset do: the leading `%name` is literal (never dereferenced,
+    /// even when that variable exists) and each piece after a `$+` is
+    /// evaluated, so `set %n. $+ $nick 1` assigns `%n.<nick>`. Returns the name
+    /// without its `%`, the text after it, and whether any join happened.
+    fn join_var_name<'t>(&mut self, text: &'t str) -> (String, &'t str, bool) {
+        let (first, mut rest) = split_first_word(text);
+        let mut name = first.to_string();
+        let mut joined = false;
+        loop {
+            let (join, after) = split_first_word(rest);
+            if join != "$+" {
+                break;
+            }
+            let (piece, after) = split_first_word(after);
+            if piece.is_empty() {
+                break;
+            }
+            name.push_str(&self.eval_token(piece));
+            rest = after;
+            joined = true;
+        }
+        (name.trim_start_matches('%').to_string(), rest, joined)
+    }
+
     /// `/set [-switches] %var value` and `/var [-switches] %var = value`.
     /// `is_var` selects mIRC's `/var` form: `=` assignment and comma-separated
     /// declarations (`/var %a = 1, %b, %c = $me`). `/set` takes the rest of the
@@ -3353,131 +3730,113 @@ impl<'a> Runtime<'a> {
     /// and `-k` preserves an existing lifetime.
     fn cmd_set(&mut self, raw: &str, is_var: bool) {
         let (flags, rest) = split_switches(raw);
-        // Pre-evaluate square-bracket groups before separating the target name
-        // from its value. This preserves the completed `%name` as a literal
-        // assignment target instead of dereferencing it, and implements the
-        // documented `/set %base [ $+ suffix ] value` form.
+        // Resolve bracket-built variable names before splitting declarations;
+        // completed targets remain literal names rather than value lookups.
         let rest = self
             .expand_evaluation_brackets(split_top_level(rest))
             .join(" ");
-        let rest = rest.as_str();
-        let flags_lower = flags.to_ascii_lowercase();
-        // mIRC applies one math operation by default (`var %a 1 + 2` -> 3);
-        // -n and -p suppress it (keep the value literal).
-        let no_math = flags_lower.contains('n') || flags_lower.contains('p');
-        let force_global = flags_lower.contains('g');
-        let force_local = !force_global && flags_lower.contains('l');
-        // `-i` initialises: leave an existing value alone. Without it the
-        // idiom `set -i %first_run 1` overwrote on every call.
-        let init_only = flags_lower.contains('i');
-        // `-s` echoes the assignment, as mIRC does. With `-z` mIRC also echoes
-        // each decrement and the final unset; those come from its once-a-second
-        // tick, which the lazy countdown below has no equivalent of, so only the
-        // assignment is reported.
-        let show_assignment = flags_lower.contains('s');
-        // `-z` counts the value down to zero and unsets it there. mIRC documents
-        // it only for a whole number, so anything else (a negative, a float, or
-        // text) stays an ordinary assignment rather than a guessed countdown.
-        let countdown = flags_lower.contains('z');
-        // `-p` permits the two values mIRC otherwise refuses: a bare pair of
-        // double quotes, and a single trailing space. Without it those are
-        // stripped — which is the whole reason var.rst tells scripts to use
-        // `-p` when putting an event's `$1-` into a variable.
-        let permit_literal = flags_lower.contains('p');
-        if is_var {
-            for decl in split_top_commas(rest) {
-                let decl = decl.trim();
-                if decl.is_empty() {
-                    continue;
-                }
-                // The name runs to the first space or '='; then an optional '='
-                // assignment (mIRC's `=` is optional and stripped, unlike /set).
+        if self.error_pending() {
+            return;
+        }
+        let flags = flags.to_ascii_lowercase();
+        let no_math = flags.contains('n') || flags.contains('p');
+        let force_global = flags.contains('g');
+        let force_local = flags.contains('l');
+        let permit_literal = flags.contains('p');
+        let declarations = if is_var {
+            split_top_commas(&rest)
+        } else {
+            vec![rest]
+        };
+        for decl in declarations {
+            let decl = decl.trim();
+            if decl.is_empty() {
+                continue;
+            }
+            let (joined_name, joined_rest, joined) = self.join_var_name(decl);
+            let (name, vraw) = if joined {
+                // A built name is followed directly by its value; mIRC does not
+                // look for `=` here (`var %a $+ b = 5` stores `= 5`).
+                (joined_name.as_str(), joined_rest)
+            } else if is_var {
+                // /var permits comma-separated names and an optional '='.
                 let name_end = decl
                     .find(|c: char| c.is_whitespace() || c == '=')
                     .unwrap_or(decl.len());
-                let key = decl[..name_end].trim_start_matches('%').trim().to_string();
-                if key.is_empty() {
-                    continue;
-                }
                 let vraw = decl[name_end..].trim_start();
                 let vraw = vraw.strip_prefix('=').map(str::trim_start).unwrap_or(vraw);
-                let mut value = self.expand(vraw);
-                if !no_math {
-                    value = try_var_math(&value).unwrap_or(value);
-                }
-                if !permit_literal {
-                    value = strip_unpermitted_value(value);
-                }
-                if force_global {
-                    update_timed_expiry(self.var_expiry, key.clone(), flags);
-                    self.vars.insert(key, value);
-                } else {
-                    // `/var` is routine-local by default (and with `-l`). Its
-                    // frame disappears when this alias returns independently
-                    // of the persistent global store.
-                    self.set_local_var(key, value);
-                }
+                (&decl[..name_end], vraw)
+            } else {
+                decl.split_once(char::is_whitespace).unwrap_or((decl, ""))
+            };
+            let key = name.trim_start_matches('%').trim();
+            if key.is_empty() {
+                continue;
             }
-        } else if let Some((name, value)) = rest.split_once(char::is_whitespace) {
-            let key = name.trim_start_matches('%').to_string();
-            let mut value = self.expand(value.trim());
+            // -gl assigns this same evaluated value to both namespaces, without
+            // calling any side-effecting identifier a second time.
+            let mut value = self.expand(vraw.trim());
+            if self.error_pending() || self.abandoned_at.is_some() {
+                return;
+            }
             if !no_math {
                 value = try_var_math(&value).unwrap_or(value);
             }
             if !permit_literal {
                 value = strip_unpermitted_value(value);
             }
-            // `-i` only assigns when there is nothing there yet.
-            if init_only && self.var_value(&key).is_some_and(|v| !v.is_empty()) {
-                return;
+            let has_local = self
+                .local_scopes
+                .last()
+                .is_some_and(|scope| scope.contains_key(key));
+            let local = force_local || (!force_global && (is_var || has_local));
+            let global = force_global || (!force_local && !local);
+            if local {
+                self.set_variable_value(key, &value, &flags, true);
             }
-            let countdown_secs = if countdown {
-                value.trim().parse::<u64>().ok()
-            } else {
-                None
-            };
-            if show_assignment {
-                let target = self.reply_target();
-                self.actions.push(Action::Echo {
-                    target,
-                    text: format!("* Set %{key} to {value}"),
-                });
+            if global {
+                self.set_variable_value(key, &value, &flags, false);
             }
-            let is_local = if force_global {
-                self.vars.insert(key.clone(), value);
-                false
-            } else if force_local {
-                self.set_local_var(key.clone(), value);
-                true
-            } else {
-                // An existing routine-local variable takes precedence over a
-                // same-named global unless `-g` explicitly overrides it.
-                self.set_visible_var(key.clone(), value)
-            };
-            if !is_local {
-                // `-z` is its own lifetime (`-u<value>`), so it replaces any
-                // `-uN`/`-k` handling rather than running alongside it.
-                match countdown_secs {
-                    Some(seconds) => {
-                        self.var_expiry.insert(key, TimedExpiry::counting_down(seconds));
-                    }
-                    None => update_timed_expiry(self.var_expiry, key, flags),
+        }
+    }
+
+    /// Applies one assignment after namespace selection. Native mIRC's local
+    /// and global setters independently check node existence for -i.
+    fn set_variable_value(&mut self, key: &str, value: &str, flags: &str, local: bool) {
+        let exists = if local {
+            self.local_scopes
+                .last()
+                .is_some_and(|scope| scope.contains_key(key))
+        } else {
+            self.vars.contains_key(key)
+        };
+        if flags.contains('i') && exists {
+            return;
+        }
+        if local {
+            self.set_local_var(key.to_string(), value.to_string());
+        } else {
+            self.vars.insert(key.to_string(), value.to_string());
+            // Local-only writes never change a hidden global's lifetime. A
+            // skipped -i write likewise leaves its existing deadline intact.
+            let countdown_secs = flags
+                .contains('z')
+                .then(|| value.trim().parse::<u64>().ok())
+                .flatten();
+            match countdown_secs {
+                Some(seconds) => {
+                    self.var_expiry
+                        .insert(key.to_string(), TimedExpiry::counting_down(seconds));
                 }
+                None => update_timed_expiry(self.var_expiry, key.to_string(), flags),
             }
-        } else if !rest.is_empty() {
-            let key = rest.trim_start_matches('%').to_string();
-            let is_local = if force_global {
-                self.vars.insert(key.clone(), String::new());
-                false
-            } else if force_local {
-                self.set_local_var(key.clone(), String::new());
-                true
-            } else {
-                self.set_visible_var(key.clone(), String::new())
-            };
-            if !is_local {
-                update_timed_expiry(self.var_expiry, key, flags);
-            }
+        }
+        // Lazy countdowns have no per-tick output; -s reports assignment here.
+        if flags.contains('s') {
+            self.actions.push(Action::Echo {
+                target: self.reply_target(),
+                text: format!("* Set %{key} to {value}"),
+            });
         }
     }
 
@@ -3626,25 +3985,47 @@ impl<'a> Runtime<'a> {
     }
 
     fn cmd_unset(&mut self, raw: &str) {
-        let (_flags, rest) = split_switches(raw);
-        for tok in rest.split_whitespace() {
-            // /unset takes literal variable names/patterns — don't value-expand
-            // them (so `%i7f.*` stays a wildcard rather than becoming its value).
-            let pat = tok.trim_start_matches('%');
+        let (flags, rest) = split_switches(raw);
+        let force_global = flags.contains('g');
+        let force_local = flags.contains('l');
+        // /unset takes literal variable names/patterns — don't value-expand
+        // them (so `%i7f.*` stays a wildcard rather than becoming its value) —
+        // but a name may be built with `$+` (`unset %n. $+ $nick`).
+        let mut names = Vec::new();
+        let mut remaining = rest;
+        while !remaining.trim().is_empty() {
+            let (name, after, _) = self.join_var_name(remaining);
+            names.push(name);
+            remaining = after;
+        }
+        // Names stay literal, but mIRC still evaluates a `$$` in the line: an
+        // empty one stops the command before anything is removed.
+        for name in &names {
+            if name.starts_with("$$") {
+                self.eval_token(name);
+            }
+        }
+        if self.error_pending() || self.abandoned_at.is_some() {
+            return;
+        }
+        for pat in &names {
+            let pat = pat.as_str();
             if pat.is_empty() {
                 continue;
             }
             if pat.contains('*') || pat.contains('?') {
-                // Without an explicit -g/-l switch, mIRC resolves variables in
-                // the same local-first order as reads. Remove matches from the
-                // nearest local frame that has any; hidden globals stay intact.
-                if let Some(scope) = self
-                    .local_scopes
-                    .iter_mut()
-                    .rev()
-                    .find(|scope| scope.keys().any(|k| wildcard_match(pat, k)))
-                {
-                    scope.retain(|k, _| !wildcard_match(pat, k));
+                // Wildcard /unset exhausts local matches and then globals;
+                // explicit -g/-l restrict removal to the selected namespace.
+                if !force_global || force_local {
+                    if let Some(scope) = self
+                        .local_scopes
+                        .last_mut()
+                        .filter(|scope| scope.keys().any(|k| wildcard_match(pat, k)))
+                    {
+                        scope.retain(|k, _| !wildcard_match(pat, k));
+                    }
+                }
+                if force_local && !force_global {
                     continue;
                 }
                 let keys: Vec<String> = self
@@ -3658,13 +4039,19 @@ impl<'a> Runtime<'a> {
                     self.var_expiry.remove(&k);
                 }
             } else {
-                if let Some(scope) = self
-                    .local_scopes
-                    .iter_mut()
-                    .rev()
-                    .find(|scope| scope.contains_key(pat))
-                {
-                    scope.remove(pat);
+                if !force_global || force_local {
+                    if let Some(scope) = self
+                        .local_scopes
+                        .last_mut()
+                        .filter(|scope| scope.contains_key(pat))
+                    {
+                        scope.remove(pat);
+                        if !force_global {
+                            continue;
+                        }
+                    }
+                }
+                if force_local && !force_global {
                     continue;
                 }
                 self.vars.remove(pat);
@@ -3675,14 +4062,19 @@ impl<'a> Runtime<'a> {
 
     fn cmd_incdec(&mut self, raw: &str, sign: i64) {
         let (flags, rest) = split_switches(raw);
-        let mut it = rest.split_whitespace();
-        let Some(name) = it.next() else { return };
-        let key = name.trim_start_matches('%').to_string();
-        let by: i64 = it
+        let (key, amount, _) = self.join_var_name(rest);
+        if key.is_empty() {
+            return;
+        }
+        let by: i64 = amount
+            .split_whitespace()
             .next()
             .map(|s| self.expand(s))
             .and_then(|s| s.trim().parse().ok())
             .unwrap_or(1);
+        if self.abandoned_at.is_some() {
+            return;
+        }
         let cur: i64 = self
             .var_value(&key)
             .and_then(|v| v.parse().ok())
@@ -3698,6 +4090,9 @@ impl<'a> Runtime<'a> {
     /// directory. Text files are written with CRLF separators like mIRC.
     fn cmd_write(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() || self.abandoned_at.is_some() {
+            return;
+        }
         let mut rest = expanded.trim_start();
         let mut switches = String::new();
         if let Some(body) = rest.strip_prefix('-') {
@@ -3820,6 +4215,7 @@ impl<'a> Runtime<'a> {
     /// switches are accepted but have no source in the reduced jIRC UI model.
     fn cmd_filter(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut rest = expanded.trim_start();
         let mut switches = String::new();
         if let Some(body) = rest.strip_prefix('-') {
@@ -4009,10 +4405,14 @@ impl<'a> Runtime<'a> {
             if !self.windows.exists(&output) {
                 self.windows
                     .open(&output, super::window::WindowKind::Listbox, &output);
+                let server_id = self.window_server_id().to_string();
+                self.wins.window_opened(&server_id, &output, false);
                 self.actions.push(Action::WindowOpen {
                     name: output.clone(),
                     kind: "listbox".to_string(),
                     title: output.clone(),
+                    editbox: false,
+                    activate: false,
                 });
             }
             if switches.contains('c') {
@@ -4058,6 +4458,9 @@ impl<'a> Runtime<'a> {
     /// `/writeini [-n] <file> <section> <item> <value>` — set an INI item.
     fn cmd_writeini(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() {
+            return;
+        }
         let mut rest = expanded.trim();
         while rest.starts_with('-') {
             rest = rest
@@ -4066,11 +4469,12 @@ impl<'a> Runtime<'a> {
                 .unwrap_or("")
                 .trim();
         }
-        let mut parts = rest.splitn(4, char::is_whitespace);
-        if let (Some(file), Some(section), Some(item), Some(value)) =
-            (parts.next(), parts.next(), parts.next(), parts.next())
+        let Some((file, rest)) = take_file_arg(rest) else { return };
+        let mut parts = rest.splitn(3, char::is_whitespace);
+        if let (Some(section), Some(item), Some(value)) =
+            (parts.next(), parts.next(), parts.next())
         {
-            let path = sandbox_path(&self.data_dir, file);
+            let path = sandbox_path(&self.data_dir, &file);
             let text = std::fs::read_to_string(&path).unwrap_or_default();
             let _ = std::fs::write(&path, super::ini::set(&text, section, item, value));
         }
@@ -4079,10 +4483,14 @@ impl<'a> Runtime<'a> {
     /// `/remini <file> <section> [item]` — remove an INI item, or a whole section.
     fn cmd_remini(&mut self, raw: &str) {
         let expanded = self.expand(raw);
-        let mut parts = expanded.split_whitespace();
-        if let (Some(file), Some(section)) = (parts.next(), parts.next()) {
+        if self.error_pending() {
+            return;
+        }
+        let Some((file, rest)) = take_file_arg(&expanded) else { return };
+        let mut parts = rest.split_whitespace();
+        if let Some(section) = parts.next() {
             let item = parts.next();
-            let path = sandbox_path(&self.data_dir, file);
+            let path = sandbox_path(&self.data_dir, &file);
             let text = std::fs::read_to_string(&path).unwrap_or_default();
             let _ = std::fs::write(&path, super::ini::remove(&text, section, item));
         }
@@ -4091,8 +4499,11 @@ impl<'a> Runtime<'a> {
     /// `/fopen [-nox] <name> <filename>` — open a file with a named handle.
     fn cmd_fopen(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() {
+            return;
+        }
         let mut rest = expanded.trim();
-        let (mut create_new, mut overwrite) = (false, false);
+        let (mut create_new, mut overwrite, mut exclusive) = (false, false, false);
         while let Some(stripped) = rest.strip_prefix('-') {
             let (sw, more) = stripped
                 .split_once(char::is_whitespace)
@@ -4103,19 +4514,22 @@ impl<'a> Runtime<'a> {
             if sw.contains('o') {
                 overwrite = true;
             }
-            // -x (exclusive) is accepted but a no-op: we re-open per operation.
+            exclusive |= sw.contains('x');
             rest = more.trim();
         }
         let mut parts = rest.splitn(2, char::is_whitespace);
         if let (Some(name), Some(file)) = (parts.next(), parts.next()) {
             let path = sandbox_path(&self.data_dir, file.trim());
-            self.files.open(name, path, create_new, overwrite);
+            self.files.open_exclusive(name, path, create_new, overwrite, exclusive);
         }
     }
 
     /// `/fwrite [-bn] <name> <text>` — write at the pointer; `-n` appends a `$crlf`.
     fn cmd_fwrite(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() {
+            return;
+        }
         let mut rest = expanded.trim();
         let (mut binary, mut newline) = (false, false);
         while let Some(stripped) = rest.strip_prefix('-') {
@@ -4155,6 +4569,7 @@ impl<'a> Runtime<'a> {
     fn cmd_fseek(&mut self, raw: &str) {
         use super::files::SeekMode;
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut rest = expanded.trim();
         let mut sw = "";
         if let Some(stripped) = rest.strip_prefix('-') {
@@ -4189,6 +4604,7 @@ impl<'a> Runtime<'a> {
     /// (`-t` = the values are plain text, `-z` = empty the var first).
     fn cmd_bset(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut rest = expanded.trim();
         let (mut text, mut zero) = (false, false);
         while let Some(stripped) = rest.strip_prefix('-') {
@@ -4225,6 +4641,7 @@ impl<'a> Runtime<'a> {
     /// `/bunset <&binvar> [&binvar…]` — unset binary variables.
     fn cmd_bunset(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         for name in expanded.split_whitespace() {
             self.bins.unset(name);
         }
@@ -4234,6 +4651,7 @@ impl<'a> Runtime<'a> {
     /// to &dest position N (1-based positions).
     fn cmd_bcopy(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let p: Vec<&str> = expanded.split_whitespace().collect();
         if p.len() < 5 {
             return;
@@ -4260,6 +4678,7 @@ impl<'a> Runtime<'a> {
     /// values throughout &binvar.
     fn cmd_breplace(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut parts = expanded.split_whitespace();
         let Some(name) = parts.next() else { return };
         let nums: Vec<u8> = parts
@@ -4291,6 +4710,7 @@ impl<'a> Runtime<'a> {
     /// `/btrunc <file> <bytes>` — truncate or zero-extend a file to `bytes` long.
     fn cmd_btrunc(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut parts = expanded.splitn(2, char::is_whitespace);
         let (Some(file), Some(len)) = (parts.next(), parts.next()) else {
             return;
@@ -4309,6 +4729,7 @@ impl<'a> Runtime<'a> {
     /// `/bread [-ta] <file> <S> <N> <&binvar>` — file offsets are zero-based.
     fn cmd_bread(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut rest = expanded.trim();
         while let Some(stripped) = rest.strip_prefix('-') {
             let (_, more) = stripped
@@ -4335,6 +4756,7 @@ impl<'a> Runtime<'a> {
     /// S=-1 appends, N omitted/-1 writes all, and -c truncates after the data.
     fn cmd_bwrite(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut rest = expanded.trim();
         let (mut text, mut chop) = (false, false);
         while let Some(stripped) = rest.strip_prefix('-') {
@@ -4393,9 +4815,12 @@ impl<'a> Runtime<'a> {
     fn cmd_window(&mut self, raw: &str) {
         use super::window::WindowKind;
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut rest = expanded.trim();
         let mut close = false;
-        let mut kind = WindowKind::Listbox;
+        let mut editbox = false;
+        let mut picture = false;
+        let mut activate = false;
         while let Some(stripped) = rest.strip_prefix('-') {
             let (sw, more) = stripped
                 .split_once(char::is_whitespace)
@@ -4403,11 +4828,9 @@ impl<'a> Runtime<'a> {
             if sw.contains('c') {
                 close = true;
             }
-            if sw.contains('e') {
-                kind = WindowKind::Editbox;
-            } else if sw.contains('p') {
-                kind = WindowKind::Picture;
-            }
+            editbox |= sw.contains('e');
+            picture |= sw.contains('p');
+            activate |= sw.contains('a');
             rest = more.trim();
         }
         let Some(name) = rest.split_whitespace().next() else {
@@ -4416,17 +4839,33 @@ impl<'a> Runtime<'a> {
         if !name.starts_with('@') {
             return;
         }
+        let server_id = self.window_server_id().to_string();
         if close {
             self.windows.close(name);
+            self.wins.window_closed(&server_id, name);
             self.actions.push(Action::WindowClose {
                 name: name.to_string(),
             });
         } else {
+            let kind = if picture {
+                WindowKind::Picture
+            } else if editbox {
+                WindowKind::Editbox
+            } else {
+                WindowKind::Listbox
+            };
             self.windows.open(name, kind, name);
+            if editbox {
+                self.windows.enable_editbox(name);
+            }
+            let window = self.windows.get(name).unwrap();
+            self.wins.window_opened(&server_id, name, activate);
             self.actions.push(Action::WindowOpen {
                 name: name.to_string(),
-                kind: kind.as_str().to_string(),
-                title: name.to_string(),
+                kind: window.kind.as_str().to_string(),
+                title: window.title.clone(),
+                editbox: window.editbox,
+                activate,
             });
         }
     }
@@ -4434,6 +4873,7 @@ impl<'a> Runtime<'a> {
     /// `/titlebar @window <text>` — set a custom window's displayed title.
     fn cmd_window_title(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut parts = expanded.trim().splitn(2, char::is_whitespace);
         let name = parts.next().unwrap_or("");
         let title = parts.next().unwrap_or("").trim();
@@ -4451,6 +4891,7 @@ impl<'a> Runtime<'a> {
     /// in jIRC's script-data sandbox; `-r` clears the window first.
     fn cmd_loadbuf(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut rest = expanded.trim();
         let mut range = None;
         if let Some((first, more)) = rest.split_once(char::is_whitespace) {
@@ -4502,6 +4943,7 @@ impl<'a> Runtime<'a> {
     /// file in jIRC's script-data sandbox; `-a` appends.
     fn cmd_savebuf(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut rest = expanded.trim();
         let mut append = false;
         if rest.starts_with('-') {
@@ -4554,6 +4996,7 @@ impl<'a> Runtime<'a> {
     /// `-f <name>` (focus), and `-c <name>` (close).
     fn cmd_webview(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut head = expanded.trim().splitn(2, char::is_whitespace);
         let switch = head.next().unwrap_or("").to_ascii_lowercase();
         let rest = head.next().unwrap_or("").trim();
@@ -4623,6 +5066,7 @@ impl<'a> Runtime<'a> {
     /// `/aline @w text`, `/rline @w N text`, `/iline @w N text`, `/dline @w N`.
     fn cmd_window_line(&mut self, raw: &str, op: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut rest = expanded.trim();
         // The switch token was previously skipped whole, so none of these did
         // anything. Four of them are things jIRC's window model can honour:
@@ -4717,6 +5161,7 @@ impl<'a> Runtime<'a> {
     /// `/sline [-a|-r] @window N` — set/add/remove listbox selection.
     fn cmd_window_select(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut parts = expanded.split_whitespace();
         let first = parts.next().unwrap_or("");
         let (switches, name) = if first.starts_with('-') {
@@ -4750,6 +5195,7 @@ impl<'a> Runtime<'a> {
     /// existing custom-window line without changing its text.
     fn cmd_window_color(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut parts = expanded.split_whitespace();
         let name = parts.next().unwrap_or("");
         let line = parts
@@ -4784,6 +5230,7 @@ impl<'a> Runtime<'a> {
 
     fn cmd_window_draw(&mut self, op: &str, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut rest = expanded.trim();
         let mut switches = String::new();
         if rest.starts_with('-') {
@@ -4861,6 +5308,7 @@ impl<'a> Runtime<'a> {
     /// a frontend concern, deferred).
     fn cmd_window_clear(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut parts = expanded.split_whitespace();
         let first = parts.next().unwrap_or("");
         let (switches, name) = if first.starts_with('-') {
@@ -4887,6 +5335,7 @@ impl<'a> Runtime<'a> {
     fn cmd_sockopen(&mut self, raw: &str) {
         self.event.sock_error = 0;
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut toks = expanded.split_whitespace().peekable();
         let mut flags = String::new();
         while toks.peek().is_some_and(|token| token.starts_with('-')) {
@@ -4981,6 +5430,7 @@ impl<'a> Runtime<'a> {
     fn cmd_sockudp(&mut self, raw: &str) {
         self.event.sock_error = 0;
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut rest = expanded.trim();
         let mut flags = String::new();
         while rest.starts_with('-') {
@@ -5108,6 +5558,7 @@ impl<'a> Runtime<'a> {
     fn cmd_sockwrite(&mut self, raw: &str) {
         self.event.sock_error = 0;
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut rest = expanded.trim();
         let mut flags = String::new();
         while rest.starts_with('-') {
@@ -5199,6 +5650,7 @@ impl<'a> Runtime<'a> {
     /// mIRC switches are accepted and ignored.
     fn cmd_server(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let new_window = expanded
             .split_whitespace()
             .take_while(|t| t.starts_with('-'))
@@ -5224,6 +5676,7 @@ impl<'a> Runtime<'a> {
     /// tooltip/icon/command. Quoted fields preserve spaces.
     fn cmd_toolbar(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut rest = expanded.trim();
         let (switches, more) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
         if !switches.starts_with('-') {
@@ -5322,6 +5775,7 @@ impl<'a> Runtime<'a> {
     /// `-b name id "label" "/command $!1"`, `-d name [id]`, `-c`.
     fn cmd_panel(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut rest = expanded.trim();
         let (switches, more) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
         if !switches.starts_with('-') {
@@ -5461,6 +5915,7 @@ impl<'a> Runtime<'a> {
     fn cmd_socklisten(&mut self, raw: &str) {
         self.event.sock_error = 0;
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         // mIRC syntax: /socklisten [-dnpu] [bindip] <name> [port]. `-p` is
         // accepted for compatibility; jIRC does not create UPnP mappings.
         let mut toks = expanded.split_whitespace().peekable();
@@ -5521,6 +5976,7 @@ impl<'a> Runtime<'a> {
     fn cmd_sockmark(&mut self, raw: &str) {
         self.event.sock_error = 0;
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let trimmed = expanded.trim();
         let (name, mark) = trimmed
             .split_once(char::is_whitespace)
@@ -5653,6 +6109,7 @@ impl<'a> Runtime<'a> {
     /// Portable `/dialog` modeless operations.
     fn cmd_dialog(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut toks = expanded.split_whitespace();
         let first = toks.next().unwrap_or("");
         let (flags, name) = if first.starts_with('-') {
@@ -5665,6 +6122,7 @@ impl<'a> Runtime<'a> {
         }
         if flags.contains('c') || flags.contains('x') {
             clear_dialog_state(self.vars, name);
+            self.dialogs.lock().unwrap().close(name);
             self.actions.push(Action::DialogClose {
                 name: name.to_string(),
             });
@@ -5686,6 +6144,7 @@ impl<'a> Runtime<'a> {
         if flags.contains('g') {
             let new_name = toks.next().unwrap_or("");
             rename_dialog_state(self.vars, name, new_name);
+            self.dialogs.lock().unwrap().rename(name, new_name);
             self.actions.push(Action::DialogSet {
                 dialog: name.to_string(),
                 control: String::new(),
@@ -5713,12 +6172,20 @@ impl<'a> Runtime<'a> {
             });
             return;
         }
+        if flags.contains('v') && self.dialogs.lock().unwrap().contains(name) {
+            self.actions.push(Action::DialogSet {
+                dialog: name.to_string(), control: String::new(),
+                op: "activate".into(), value: String::new(),
+            });
+            return;
+        }
         let table = if flags.contains('m') {
             toks.next().unwrap_or(name)
         } else {
             name
         };
         if let Some(d) = self.script.find_dialog(table) {
+            self.dialogs.lock().unwrap().open(name, d);
             self.vars
                 .insert(dialog_state_key(name, "table"), table.to_string());
             self.vars
@@ -5740,6 +6207,7 @@ impl<'a> Runtime<'a> {
     /// Portable `/did` control mutation.
     fn cmd_did(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut it = expanded.split_whitespace();
         let first = it.next().unwrap_or("");
         let (flags, dialog) = if first.starts_with('-') {
@@ -5751,53 +6219,44 @@ impl<'a> Runtime<'a> {
         if dialog.is_empty() || control.is_empty() {
             return;
         }
-        let mut tail = it.collect::<Vec<_>>();
-        let op = if flags.contains('a') {
-            "add"
-        } else if flags.contains('i') {
-            "insert"
-        } else if flags.contains('o') {
-            "replace"
-        } else if flags.contains('d') {
-            "delete"
-        } else if flags.contains('r') {
-            "clear"
-        } else if flags.contains('e') || flags.contains('n') {
-            "enable"
-        } else if flags.contains('b') || flags.contains('m') {
-            "disable"
-        } else if flags.contains('v') {
-            "show"
-        } else if flags.contains('h') {
-            "hide"
-        } else if flags.contains('f') {
-            "focus"
-        } else if flags.contains('t') {
-            "default"
-        } else if flags.contains('c') && flags.contains('u') {
-            "indeterminate"
-        } else if flags.contains('c') || flags.contains('s') {
-            "check"
-        } else if flags.contains('u') || flags.contains('l') {
-            "uncheck"
-        } else if flags.contains('z') {
-            "range"
-        } else {
-            "set"
-        };
-        let value = tail.drain(..).collect::<Vec<_>>().join(" ");
+        let value = it.collect::<Vec<_>>().join(" ");
+        // Reset and append are independent operations: -ra is the common
+        // replace-text idiom, and both script reads and UI actions see it so.
+        let mut operations = Vec::new();
+        if flags.contains('r') { operations.push("clear"); }
+        if flags.contains('a') { operations.push("add"); }
+        else if flags.contains('i') { operations.push("insert"); }
+        else if flags.contains('o') { operations.push("replace"); }
+        else if flags.contains('d') { operations.push("delete"); }
+        if flags.contains('e') || flags.contains('n') { operations.push("enable"); }
+        if flags.contains('b') || flags.contains('m') { operations.push("disable"); }
+        if flags.contains('v') { operations.push("show"); }
+        if flags.contains('h') { operations.push("hide"); }
+        if flags.contains('f') { operations.push(if flags.contains('u') { "tab" } else { "focus" }); }
+        if flags.contains('t') { operations.push("default"); }
+        if flags.contains('c') && flags.contains('u') { operations.push("indeterminate"); }
+        else if flags.contains('c') || flags.contains('s') {
+            operations.push(if flags.contains('k') { "check-keep" } else { "check" });
+        } else if (flags.contains('u') && !flags.contains('f')) || flags.contains('l') {
+            operations.push(if flags.contains('k') { "uncheck-keep" } else { "uncheck" });
+        }
+        if flags.contains('z') { operations.push("range"); }
+        if flags.contains('g') { operations.push("icon"); }
+        if flags.contains('j') { operations.push("edited-reset"); }
+        if operations.is_empty() { operations.push("set"); }
         for id in expand_dialog_ids(control) {
-            self.actions.push(Action::DialogSet {
-                dialog: dialog.to_string(),
-                control: id,
-                op: op.to_string(),
-                value: value.clone(),
-            });
+            for op in &operations {
+                let operation_value = if flags.contains('a') && op.starts_with("check") {
+                    self.dialogs.lock().unwrap().line_count(dialog, &id).to_string()
+                } else { value.clone() };
+                self.queue_dialog_mutation(dialog, &id, op, &operation_value);
+            }
         }
     }
 
     fn cmd_didtok(&mut self, raw: &str) {
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut parts = expanded.splitn(4, char::is_whitespace);
         let dialog = parts.next().unwrap_or("");
         let control = parts.next().unwrap_or("");
@@ -5808,20 +6267,16 @@ impl<'a> Runtime<'a> {
             .unwrap_or(',');
         let text = parts.next().unwrap_or("");
         for value in text.split(delimiter) {
-            self.actions.push(Action::DialogSet {
-                dialog: dialog.to_string(),
-                control: control.to_string(),
-                op: "add".into(),
-                value: value.to_string(),
-            });
+            self.queue_dialog_mutation(dialog, control, "add", value);
         }
     }
 
     /// `/hsave -s[bBniau] <table> <file> [section]` — save a hash table using
     /// mIRC's text, INI, 16-bit-index (`-b`), or 32-bit-index (`-B`) format.
-    fn cmd_hsave(&mut self, raw: &str) {
+    fn cmd_hsave(&mut self, raw: &str, show: bool) {
         let (flags, rest) = split_switches(raw);
         let expanded = self.expand(rest);
+        if self.error_pending() { return; }
         let Some((table, rest)) = take_file_arg(&expanded) else {
             return;
         };
@@ -5877,22 +6332,22 @@ impl<'a> Runtime<'a> {
         } else {
             std::fs::write(path, bytes).is_ok()
         };
-        // hsave.rst: -s displays "* Saved hash table <table> to <filename>",
-        // and only on success.
-        if saved && flags.contains('s') {
+        // Native mIRC string resource 0xb90 quotes both names.
+        if saved && show && flags.contains('s') {
             let target = self.reply_target();
             self.actions.push(Action::Echo {
                 target,
-                text: format!("* Saved hash table {table} to {file}"),
+                text: format!("* Saved hash table '{table}' to '{file}'"),
             });
         }
     }
 
     /// `/hload -s[mN bBni] <table> <file> [section]` — load a table saved by
     /// `/hsave`. `-mN` creates a missing table and retains its slot count.
-    fn cmd_hload(&mut self, raw: &str) {
+    fn cmd_hload(&mut self, raw: &str, show: bool) {
         let (flags, rest) = split_switches(raw);
         let expanded = self.expand(rest);
+        if self.error_pending() { return; }
         let Some((table, rest)) = take_file_arg(&expanded) else {
             return;
         };
@@ -5949,7 +6404,7 @@ impl<'a> Runtime<'a> {
             }
             // hload.rst: -s displays
             // "* Loaded hash table '<name>' from '<filename>'".
-            if flags.contains('s') {
+            if show && flags.contains('s') {
                 let target = self.reply_target();
                 self.actions.push(Action::Echo {
                     target,
@@ -5959,25 +6414,44 @@ impl<'a> Runtime<'a> {
         }
     }
 
-    /// `/hmake [-s] <name> [slots]` — create an (empty) hash table. Slots are a
-    /// sizing hint in mIRC; ignored here.
-    fn cmd_hmake(&mut self, raw: &str) {
-        let (_flags, rest) = split_switches(raw);
+    /// `/hmake [-smN] <name> [slots]` — create a table and record its declared
+    /// mIRC bucket count; the Rust map still manages its own allocation.
+    fn cmd_hmake(&mut self, raw: &str, show: bool) {
+        let (flags, rest) = split_switches(raw);
         let expanded = self.expand(rest);
+        if self.error_pending() || self.abandoned_at.is_some() { return; }
         let mut args = expanded.split_whitespace();
         if let Some(table) = args.next() {
             let table = table.to_string();
-            let slots = args.next().and_then(|n| n.parse().ok()).unwrap_or(100);
+            let slots = write_numeric_switch(flags, 'm')
+                .map(|value| value as usize)
+                .or_else(|| args.next().and_then(|n| n.parse().ok()))
+                .unwrap_or(100);
             if super::hash::table_key(self.hashes, &table).is_some() {
+                if show && flags.contains('s') {
+                    self.actions.push(Action::Echo {
+                        target: self.reply_target(),
+                        text: format!("* /hmake: hash table exists '{table}'"),
+                    });
+                }
                 return;
             }
             self.hashes.entry(table.clone()).or_default();
             super::hash::set_slots(self.hashes, &table, slots);
+            if show && flags.contains('s') {
+                self.actions.push(Action::Echo {
+                    target: self.reply_target(),
+                    text: format!(
+                        "* Made hash table '{table}' ({})",
+                        super::hash::slots(self.hashes, &table)
+                    ),
+                });
+            }
         }
     }
 
     /// `/hfree [-w] <name>` — delete a hash table (`-w`: name is a wildcard).
-    fn cmd_hfree(&mut self, raw: &str) {
+    fn cmd_hfree(&mut self, raw: &str, show: bool) {
         let (flags, rest) = split_switches(raw);
         let wild = flags.contains('w');
         if let Some(table) = rest.split_whitespace().next() {
@@ -5987,16 +6461,29 @@ impl<'a> Runtime<'a> {
                     .into_iter()
                     .filter(|name| wildcard_match(&table, name))
                     .collect();
+                let count = keys.len();
                 for k in keys {
                     self.hashes.remove(&k);
                     super::hash::remove_slots(self.hashes, &k);
                     self.hash_expiry.retain(|(table, _), _| table != &k);
                 }
+                if show && flags.contains('s') {
+                    self.actions.push(Action::Echo {
+                        target: self.reply_target(),
+                        text: format!("* Freed {count} hash tables matching '{table}'"),
+                    });
+                }
             } else {
                 let table = super::hash::table_key(self.hashes, &table).unwrap_or(table);
-                self.hashes.remove(&table);
+                let removed = self.hashes.remove(&table).is_some();
                 super::hash::remove_slots(self.hashes, &table);
                 self.hash_expiry.retain(|(name, _), _| name != &table);
+                if removed && show && flags.contains('s') {
+                    self.actions.push(Action::Echo {
+                        target: self.reply_target(),
+                        text: format!("* Freed hash table '{table}'"),
+                    });
+                }
             }
         }
     }
@@ -6017,13 +6504,16 @@ impl<'a> Runtime<'a> {
     /// `/hadd [-m] <table> <item> [value]` — set an item (`-m` makes the table
     /// if it doesn't exist; we always create-on-demand). Table and item names
     /// are expanded so variable keys match what `$hget` reads back.
-    fn cmd_hadd(&mut self, raw: &str) {
+    fn cmd_hadd(&mut self, raw: &str, show: bool) {
         let (flags, rest) = split_switches(raw);
         // Expand before splitting: in mIRC, the spaced `$+` operator can form an
         // argument (for example `hadd h state. $+ %sock ready`). Splitting the raw
         // text first incorrectly stores `state.` as the item and the joined item
         // suffix as part of the value.
         let expanded = self.expand(rest);
+        if self.error_pending() || self.abandoned_at.is_some() {
+            return;
+        }
         let mut it = expanded.splitn(3, char::is_whitespace);
         let (table, item, value) = (it.next(), it.next(), it.next());
         if let (Some(table), Some(item)) = (table, item) {
@@ -6069,7 +6559,7 @@ impl<'a> Runtime<'a> {
             self.hashes
                 .entry(table.clone())
                 .or_default()
-                .insert(item, stored);
+                .insert(item.clone(), stored);
             if is_new {
                 super::hash::set_slots(
                     self.hashes,
@@ -6077,14 +6567,21 @@ impl<'a> Runtime<'a> {
                     write_numeric_switch(flags, 'm').unwrap_or(100) as usize,
                 );
             }
+            if show && flags.contains('s') {
+                self.actions.push(Action::Echo {
+                    target: self.reply_target(),
+                    text: format!("* Added item '{item}' to hash table '{table}'"),
+                });
+            }
         }
     }
 
     /// `/hdel [-w] <table> <item>` — remove an item (`-w`: item is a wildcard).
-    fn cmd_hdel(&mut self, raw: &str) {
+    fn cmd_hdel(&mut self, raw: &str, show: bool) {
         let (flags, rest) = split_switches(raw);
         let wild = flags.contains('w');
         let expanded = self.expand(rest);
+        if self.error_pending() || self.abandoned_at.is_some() { return; }
         let mut it = expanded.split_whitespace();
         if let (Some(table), Some(item)) = (it.next(), it.next()) {
             let Some(table) = super::hash::table_key(self.hashes, table) else {
@@ -6097,14 +6594,27 @@ impl<'a> Runtime<'a> {
                         .filter(|k| wildcard_match(item, k))
                         .cloned()
                         .collect();
+                    let count = keys.len();
                     for k in keys {
                         h.remove(&k);
                         self.hash_expiry.remove(&(table.clone(), k));
                     }
+                    if show && flags.contains('s') {
+                        self.actions.push(Action::Echo {
+                            target: self.reply_target(),
+                            text: format!("* Deleted {count} '{item}' items from hash table '{table}'"),
+                        });
+                    }
                 } else {
                     if let Some(item) = super::hash::item_key(h, item) {
                         h.remove(&item);
-                        self.hash_expiry.remove(&(table, item));
+                        self.hash_expiry.remove(&(table.clone(), item.clone()));
+                        if show && flags.contains('s') {
+                            self.actions.push(Action::Echo {
+                                target: self.reply_target(),
+                                text: format!("* Deleted item '{item}' from hash table '{table}'"),
+                            });
+                        }
                     }
                 }
             }
@@ -6113,9 +6623,10 @@ impl<'a> Runtime<'a> {
 
     /// `/hinc|/hdec [-switches] <table> <item> [n]` — add/subtract `n` (default
     /// 1) to a numeric hash item, creating the table/item if needed.
-    fn cmd_hincdec(&mut self, raw: &str, sign: i64) {
+    fn cmd_hincdec(&mut self, raw: &str, sign: i64, show: bool) {
         let (flags, rest) = split_switches(raw);
         let expanded = self.expand(rest);
+        if self.error_pending() { return; }
         let mut it = expanded.splitn(3, char::is_whitespace);
         if let (Some(table), Some(item)) = (it.next(), it.next()) {
             let by: i64 = it
@@ -6139,12 +6650,19 @@ impl<'a> Runtime<'a> {
             h.insert(item.clone(), updated.clone());
             set_timed_value(
                 self.hash_expiry,
-                (table.clone(), item),
+                (table.clone(), item.clone()),
                 flags,
                 &updated,
             );
             if is_new {
                 super::hash::set_slots(self.hashes, &table, 100);
+            }
+            if show && flags.contains('s') {
+                let verb = if sign > 0 { "Inc" } else { "Dec" };
+                self.actions.push(Action::Echo {
+                    target: self.reply_target(),
+                    text: format!("* {verb} item '{item}' in hash table '{table}'"),
+                });
             }
         }
     }
@@ -6212,6 +6730,7 @@ impl<'a> Runtime<'a> {
             return;
         }
         let expanded = self.expand(raw);
+        if self.error_pending() { return; }
         let mut toks: Vec<&str> = expanded.split_whitespace().collect();
         if toks.is_empty() {
             return;
@@ -6468,7 +6987,7 @@ impl<'a> Runtime<'a> {
         // not commands typed by the local user or fired by a timer.
         let remote = !self.event.event.is_empty()
             && !self.event.nick.is_empty()
-            && !self.event.nick.eq_ignore_ascii_case(self.my_nick);
+            && !self.event.nick.eq_ignore_ascii_case(&self.my_nick);
         self.actions.push(Action::Play {
             args,
             current_target: self.reply_target(),
@@ -6497,6 +7016,9 @@ impl<'a> Runtime<'a> {
     }
 
     fn expand_inner(&mut self, text: &str) -> String {
+        if self.error_pending() {
+            return String::new();
+        }
         let mut parts: Vec<String> = Vec::new();
         let mut join_next = false;
         // Split on spaces, but keep `$ident(a b c)` whole (spaces inside the
@@ -6511,6 +7033,9 @@ impl<'a> Runtime<'a> {
                 continue;
             }
             let v = self.eval_token(tok);
+            if self.error_pending() {
+                return String::new();
+            }
             if join_next {
                 if let Some(last) = parts.last_mut() {
                     last.push_str(&v);
@@ -6640,8 +7165,18 @@ impl<'a> Runtime<'a> {
                     }
                 }
                 '$' => {
+                    let word_start = i == 0;
                     i += 1;
+                    let call = word_start && !self.calc_args && dollar_call_has_parens(&chars, i);
                     out.push_str(&self.eval_dollar(&chars, &mut i));
+                    if call {
+                        // mIRC ends the word at a `$name(...)` call that starts
+                        // it: anything glued after the call (an optional
+                        // `.property` aside) is dropped, so `$calc(1+1))` is
+                        // `2` and `$upper(ab)x` is `AB`. `$calc`'s arguments
+                        // are the exception (see `calc_args`).
+                        break;
+                    }
                 }
                 c => {
                     out.push(c);
@@ -6653,6 +7188,15 @@ impl<'a> Runtime<'a> {
     }
 
     fn eval_dollar(&mut self, chars: &[char], i: &mut usize) -> String {
+        // Each identifier starts with the normal word rules for its own
+        // arguments; only `$calc` turns `calc_args` on, for its argument list.
+        let outer_calc = std::mem::replace(&mut self.calc_args, false);
+        let value = self.eval_dollar_value(chars, i);
+        self.calc_args = outer_calc;
+        value
+    }
+
+    fn eval_dollar_value(&mut self, chars: &[char], i: &mut usize) -> String {
         // $+(a,b,c) — concatenate args with no separator. This is the function
         // form, distinct from the `$+` join operator (handled in `expand`).
         if chars.get(*i) == Some(&'+') {
@@ -6679,13 +7223,22 @@ impl<'a> Runtime<'a> {
                 _ => return self.vars.get(LASTINPUT_KEY).cloned().unwrap_or_default(),
             }
         }
-        // `$$N` — a require prefix: like `$N`, but the script halts when the
-        // parameter is empty. Only when a digit follows (a literal `$$`
-        // elsewhere is left untouched).
+        // `$$N` / `$$?` / `$$ident` — a require prefix: like the value without
+        // it, but the script halts when it is empty. Only when a digit, `?` or
+        // a letter follows (a literal `$$` elsewhere is left untouched).
         let require = chars.get(*i) == Some(&'$')
-            && matches!(chars.get(*i + 1), Some(c) if c.is_ascii_digit() || *c == '?');
+            && matches!(chars.get(*i + 1), Some(c) if c.is_ascii_digit() || *c == '?' || c.is_alphabetic());
         if require {
             *i += 1;
+            // `$$ident` / `$$ident(args)` — evaluate normally, then require a
+            // value (mIRC halts the script when it is empty).
+            if matches!(chars.get(*i), Some(c) if c.is_alphabetic()) {
+                let value = self.eval_dollar(chars, i);
+                if value.is_empty() {
+                    self.require_halt();
+                }
+                return value;
+            }
         }
         // `$?` — the classic input identifier (`$?`, `$?="msg"`, `$?"msg"`, `$?*=`
         // password, `$?!=` yes/no, `$?N`, `$?#`). Deprecated in mIRC in favour of
@@ -6709,7 +7262,7 @@ impl<'a> Runtime<'a> {
             };
             let val = self.params_range(start, end);
             if require && val.is_empty() {
-                self.halted = true;
+                self.require_halt();
             }
             return val;
         }
@@ -6816,13 +7369,13 @@ impl<'a> Runtime<'a> {
         // Optional (args).
         let (args, had_parens) = if chars.get(*i) == Some(&'(') {
             let inner = read_balanced(chars, i);
-            (
-                split_args(&inner)
-                    .into_iter()
-                    .map(|a| self.expand(&a))
-                    .collect::<Vec<_>>(),
-                true,
-            )
+            self.calc_args = name.eq_ignore_ascii_case("calc");
+            let args = split_args(&inner)
+                .into_iter()
+                .map(|a| self.expand(&a))
+                .collect::<Vec<_>>();
+            self.calc_args = false;
+            (args, true)
         } else {
             (Vec::new(), false)
         };
@@ -6844,6 +7397,19 @@ impl<'a> Runtime<'a> {
                 String::new()
             };
         ident::eval_ident(self, &name, &args, &prop)
+    }
+
+    /// Marks the command being expanded as one mIRC would not run, and halts.
+    pub(crate) fn abandon_command(&mut self) {
+        self.halted = true;
+        if self.abandoned_at.is_none() {
+            self.abandoned_at = Some(self.actions.len());
+        }
+    }
+
+    /// An empty `$$` value: halt the script and drop the command being expanded.
+    fn require_halt(&mut self) {
+        self.abandon_command();
     }
 
     /// Resolves a parameter spec: `$N` (`end = Some(N)`), `$N-` (`end = None`,
@@ -6942,7 +7508,7 @@ impl<'a> Runtime<'a> {
             return if answer.is_empty() { "$false" } else { "$true" }.to_string();
         }
         if require && answer.is_empty() {
-            self.halted = true;
+            self.require_halt();
         }
         answer
     }
@@ -7055,7 +7621,7 @@ fn is_required_rhs_word_op(op: &str) -> bool {
     )
 }
 
-fn is_unary_word_op(op: &str) -> bool {
+pub(super) fn is_unary_word_op(op: &str) -> bool {
     let (_, op) = split_operator_negation(op);
     matches!(
         op.to_ascii_lowercase().as_str(),
@@ -7073,7 +7639,7 @@ fn split_operator_negation(op: &str) -> (bool, &str) {
     }
 }
 
-fn is_supported_operator(op: &str) -> bool {
+pub(super) fn is_supported_operator(op: &str) -> bool {
     is_supported_positive_operator(op)
         || op
             .strip_prefix('!')
@@ -7143,6 +7709,43 @@ fn read_name(chars: &[char], i: &mut usize) -> String {
         }
     }
     name
+}
+
+/// Splits off the first space-delimited word, keeping a `$id(...)` argument
+/// list (which may contain spaces) inside it. Returns the word and the rest
+/// with its leading spaces removed.
+fn split_first_word(text: &str) -> (&str, &str) {
+    let text = text.trim_start();
+    let mut depth = 0i32;
+    let mut prev: Option<char> = None;
+    for (index, c) in text.char_indices() {
+        match c {
+            '(' if depth > 0 || prev.is_some_and(|p| p.is_alphanumeric() || p == '_' || p == '+') => depth += 1,
+            ')' if depth > 0 => depth -= 1,
+            ' ' if depth == 0 => return (&text[..index], text[index..].trim_start()),
+            _ => {}
+        }
+        prev = Some(c);
+    }
+    (text, "")
+}
+
+/// Whether the `$` just consumed (cursor `i` after it) starts a parenthesised
+/// call: `$name(`, `$$name(`, `$+(` or the `$(…)` short form of `$eval`.
+fn dollar_call_has_parens(chars: &[char], i: usize) -> bool {
+    let mut j = i;
+    if chars.get(j) == Some(&'$') {
+        j += 1;
+    }
+    match chars.get(j) {
+        Some('!') | Some('?') => return false,
+        Some(c) if c.is_ascii_digit() => return false,
+        Some('+') => j += 1,
+        _ => {
+            let _ = read_name(chars, &mut j);
+        }
+    }
+    chars.get(j) == Some(&'(')
 }
 
 /// Reads a `%variable` name. Unlike identifier names, mIRC variable names may
@@ -7422,6 +8025,7 @@ fn find_label(body: &[Stmt], name: &str) -> Option<usize> {
 /// Resolves a script-supplied filename to a path inside the sandbox `dir`,
 /// using only the final filename component so scripts can't escape the dir.
 pub fn sandbox_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let name = name.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(name);
     let file = std::path::Path::new(name)
         .file_name()
         .unwrap_or_else(|| std::ffi::OsStr::new("script.dat"));
@@ -8394,12 +8998,183 @@ mod tests {
 
     fn run_ctx<'a>() -> crate::script::RunCtx<'a> {
         crate::script::RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "irc.example.org",
             data_dir: std::env::temp_dir(),
             state: std::sync::Arc::new(Default::default()),
         }
+    }
+
+    #[test]
+    fn echo_numeric_colour_precedes_switches_and_uses_existing_formatting() {
+        let engine = crate::script::ScriptEngine::new();
+        for color in [0, 4, 16, 98, 99] {
+            assert_eq!(
+                engine.run_command(
+                    &run_ctx(),
+                    "#caller",
+                    &format!("echo {color} -s hello"),
+                    &[],
+                ),
+                vec![Action::Echo {
+                    target: "(status)".into(),
+                    text: format!("\u{3}{color:02}hello"),
+                }]
+            );
+        }
+        assert_eq!(
+            engine.run_command(&run_ctx(), "#caller", "echo -s 4 hello", &[]),
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "4 hello".into(),
+            }]
+        );
+        for command in ["echo 4", "echo 4 -s"] {
+            assert!(engine.run_command(&run_ctx(), "#caller", command, &[]).is_empty());
+        }
+        assert_eq!(
+            engine.run_command(
+                &run_ctx(),
+                "#caller",
+                // `$chr(15)red` would drop `red` (mIRC ignores text after a
+                // word-start call), so join explicitly.
+                "echo 4 -a red $chr(15) $+ red again",
+                &[],
+            ),
+            vec![Action::Echo {
+                target: "(active)".into(),
+                text: "\u{3}04red \u{f}\u{3}04red again".into(),
+            }]
+        );
+        assert_eq!(
+            engine.run_command(&run_ctx(), "#caller", "echo 4 -a ,12 literal", &[]),
+            vec![Action::Echo {
+                target: "(active)".into(),
+                text: "\u{3}04\u{2}\u{2},12 literal".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn echo_preserves_expanded_blank_and_control_only_text() {
+        let engine = crate::script::ScriptEngine::new();
+        for (command, target, text) in [
+            ("echo -a $crlf", "(active)", "\r\n"),
+            ("echo 4 -a $crlf", "(active)", "\u{3}04\r\n"),
+            ("echo #other $crlf", "#other", "\r\n"),
+            ("echo -ac normal $crlf", "(active)", "\r\n"),
+            ("echo -ac \"listbox text\" $crlf", "(active)", "\r\n"),
+            ("echo -a $chr(9)", "(active)", "\t"),
+            ("echo -a $chr(32)", "(active)", " "),
+        ] {
+            assert_eq!(
+                engine.run_command(&run_ctx(), "#caller", command, &[]),
+                vec![Action::Echo { target: target.into(), text: text.into() }],
+                "{command}",
+            );
+        }
+        for command in ["echo 4", "echo -a", "echo 4 -a", "echo -ac normal"] {
+            assert!(engine.run_command(&run_ctx(), "#caller", command, &[]).is_empty());
+        }
+    }
+
+    #[test]
+    fn echo_destination_switches_leave_window_names_in_the_text() {
+        let engine = crate::script::ScriptEngine::new();
+        for (command, target, text) in [
+            ("echo -a #other hello", "(active)", "#other hello"),
+            ("echo -s @other hello", "(status)", "@other hello"),
+            ("echo -d #other hello", "#caller", "#other hello"),
+            ("echo -c \"listbox text\" hello", "#caller", "hello"),
+        ] {
+            assert_eq!(
+                engine.run_command(&run_ctx(), "#caller", command, &[]),
+                vec![Action::Echo {
+                    target: target.into(),
+                    text: text.into(),
+                }]
+            );
+        }
+        assert_eq!(
+            engine.run_command(&run_ctx(), "#caller", "echo -sa hello", &[]),
+            vec![
+                Action::Echo { target: "(status)".into(), text: "hello".into() },
+                Action::Echo { target: "(active)".into(), text: "hello".into() },
+            ]
+        );
+        let context = crate::script::RunCtx {
+            state: std::sync::Arc::new(crate::irc::state::StateSnapshot {
+                server_id: "one".into(),
+                ..Default::default()
+            }),
+            ..run_ctx()
+        };
+        engine.window_open("one", "(status)");
+        engine.set_active_win("one", "(status)");
+        assert_eq!(
+            engine.run_command(&context, "#caller", "echo -sa hello", &[]),
+            vec![Action::Echo { target: "(status)".into(), text: "hello".into() }]
+        );
+    }
+
+    #[test]
+    fn echo_expanded_targets_use_isupport_and_current_connection_windows() {
+        let engine = crate::script::ScriptEngine::new();
+        engine.window_open("one", "Alice");
+        engine.window_open("two", "Elsewhere");
+        let mut snapshot = crate::irc::state::StateSnapshot {
+            server_id: "one".into(),
+            ..Default::default()
+        };
+        snapshot.isupport.ircx = true;
+        snapshot.isupport.chan_types = "#&!+".into();
+        let context = crate::script::RunCtx {
+            state: std::sync::Arc::new(snapshot),
+            ..run_ctx()
+        };
+        for (command, target, text) in [
+            ("echo %#Room hello", "%#Room", "hello"),
+            ("echo !local hello", "!local", "hello"),
+            ("echo &local hello", "&local", "hello"),
+            ("echo alice hello", "Alice", "hello"),
+            ("echo Elsewhere hello", "#caller", "Elsewhere hello"),
+            ("echo ordinary text", "#caller", "ordinary text"),
+        ] {
+            assert_eq!(
+                engine.run_command(&context, "#caller", command, &[]),
+                vec![Action::Echo { target: target.into(), text: text.into() }]
+            );
+        }
+        engine.load(
+            "alias expanded_echo { var %color = 4 | var %window = Alice | echo %color %window hello }",
+        );
+        assert_eq!(
+            engine.run_alias(&context, "#caller", "expanded_echo", ""),
+            vec![Action::Echo { target: "Alice".into(), text: "\u{3}04hello".into() }]
+        );
+    }
+
+    #[test]
+    fn echo_expansion_keeps_generated_pipes_and_identifiers_literal() {
+        let engine = crate::script::ScriptEngine::new();
+        engine.load(
+            "alias echo_literal { var %line = $!me $chr(124) msg #bad text | echo 4 -a %line }\n\
+             alias quiet_echo { echo 4 -qa hello }\n\
+             alias quiet_caller { .quiet_echo | quiet_echo }",
+        );
+        assert_eq!(
+            engine.run_alias(&run_ctx(), "#caller", "echo_literal", ""),
+            vec![Action::Echo {
+                target: "(active)".into(),
+                text: "\u{3}04$me | msg #bad text".into(),
+            }]
+        );
+        assert_eq!(
+            engine.run_alias(&run_ctx(), "#caller", "quiet_caller", ""),
+            vec![Action::Echo { target: "(active)".into(), text: "\u{3}04hello".into() }]
+        );
     }
 
     #[test]
@@ -8436,6 +9211,287 @@ mod tests {
                 "PRIVMSG #c :same=forced-global only=[] fromvar=global-from-var created=5 leaf=via-bracket other=6".into()
             )]
         );
+    }
+
+    #[test]
+    fn hash_feedback_matches_native_messages_and_declared_slots() {
+        let engine = crate::script::ScriptEngine::new();
+        let ctx = run_ctx();
+        let run = |command: &str| engine.run_command(&ctx, "#c", command, &[]);
+        let feedback = |text: &str| vec![Action::Echo { target: "#c".into(), text: text.into() }];
+        assert_eq!(run("/hmake -sm10 Native"), feedback("* Made hash table 'Native' (11)"));
+        assert_eq!(run("/hmake -s Native 20"), feedback("* /hmake: hash table exists 'Native'"));
+        assert_eq!(run("/hadd -s Native one 4"), feedback("* Added item 'one' to hash table 'Native'"));
+        assert_eq!(run("/hinc -s Native one 2"), feedback("* Inc item 'one' in hash table 'Native'"));
+        assert_eq!(run("/hdec -s Native one 1"), feedback("* Dec item 'one' in hash table 'Native'"));
+        assert!(run("/hadd Native two other").is_empty());
+        assert_eq!(run("/hdel -s Native two"), feedback("* Deleted item 'two' from hash table 'Native'"));
+        assert!(run("/hdel -s Native missing").is_empty());
+        assert_eq!(run("/hdel -sw Native *"), feedback("* Deleted 1 '*' items from hash table 'Native'"));
+        assert_eq!(run("/hdel -sw Native *"), feedback("* Deleted 0 '*' items from hash table 'Native'"));
+        assert_eq!(run("/hfree -sw N*"), feedback("* Freed 1 hash tables matching 'N*'"));
+        assert_eq!(run("/hfree -sw N*"), feedback("* Freed 0 hash tables matching 'N*'"));
+        assert!(run("/.hmake -s Quiet 2").is_empty());
+        assert!(run("/.hadd -s Quiet item kept").is_empty());
+        assert_eq!(run("/echo -a $hget(Quiet).size $hget(Quiet,item)"), vec![Action::Echo { target: "(active)".into(), text: "3 kept".into() }]);
+        assert_eq!(run("/hfree -s Quiet"), feedback("* Freed hash table 'Quiet'"));
+    }
+
+    #[test]
+    fn nested_aliases_cannot_read_or_mutate_caller_locals() {
+        let engine = crate::script::ScriptEngine::new();
+        engine.load(
+            "alias outer {\n\
+               set %value 10\n\
+               var %value = 20, %secret = caller-only\n\
+               inner\n\
+               msg #c outer=%value secret=%secret\n\
+             }\n\
+             alias inner {\n\
+               msg #c inner=%value secret=[ $+ %secret $+ ] locals=$var(%secret,0) local=$var(%value,1).local\n\
+               inc %value\n\
+               unset %secret\n\
+             }\n\
+             alias report msg #c global=%value\n\
+             alias clear_outer { var %retained = caller | clear_inner | msg #c retained=%retained }\n\
+             alias clear_inner { var %own = inner | unsetall | msg #c own=%own | unsetall -l }",
+        );
+        assert_eq!(
+            engine.run_alias(&run_ctx(), "#c", "outer", ""),
+            vec![
+                Action::Send("PRIVMSG #c :inner=10 secret=[] locals=0 local=$false".into()),
+                Action::Send("PRIVMSG #c :outer=20 secret=caller-only".into()),
+            ]
+        );
+        assert_eq!(
+            engine.run_alias(&run_ctx(), "#c", "report", ""),
+            vec![Action::Send("PRIVMSG #c :global=11".into())]
+        );
+        assert_eq!(
+            engine.run_alias(&run_ctx(), "#c", "clear_outer", ""),
+            vec![
+                Action::Send("PRIVMSG #c :own=inner".into()),
+                Action::Send("PRIVMSG #c :retained=caller".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn unset_scope_switches_preserve_the_other_namespace() {
+        let engine = crate::script::ScriptEngine::new();
+        engine.load(
+            "alias t {\n\
+               set %value global\n\
+               var %value = local\n\
+               unset -g %value\n\
+               msg #c local=%value\n\
+               set -g %value restored\n\
+               unset -l %value\n\
+               msg #c global=%value local=$var(%value,1).local\n\
+               unset -l %value\n\
+               msg #c preserved=%value\n\
+               var %only = local-only\n\
+               unset -g %only\n\
+               msg #c only=%only\n\
+               set %pair.a ga\n\
+               set %pair.b gb\n\
+               var %pair.a = la, %pair.b = lb\n\
+               unset -g %pair.*\n\
+               msg #c locals=%pair.a %pair.b\n\
+               set -g %pair.a restored-a\n\
+               set -g %pair.b restored-b\n\
+               unset -l %pair.*\n\
+               msg #c globals=%pair.a %pair.b\n\
+             }",
+        );
+        assert_eq!(
+            engine.run_alias(&run_ctx(), "#c", "t", ""),
+            vec![
+                Action::Send("PRIVMSG #c :local=local".into()),
+                Action::Send("PRIVMSG #c :global=restored local=$false".into()),
+                Action::Send("PRIVMSG #c :preserved=restored".into()),
+                Action::Send("PRIVMSG #c :only=local-only".into()),
+                Action::Send("PRIVMSG #c :locals=la lb".into()),
+                Action::Send("PRIVMSG #c :globals=restored-a restored-b".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn wildcard_unset_removes_both_namespaces_while_exact_unset_is_local_first() {
+        let engine = crate::script::ScriptEngine::new();
+        engine.load(
+            "alias t {\n\
+               set %exact global\n\
+               var %exact = local\n\
+               unset %exact\n\
+               msg #c exact=%exact local=$var(%exact,1).local\n\
+               set %group.shared global\n\
+               set -u60 %group.globalonly global\n\
+               var %group.shared = local, %group.localonly = local\n\
+               unset %group.*\n\
+               msg #c wildcard=$var(%group.*,0) secs=$var(%group.globalonly,1).secs\n\
+             }",
+        );
+        assert_eq!(
+            engine.run_alias(&run_ctx(), "#c", "t", ""),
+            vec![
+                Action::Send("PRIVMSG #c :exact=global local=$false".into()),
+                Action::Send("PRIVMSG #c :wildcard=0 secs=".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn var_initialize_switch_preserves_existing_local_and_global_values() {
+        let engine = crate::script::ScriptEngine::new();
+        engine.load(
+            "alias t {\n\
+               var %value = first\n\
+               var -i %value = second, %new = initialized\n\
+               set -g %value original-global\n\
+               var -gi %value = replacement-global, %newglobal = created-global\n\
+               msg #c local=%value new=%new\n\
+             }\n\
+             alias report msg #c global=%value new=%newglobal",
+        );
+        assert_eq!(
+            engine.run_alias(&run_ctx(), "#c", "t", ""),
+            vec![Action::Send("PRIVMSG #c :local=first new=initialized".into())]
+        );
+        assert_eq!(
+            engine.run_alias(&run_ctx(), "#c", "report", ""),
+            vec![Action::Send(
+                "PRIVMSG #c :global=original-global new=created-global".into()
+            )]
+        );
+    }
+
+    #[test]
+    fn variable_initialization_checks_only_the_selected_namespace() {
+        let engine = crate::script::ScriptEngine::new();
+        engine.load(
+            "alias t {\n\
+               set -g %shadow global\n\
+               var -i %shadow = local\n\
+               var %fromlocal = original-local, %blank\n\
+               var -gi %fromlocal = created-global\n\
+               var -i %blank = must-not-replace-empty-local\n\
+               set -g %empty\n\
+               var -gi %empty = must-not-replace-empty-global\n\
+               set -g %setshadow global\n\
+               set -li %setshadow local\n\
+               set -gi %setshadow must-not-replace-global\n\
+               msg #c shadow=%shadow fromlocal=%fromlocal blank=[ $+ %blank $+ ] setshadow=%setshadow\n\
+             }\n\
+             alias report msg #c shadow=%shadow fromlocal=%fromlocal empty=[ $+ %empty $+ ] setshadow=%setshadow",
+        );
+        assert_eq!(
+            engine.run_alias(&run_ctx(), "#c", "t", ""),
+            vec![Action::Send(
+                "PRIVMSG #c :shadow=local fromlocal=original-local blank=[] setshadow=local".into()
+            )]
+        );
+        assert_eq!(
+            engine.run_alias(&run_ctx(), "#c", "report", ""),
+            vec![Action::Send(
+                "PRIVMSG #c :shadow=global fromlocal=created-global empty=[] setshadow=global".into()
+            )]
+        );
+    }
+
+    #[test]
+    fn combined_variable_scope_switches_apply_both_without_re_evaluation() {
+        let engine = crate::script::ScriptEngine::new();
+        engine.load(
+            "alias nextvalue { inc %calls | return $+(value,%calls) }\n\
+             alias globalvalue return %value\n\
+             alias globalinit return %init\n\
+             alias t {\n\
+               set %calls 0\n\
+               set -gl %value $nextvalue\n\
+               msg #c set=%value/$globalvalue calls=%calls\n\
+               var -gl %value = $nextvalue\n\
+               msg #c var=%value/$globalvalue calls=%calls\n\
+               unset -gl %value\n\
+               msg #c removed=$var(%value,0)\n\
+               set -g %init global\n\
+               var -gli %init = local\n\
+               msg #c init=%init/$globalinit\n\
+               unset -g %init\n\
+               set -gli %init new-global\n\
+               msg #c reinit=%init/$globalinit\n\
+               set -gl %pair.a a\n\
+               var -gl %pair.b = b\n\
+               unset -gl %pair.*\n\
+               msg #c wildcard=$var(%pair.*,0)\n\
+             }",
+        );
+        assert_eq!(
+            engine.run_alias(&run_ctx(), "#c", "t", ""),
+            vec![
+                Action::Send("PRIVMSG #c :set=value1/value1 calls=1".into()),
+                Action::Send("PRIVMSG #c :var=value2/value2 calls=2".into()),
+                Action::Send("PRIVMSG #c :removed=0".into()),
+                Action::Send("PRIVMSG #c :init=local/global".into()),
+                Action::Send("PRIVMSG #c :reinit=local/new-global".into()),
+                Action::Send("PRIVMSG #c :wildcard=0".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn unsetall_defaults_to_globals_and_honors_scope_switches() {
+        let engine = crate::script::ScriptEngine::new();
+        engine.load(
+            "alias globalvalue return %value\n\
+             alias t {\n\
+               set -gl %value initial\n\
+               unsetall -l\n\
+               msg #c local-cleared=%value local=$var(%value,1).local\n\
+               var %value = local\n\
+               unsetall\n\
+               msg #c global-cleared=%value global=[ $+ $globalvalue $+ ]\n\
+               set -g %value global\n\
+               unsetall -gl\n\
+               msg #c both=$var(%value,0)\n\
+             }",
+        );
+        assert_eq!(
+            engine.run_alias(&run_ctx(), "#c", "t", ""),
+            vec![
+                Action::Send("PRIVMSG #c :local-cleared=initial local=$false".into()),
+                Action::Send("PRIVMSG #c :global-cleared=local global=[]".into()),
+                Action::Send("PRIVMSG #c :both=0".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn local_and_skipped_variable_writes_preserve_global_expiry() {
+        let engine = crate::script::ScriptEngine::new();
+        engine.load(
+            "alias globalsecs return $var(%deadline,1).secs\n\
+             alias t {\n\
+               set -gu60 %deadline 10\n\
+               var %deadline = local\n\
+               set -giu1 %deadline ignored\n\
+               msg #c skipped=$iif($globalsecs > 1,kept,lost)\n\
+               unsetall -l\n\
+               msg #c local-cleared=$iif($globalsecs > 1,kept,lost)\n\
+               unset -gl %deadline\n\
+               msg #c removed=$globalsecs\n\
+             }",
+        );
+        assert_eq!(
+            engine.run_alias(&run_ctx(), "#c", "t", ""),
+            vec![
+                Action::Send("PRIVMSG #c :skipped=kept".into()),
+                Action::Send("PRIVMSG #c :local-cleared=kept".into()),
+                Action::Send("PRIVMSG #c :removed=".into()),
+            ]
+        );
+        assert!(!engine.inner.lock().unwrap().var_expiry.contains_key("deadline"));
     }
 
     #[test]

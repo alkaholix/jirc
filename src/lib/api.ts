@@ -308,8 +308,8 @@ export const api = {
     invoke<boolean>("script_run_tabcomp", { serverId, target, text }),
   scriptRunKey: (serverId: string, target: string, kind: "KEYDOWN" | "KEYUP" | "CHAR", key: string, keyVal: number, keyRepeat: boolean, modifiers: string, text: string) =>
     invoke<boolean>("script_run_key", { serverId, target, kind, key, keyVal, keyRepeat, modifiers, text }),
-  scriptRunHotlink: (serverId: string, target: string, word: string, lineText: string, action: "mouse" | "sclick" | "dclick" | "rclick" | "uclick", line: number, position: number) =>
-    invoke<HotlinkOutcome>("script_run_hotlink", { serverId, target, word, lineText, action, line, position }),
+  scriptRunHotlink: (serverId: string, target: string, word: string, lineText: string, action: "mouse" | "sclick" | "dclick" | "rclick" | "uclick", line: number, position: number, charPosition?: number) =>
+    invoke<HotlinkOutcome>("script_run_hotlink", { serverId, target, word, lineText, action, line, position, charPosition }),
   scriptDispatchAudioEnd: (serverId: string, kind: string, path: string) =>
     invoke<void>("script_dispatch_audio_end", { serverId, kind, path }),
   scriptSetClientWindowState: (label: string, focused: boolean, appState: string) =>
@@ -335,6 +335,8 @@ export const api = {
     invoke("script_window_open", { serverId, name }),
   scriptWindowClose: (serverId: string, name: string) =>
     invoke("script_window_close", { serverId, name }),
+  scriptWindowRename: (serverId: string, oldName: string, newName: string) =>
+    invoke("script_window_rename", { serverId, oldName, newName }),
   openHelp: (keyword?: string) => invoke<void>("open_help", { keyword }),
   openUrl: (url: string) => invoke<void>("open_url", { url }),
   exitApp: () => invoke<void>("exit_app"),
@@ -377,9 +379,10 @@ export interface DialogControl {
 }
 
 // Mirrors the backend `UiEvent` enum (serde tagged by `type`, camelCase).
-export type IrcEvent =
+export type IrcEvent = (
   | { type: "connected"; serverId: string }
   | { type: "registered"; serverId: string; nick: string }
+  | { type: "connectReady"; serverId: string; autojoinSkip: boolean; autojoinDelaySecs: number; autojoinChannels: string[] }
   | { type: "disconnected"; serverId: string; reason: string }
   | { type: "ownerGranted"; serverId: string; channel: string }
   | { type: "ownerRevoked"; serverId: string; channel: string; by: string }
@@ -525,7 +528,7 @@ export type IrcEvent =
   | { type: "ircxProp"; serverId: string; object: string; name: string; value: string }
   | { type: "ircxPropEnd"; serverId: string; object: string }
   | { type: "whisper"; serverId: string; from: string | null; channel: string; text: string }
-  | { type: "windowOpen"; serverId: string; name: string; kind: string; title: string }
+  | { type: "windowOpen"; serverId: string; name: string; kind: string; title: string; editbox?: boolean; activate?: boolean }
   | { type: "windowClose"; serverId: string; name: string }
   | { type: "windowLine"; serverId: string; name: string; op: string; n: number; text: string }
   | { type: "windowTitle"; serverId: string; name: string; title: string }
@@ -555,7 +558,11 @@ export type IrcEvent =
       size: number;
       status: string;
     }
-  | { type: "dccLocalHost"; serverId: string; host: string };
+  | { type: "dccLocalHost"; serverId: string; host: string }
+) & {
+  /** A script hid the default output; apply the event's state changes normally. */
+  suppressDefault?: boolean;
+};
 
 export interface Member {
   nick: string;

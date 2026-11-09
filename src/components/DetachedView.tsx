@@ -5,6 +5,7 @@ import { TopicBar } from "./TopicBar";
 import { MessageList } from "./MessageList";
 import { NickList } from "./NickList";
 import { InputBar } from "./InputBar";
+import { PictureWindow } from "./PictureWindow";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { PromptDialog } from "./PromptDialog";
 import { ChannelCentral } from "./ChannelCentral";
@@ -57,8 +58,14 @@ export function DetachedView({ bufferKey }: { bufferKey: string }) {
         <TopicBar buffer={buffer} onDock={() => dockBackBuffer(bufferKey)} />
         <div className="main-body">
           <div className="chat-pane">
-            <MessageList buffer={buffer} />
-            <InputBar buffer={buffer} />
+            {buffer.kind === "window" && buffer.windowKind === "picture" ? (
+              <PictureWindow buffer={buffer} />
+            ) : (
+              <MessageList buffer={buffer} />
+            )}
+            {(buffer.kind !== "window" || (buffer.windowEditbox ?? buffer.windowKind === "editbox")) && (
+              <InputBar buffer={buffer} />
+            )}
           </div>
           {buffer.kind === "channel" && <NickList buffer={buffer} />}
         </div>

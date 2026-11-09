@@ -1,4 +1,4 @@
-import { useEffect, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { api, type DialogControl } from "../lib/api";
 import { useStore } from "../state/store";
 import { OpenDialog, useDialogs } from "../state/dialogs";
@@ -16,16 +16,26 @@ function DialogView({ dialog }: { dialog: OpenDialog }) {
   const setValue = useDialogs((s) => s.setValue);
   const close = useDialogs((s) => s.close);
   const srv = useStore((s) => s.servers[dialog.serverId]);
+  const containerRef = useRef<HTMLDivElement>(null);
 
-  const fire = (event: string, control: string, values = dialog.values) => {
+  const fire = (
+    event: string,
+    control: string,
+    values = dialog.values,
+    selected = dialog.selected,
+    edited = dialog.edited
+  ) => {
     const snapshot = { ...values };
     for (const [id, options] of Object.entries(dialog.options)) {
       snapshot[`\u0000options\u0000${id}`] = options.join("\n");
     }
+    for (const [id, indices] of Object.entries(selected)) {
+      snapshot[`\u0000selected\u0000${id}`] = indices.join(",");
+    }
     dialog.controls.forEach((item, index) => {
       snapshot[`\u0000enabled\u0000${item.id}`] = String(item.enabled);
       snapshot[`\u0000visible\u0000${item.id}`] = String(item.visible);
-      snapshot[`\u0000edited\u0000${item.id}`] = String(dialog.edited[item.id] ?? false);
+      snapshot[`\u0000edited\u0000${item.id}`] = String(edited[item.id] ?? false);
       snapshot[`\u0000next\u0000${item.id}`] = dialog.controls[index + 1]?.id ?? "";
       snapshot[`\u0000prev\u0000${item.id}`] = dialog.controls[index - 1]?.id ?? "";
     });
@@ -48,10 +58,23 @@ function DialogView({ dialog }: { dialog: OpenDialog }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const change = (id: string, value: string, event = "edit") => {
+  useEffect(() => {
+    const control = Array.from(containerRef.current?.querySelectorAll<HTMLElement>("[data-dialog-control]") ?? [])
+      .find((element) => element.dataset.dialogControl === dialog.focus);
+    control?.focus();
+  }, [dialog.focus, dialog.activeTab]);
+
+  const change = (id: string, value: string, event = "edit", indices?: number[]) => {
     const values = { ...dialog.values, [id]: value };
-    setValue(dialog.name, id, value);
-    fire(event, id, values);
+    const selected = indices === undefined ? dialog.selected : { ...dialog.selected, [id]: indices };
+    setValue(dialog.name, id, value, indices);
+    fire(event, id, values, selected, { ...dialog.edited, [id]: true });
+  };
+
+  const selectOptions = (control: DialogControl, element: HTMLSelectElement) => {
+    const indices = Array.from(element.selectedOptions).map((option) => Number(option.value));
+    const options = dialog.options[control.id] ?? control.options;
+    change(control.id, indices.map((index) => options[index - 1]).join("\n"), "sclick", indices);
   };
 
   const closeDialog = async () => {
@@ -94,6 +117,7 @@ function DialogView({ dialog }: { dialog: OpenDialog }) {
     <div className="modal-backdrop">
       <div
         className="modal dialog-modal"
+        ref={containerRef}
         style={{
           width: dialog.width > 0 ? dialog.width : undefined,
           minHeight: dialog.height > 0 ? dialog.height : undefined,
@@ -123,13 +147,14 @@ function DialogView({ dialog }: { dialog: OpenDialog }) {
             {dialog.controls.filter((control) => control.kind === "tab" && control.visible).map((tab) => (
               <button
                 key={tab.id}
+                data-dialog-control={tab.id}
                 role="tab"
                 disabled={!tab.enabled}
                 aria-selected={dialog.activeTab === tab.id}
                 onClick={() => {
                   useDialogs.setState((state) => ({
                     dialogs: state.dialogs.map((item) =>
-                      item.name === dialog.name ? { ...item, activeTab: tab.id } : item
+                      item.name.toLowerCase() === dialog.name.toLowerCase() ? { ...item, activeTab: tab.id } : item
                     ),
                   }));
                   fire("sclick", tab.id);
@@ -146,6 +171,7 @@ function DialogView({ dialog }: { dialog: OpenDialog }) {
             if (c.tab && c.tab !== dialog.activeTab) return null;
             const val = dialog.values[c.id] ?? "";
             const opts = dialog.options[c.id] ?? c.options;
+            const selected = dialog.selected[c.id] ?? [];
             const disabled = !c.enabled;
             switch (c.kind) {
               case "text":
@@ -154,6 +180,7 @@ function DialogView({ dialog }: { dialog: OpenDialog }) {
                 return (
                   <input
                     key={c.id}
+                    data-dialog-control={c.id}
                     className="dlg-edit"
                     type={c.styles.includes("pass") ? "password" : "text"}
                     readOnly={c.styles.includes("read")}
@@ -167,6 +194,7 @@ function DialogView({ dialog }: { dialog: OpenDialog }) {
                 return (
                   <textarea
                     key={c.id}
+                    data-dialog-control={c.id}
                     className="dlg-editbox"
                     readOnly={c.styles.includes("read")}
                     disabled={disabled}
@@ -180,6 +208,7 @@ function DialogView({ dialog }: { dialog: OpenDialog }) {
                   <label key={c.id} className="dlg-check">
                     <input
                       type="checkbox"
+                      data-dialog-control={c.id}
                       disabled={disabled}
                       checked={val === "1" || val === "2"}
                       ref={(element) => { if (element) element.indeterminate = val === "2"; }}
@@ -193,6 +222,7 @@ function DialogView({ dialog }: { dialog: OpenDialog }) {
                   <label key={c.id} className="dlg-check">
                     <input
                       type="radio"
+                      data-dialog-control={c.id}
                       name={`${dialog.name}-radio-${c.tab || "main"}`}
                       disabled={disabled}
                       checked={val === "1"}
@@ -213,6 +243,7 @@ function DialogView({ dialog }: { dialog: OpenDialog }) {
                   <input
                     key={c.id}
                     type="range"
+                    data-dialog-control={c.id}
                     disabled={disabled}
                     autoFocus={dialog.focus === c.id}
                     min={range >= 0 ? c.styles[range + 1] : "0"}
@@ -228,13 +259,14 @@ function DialogView({ dialog }: { dialog: OpenDialog }) {
                     <span key={c.id}>
                       <input
                         className="dlg-edit"
+                        data-dialog-control={c.id}
                         list={`${dialog.name}-${c.id}-options`}
                         disabled={disabled}
                         value={val}
-                        onChange={(event) => change(c.id, event.target.value)}
+                        onChange={(event) => change(c.id, event.target.value, "edit", [])}
                       />
                       <datalist id={`${dialog.name}-${c.id}-options`}>
-                        {opts.map((option) => <option key={option} value={option} />)}
+                        {opts.map((option, index) => <option key={index} value={option} />)}
                       </datalist>
                     </span>
                   );
@@ -243,13 +275,15 @@ function DialogView({ dialog }: { dialog: OpenDialog }) {
                   <select
                     key={c.id}
                     className="dlg-combo"
+                    data-dialog-control={c.id}
                     disabled={disabled}
                     autoFocus={dialog.focus === c.id}
-                    value={val}
-                    onChange={(e) => change(c.id, e.target.value, "sclick")}
+                    value={selected[0] === undefined ? "" : String(selected[0])}
+                    ref={(element) => { if (element && !selected.length) element.selectedIndex = -1; }}
+                    onChange={(e) => selectOptions(c, e.target)}
                   >
-                    {opts.map((o) => (
-                      <option key={o} value={o}>
+                    {opts.map((o, index) => (
+                      <option key={index} value={String(index + 1)}>
                         {o}
                       </option>
                     ))}
@@ -260,19 +294,18 @@ function DialogView({ dialog }: { dialog: OpenDialog }) {
                   <select
                     key={c.id}
                     className="dlg-list"
+                    data-dialog-control={c.id}
                     disabled={disabled}
                     multiple={c.styles.includes("multsel") || c.styles.includes("extsel")}
                     size={Math.min(Math.max(opts.length, 2), 8)}
-                    value={c.styles.includes("multsel") || c.styles.includes("extsel") ? val.split("\n").filter(Boolean) : val}
-                    onChange={(e) => change(
-                      c.id,
-                      Array.from(e.target.selectedOptions).map((option) => option.value).join("\n"),
-                      "sclick"
-                    )}
+                    value={c.styles.includes("multsel") || c.styles.includes("extsel")
+                      ? selected.map(String) : selected[0] === undefined ? "" : String(selected[0])}
+                    ref={(element) => { if (element && !selected.length) element.selectedIndex = -1; }}
+                    onChange={(e) => selectOptions(c, e.target)}
                     onDoubleClick={() => fire("dclick", c.id)}
                   >
-                    {opts.map((o) => (
-                      <option key={o} value={o}>
+                    {opts.map((o, index) => (
+                      <option key={index} value={String(index + 1)}>
                         {o}
                       </option>
                     ))}
@@ -290,6 +323,7 @@ function DialogView({ dialog }: { dialog: OpenDialog }) {
             .map((b) => (
               <button
                 key={b.id}
+                data-dialog-control={b.id}
                 className={b.default ? "primary" : b.cancel ? "ghost" : ""}
                 disabled={!b.enabled}
                 autoFocus={dialog.focus === b.id}
@@ -310,7 +344,7 @@ export function UserDialogs() {
   return (
     <>
       {dialogs.map((d) => (
-        <DialogView key={d.name} dialog={d} />
+        <DialogView key={d.instanceId} dialog={d} />
       ))}
     </>
   );

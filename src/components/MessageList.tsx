@@ -38,17 +38,22 @@ export function hotlinkAtPoint(x: number, y: number) {
       })();
   if (!range || range.node.nodeType !== Node.TEXT_NODE) return null;
   const row = (range.node.parentElement?.closest(".msg-row") ?? null) as HTMLElement | null;
-  const value = range.node.textContent ?? "";
-  let start = Math.min(range.offset, value.length);
-  let end = start;
-  while (start > 0 && !/\s/.test(value[start - 1])) start--;
-  while (end < value.length && !/\s/.test(value[end])) end++;
-  const word = value.slice(start, end);
-  if (!row || !word) return null;
+  if (!row) return null;
   const fullLine = row.textContent ?? "";
-  const before = fullLine.slice(0, Math.max(0, fullLine.indexOf(word)));
+  // DOM ranges retain which occurrence was hovered, including words split by
+  // formatting spans. indexOf(word) would point at an earlier repeated word.
+  const beforeCaret = document.createRange();
+  beforeCaret.selectNodeContents(row);
+  beforeCaret.setEnd(range.node, range.offset);
+  let start = beforeCaret.toString().length;
+  let end = start;
+  while (start > 0 && !/\s/.test(fullLine[start - 1])) start--;
+  while (end < fullLine.length && !/\s/.test(fullLine[end])) end++;
+  const word = fullLine.slice(start, end);
+  if (!word) return null;
+  const before = fullLine.slice(0, start);
   const position = before.trim() ? before.trim().split(/\s+/).length + 1 : 1;
-  return { word, fullLine, line: Number(row.dataset.index ?? 0) + 1, position };
+  return { word, fullLine, line: Number(row.dataset.index ?? 0) + 1, position, charPosition: start };
 }
 
 export function startsTimestampMinute(line: Line, previous?: Line): boolean {
@@ -309,7 +314,7 @@ export function MessageList({ buffer }: { buffer: Buffer }) {
     action: "mouse" | "sclick" | "dclick" | "rclick" | "uclick"
   ) =>
     api
-      .scriptRunHotlink(buffer.serverId, popupTarget, hit.word, hit.fullLine, action, hit.line, hit.position)
+      .scriptRunHotlink(buffer.serverId, popupTarget, hit.word, hit.fullLine, action, hit.line, hit.position, hit.charPosition)
       .catch(() => null);
   const dispatchHotlink = (
     event: ReactMouseEvent,

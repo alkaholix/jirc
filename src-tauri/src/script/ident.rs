@@ -17,35 +17,69 @@ use sha2::Digest; // brings the Digest trait into scope for Md5/Sha1/Sha2 too
 const INMODE_SENTINEL: &str = "$inmode";
 const INWHO_SENTINEL: &str = "$inwho";
 
+fn hotlink_match<'a>(rt: &'a Runtime) -> (&'a str, usize, &'static str) {
+    let raw = rt.event.text.as_str();
+    let word = raw.trim_matches(|c: char| {
+        !c.is_alphanumeric() && !"#&!+%@._-:/[]\\^{}|`".contains(c)
+    });
+    let prefixes = rt.state.isupport.prefix_chars();
+    let nick = word.trim_start_matches(|c| prefixes.contains(c));
+    let (matched, kind) = if let Some(channel) = rt.state.isupport.channel_target(word) {
+        (channel, "channel")
+    } else if word.to_ascii_lowercase().starts_with("http://")
+        || word.to_ascii_lowercase().starts_with("https://")
+    {
+        (word, "url")
+    } else if rt.state.ial.iter().any(|(name, _)| rt.state.isupport.names_equal(name, nick)) {
+        (nick, "nick")
+    } else {
+        (word, "other")
+    };
+    let prefix = raw.find(matched).unwrap_or(0);
+    // The frontend sends the raw word's start. Add its decoration prefix once,
+    // using UTF-16 positions like the DOM and mIRC's native wide strings.
+    (matched, raw[..prefix].encode_utf16().count(), kind)
+}
+
 pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> String {
     rt.purge_expired();
+    if rt.error_pending() {
+        return String::new();
+    }
+    // Validate required positions, rather than numeric content: mIRC's string
+    // and token functions deliberately accept empty text and tolerant numbers.
+    // Omitted required parameters are execution errors, not numeric defaults.
+    let required = match name.to_ascii_lowercase().as_str() {
+        "left" | "right" | "mid" | "pos" | "poscs" | "count" | "countcs"
+        | "remove" | "removecs" | "numtok" | "sorttok" | "rand" | "r" => 2,
+        "gettok" | "addtok" | "deltok" | "istok" | "replace" | "replacecs"
+        | "replacex" | "replacexcs" => 3,
+        "puttok" | "instok" | "findtok" | "matchtok" | "wildtok" | "remtok"
+        | "reptok" => 4,
+        _ => 0,
+    };
+    let missing_random_bound = matches!(name.to_ascii_lowercase().as_str(), "rand" | "r")
+        && args.iter().take(2).any(String::is_empty);
+    if args.len() < required || missing_random_bound {
+        rt.raise_script_error(format!("Invalid parameters: ${name}"));
+        return String::new();
+    }
     let a = |i: usize| args.get(i).cloned().unwrap_or_default();
     match name.to_ascii_lowercase().as_str() {
         "hotlink" => match a(0).to_ascii_lowercase().as_str() {
-            "word" | "match" => match prop.to_ascii_lowercase().as_str() {
+            "word" => match prop.to_ascii_lowercase().as_str() {
                 "pos" => rt.event.hotlink_pos.to_string(),
-                "type" => {
-                    let word = rt
-                        .event
-                        .text
-                        .trim_matches(|c: char| !c.is_alphanumeric() && !"#&!+%@._-:/".contains(c));
-                    if word.starts_with(['#', '&', '!', '+', '%']) {
-                        "channel"
-                    } else if word.starts_with("http://") || word.starts_with("https://") {
-                        "url"
-                    } else if rt.state.ial.iter().any(|(nick, _)| {
-                        rt.state
-                            .isupport
-                            .names_equal(nick, word.trim_start_matches('@'))
-                    }) {
-                        "nick"
-                    } else {
-                        "other"
-                    }
-                    .to_string()
-                }
+                "type" => hotlink_match(rt).2.into(),
                 _ => rt.event.text.clone(),
             },
+            "match" => {
+                let (text, prefix, kind) = hotlink_match(rt);
+                match prop.to_ascii_lowercase().as_str() {
+                    "pos" => (rt.event.hotlink_char_pos + prefix).to_string(),
+                    "type" => kind.into(),
+                    _ => text.to_string(),
+                }
+            }
             "event" => rt.event.hotlink_event.clone(),
             "line" => {
                 if prop.eq_ignore_ascii_case("pos") {
@@ -465,7 +499,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                                 .parent()
                                 .unwrap_or(&rt.data_dir)
                                 .join("logs")
-                                .join(clean(rt.network))
+                                .join(clean(&rt.network))
                                 .join(format!("{}.log", clean(window)))
                                 .to_string_lossy()
                                 .into_owned()
@@ -558,85 +592,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 sel.join(" ")
             }
         }
-        "did" => {
-            if args.is_empty() {
-                return rt.event.dialog_control.clone();
-            }
-            let (control, line) = if args.len() >= 2 {
-                (a(1), a(2).parse::<usize>().unwrap_or(0))
-            } else {
-                (a(0), a(1).parse::<usize>().unwrap_or(0))
-            };
-            let value = rt.event.did.get(&control).cloned().unwrap_or_default();
-            let lines: Vec<&str> = value.split('\n').collect();
-            let options = rt
-                .event
-                .did
-                .get(&format!("\u{0}options\u{0}{control}"))
-                .map(|value| value.split('\n').collect::<Vec<_>>())
-                .unwrap_or_default();
-            match prop {
-                "len" => {
-                    let text = if line > 0 {
-                        lines.get(line - 1).copied().unwrap_or("")
-                    } else {
-                        &value
-                    };
-                    text.chars().count().to_string()
-                }
-                "lines" => if options.is_empty() {
-                    lines.len()
-                } else {
-                    options.len()
-                }
-                .to_string(),
-                "state" => {
-                    if value == "1" || value == "2" {
-                        value
-                    } else {
-                        "0".to_string()
-                    }
-                }
-                "seltext" => value.split('\n').next().unwrap_or("").to_string(),
-                "sel" => {
-                    let selected: Vec<usize> = value
-                        .split('\n')
-                        .filter_map(|selected| {
-                            options.iter().position(|option| *option == selected)
-                        })
-                        .map(|index| index + 1)
-                        .collect();
-                    if line == 0 {
-                        selected.len().to_string()
-                    } else {
-                        selected.get(line - 1).copied().unwrap_or(0).to_string()
-                    }
-                }
-                "visible" | "enabled" => rt
-                    .event
-                    .did
-                    .get(&format!("\u{0}{prop}\u{0}{control}"))
-                    .map(|value| if value == "true" { "$true" } else { "$false" })
-                    .unwrap_or("$false")
-                    .to_string(),
-                "isid" => bool_str(rt.event.did.contains_key(&control)),
-                "edited" => rt
-                    .event
-                    .did
-                    .get(&format!("\u{0}edited\u{0}{control}"))
-                    .map(|value| if value == "true" { "$true" } else { "$false" })
-                    .unwrap_or("$false")
-                    .to_string(),
-                "next" | "prev" => rt
-                    .event
-                    .did
-                    .get(&format!("\u{0}{prop}\u{0}{control}"))
-                    .cloned()
-                    .unwrap_or_default(),
-                _ if line > 0 => lines.get(line - 1).copied().unwrap_or("").to_string(),
-                _ => value,
-            }
-        }
+        "did" => super::dialogs::did_value(rt, args, prop),
         "dname" => rt.event.dialog_name.clone(),
         "devent" => rt.event.dialog_event.clone(),
         "dialog" => {
@@ -687,29 +643,15 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 .ok()
                 .and_then(char::from_u32)
                 .unwrap_or(',');
-            rt.event
-                .did
-                .get(&format!("\u{0}options\u{0}{control}"))
-                .map(|value| {
-                    value
-                        .split('\n')
-                        .collect::<Vec<_>>()
-                        .join(&delimiter.to_string())
-                })
-                .unwrap_or_default()
+            super::dialogs::control_lines(rt, &a(0), &control).join(&delimiter.to_string())
         }
         "didwm" | "didreg" => {
             let control = a(1);
             let needle = a(2);
             let start = a(3).parse::<usize>().unwrap_or(1).max(1);
-            let options = rt
-                .event
-                .did
-                .get(&format!("\u{0}options\u{0}{control}"))
-                .cloned()
-                .unwrap_or_default();
+            let options = super::dialogs::control_lines(rt, &a(0), &control);
             options
-                .split('\n')
+                .iter()
                 .enumerate()
                 .skip(start - 1)
                 .find(|(_, value)| {
@@ -891,7 +833,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                     }
                 })
         }
-        "halted" => bool_str(rt.event.default_halted),
+        "halted" => bool_str(rt.event.event_halted),
         "caller" => rt.caller.to_string(),
         "fromeditbox" => bool_str(rt.event.from_editbox),
         "ctimer" => rt.event.timer.clone(),
@@ -989,7 +931,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                     let own_prefixes = channel
                         .members
                         .iter()
-                        .find(|(member, _)| rt.state.isupport.names_equal(member, rt.my_nick))
+                        .find(|(member, _)| rt.state.isupport.names_equal(member, &rt.my_nick))
                         .map(|(_, prefixes)| prefixes.as_str())
                         .unwrap_or("");
                     let mode = match prop.to_ascii_lowercase().as_str() {
@@ -1182,11 +1124,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             .get(super::eval::CLIENT_DEBUG_KEY)
             .cloned()
             .unwrap_or_else(|| "0".into()),
-        "error" => rt
-            .vars
-            .get(super::eval::CLIENT_ERROR_KEY)
-            .cloned()
-            .unwrap_or_default(),
+        "error" => rt.script_error_message().to_string(),
         "isadmin" => "$false".into(),
         "lock" | "locked" => "$false".into(),
         "agent" => {
@@ -1300,15 +1238,9 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             .find(|entry| entry.name.eq_ignore_ascii_case(&rt.active))
             .map(|entry| entry.url)
             .unwrap_or_default(),
-        "urlget" => {
-            if a(0) == "0" {
-                "0".into()
-            } else {
-                String::new()
-            }
-        }
+        "urlget" => super::urlget::identifier(rt, args, prop),
         "cnick" => {
-            if a(0).eq_ignore_ascii_case(rt.my_nick) {
+            if a(0).eq_ignore_ascii_case(&rt.my_nick) {
                 rt.vars
                     .get(super::eval::CLIENT_SELF_COLOR_KEY)
                     .map(|value| css_hex_to_mirc_rgb(value))
@@ -1932,7 +1864,17 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             }
         }
         // mIRC rounds $calc results to 6 decimal places.
-        "calc" => calc(&a(0)).map(fmt_round6).unwrap_or_default(),
+        "calc" => {
+            let expression = a(0);
+            match calc(&expression) {
+                Some(value) if value.is_finite() => fmt_round6(value),
+                // mIRC returns zero for null input or an undefined operation
+                // anywhere in a calculation, rather than an empty result.
+                Some(_) => "0".into(),
+                None if expression.trim().is_empty() => "0".into(),
+                None => String::new(),
+            }
+        }
         // Roots / powers / logs (6-decimal default like mIRC).
         "sqrt" => fmt_round6(num(&a(0)).sqrt()),
         "cbrt" => fmt_round6(num(&a(0)).cbrt()),
@@ -2380,15 +2322,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             }
         }
         "portfree" => bool_str(port_is_free(&a(0), &a(1))),
-        "status" => {
-            if rt.state.connect_time != 0 {
-                "connected".to_string()
-            } else if !rt.state.server_id.is_empty() {
-                "connecting".to_string()
-            } else {
-                "disconnected".to_string()
-            }
-        }
+        "status" => rt.connection_status().as_str().to_string(),
         "ssl" => bool_str(rt.state.tls),
         "serverip" => rt.state.server_ip.clone(),
         "servertarget" => rt.state.server_target.clone(),
@@ -3268,6 +3202,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             .map(|n| fmt_round6(n.abs()))
             .unwrap_or_default(),
         "int" => a(0)
+            .replace(['d', 'D'], "e")
             .parse::<f64>()
             .map(|n| (n.trunc() as i64).to_string())
             .unwrap_or_default(),
@@ -3279,8 +3214,12 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             .parse::<f64>()
             .map(|n| (n.floor() as i64).to_string())
             .unwrap_or_default(),
-        "min" => num2(&a(0), &a(1), f64::min),
-        "max" => num2(&a(0), &a(1), f64::max),
+        "min" | "max" => token_extreme(
+            args,
+            prop,
+            name.eq_ignore_ascii_case("max"),
+            &rt.state.isupport.prefix_modes,
+        ),
         "addtok" => {
             // $addtok(list, token, sepcode)
             let sep = sep_code(&a(2));
@@ -3392,45 +3331,25 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 .into_iter()
                 .map(String::from)
                 .collect();
-            if opts.contains('c') {
-                // Channel prefix order ~ & @ % + then none; stable within a rank.
-                let rank = |t: &str| match t.chars().next() {
-                    Some('~') => 0,
-                    Some('&') => 1,
-                    Some('@') => 2,
-                    Some('%') => 3,
-                    Some('+') => 4,
-                    _ => 5,
-                };
-                toks.sort_by_key(|t| rank(t));
-            } else if opts.contains('n') {
-                toks.sort_by(|x, y| {
-                    let (x, y) = (
-                        x.parse::<f64>().unwrap_or(0.0),
-                        y.parse::<f64>().unwrap_or(0.0),
-                    );
-                    x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal)
-                });
+            let mode = if opts.contains('n') {
+                'n'
             } else if opts.contains('a') {
-                // 'a' = alpha-then-numerics: wholly-numeric tokens sort
-                // numerically *after* the non-numeric ones.
-                toks.sort_by(|x, y| {
-                    match (x.parse::<f64>(), y.parse::<f64>()) {
-                        (Ok(x), Ok(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
-                        (Ok(_), Err(_)) => std::cmp::Ordering::Greater,
-                        (Err(_), Ok(_)) => std::cmp::Ordering::Less,
-                        (Err(_), Err(_)) if cs => x.cmp(y),
-                        (Err(_), Err(_)) => x.to_lowercase().cmp(&y.to_lowercase()),
-                    }
-                });
-            } else if cs {
-                toks.sort();
+                'a'
+            } else if opts.contains('c') {
+                'c'
             } else {
-                toks.sort_by(|x, y| x.to_lowercase().cmp(&y.to_lowercase()));
-            }
-            if opts.contains('r') {
-                toks.reverse();
-            }
+                ' '
+            };
+            toks.sort_by(|left, right| {
+                let order = token_cmp(left, right, mode, cs, &rt.state.isupport.prefix_modes);
+                // Reverse the comparison, not the final list: equivalent
+                // tokens keep their input order in either direction.
+                if opts.contains('r') {
+                    order.reverse()
+                } else {
+                    order
+                }
+            });
             join_toks(&toks, sep)
         }
         "wildtok" => {
@@ -3465,21 +3384,18 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             }
         }
         "qt" => {
-            let s = a(0);
-            if s.contains(' ') && !(s.starts_with('"') && s.ends_with('"')) {
-                format!("\"{s}\"")
-            } else {
-                s
+            let mut s = a(0);
+            if s.is_empty() {
+                return "\"\"".into();
             }
+            if !s.starts_with('"') { s.insert(0, '"'); }
+            if !s.ends_with('"') { s.push('"'); }
+            s
         }
         "noqt" => {
-            // $noqt(text) -> remove outer enclosing quotes.
             let s = a(0);
-            if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
-                s[1..s.len() - 1].to_string()
-            } else {
-                s
-            }
+            let s = s.strip_prefix('"').map_or(s.as_str(), |tail| tail.trim_start_matches(' '));
+            s.strip_suffix('"').unwrap_or(s).trim_end_matches(' ').to_string()
         }
         "envvar" => {
             // $envvar(name) -> env var value; $envvar(0) -> count; $envvar(N) -> Nth name.
@@ -3493,26 +3409,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 Err(_) => std::env::var(&arg).unwrap_or_default(),
             }
         }
-        "bytes" => {
-            // $bytes(N) -> comma-formatted; $bytes(N).suf -> human-readable suffix.
-            let n: f64 = a(0).parse().unwrap_or(0.0);
-            if prop.eq_ignore_ascii_case("suf") {
-                let units = ["", "K", "M", "G", "T"];
-                let mut v = n.abs();
-                let mut i = 0;
-                while v >= 1024.0 && i < units.len() - 1 {
-                    v /= 1024.0;
-                    i += 1;
-                }
-                if i == 0 {
-                    (n as i64).to_string()
-                } else {
-                    format!("{:.2}{}", v, units[i])
-                }
-            } else {
-                comma_format(n as i64)
-            }
-        }
+        "bytes" => super::byte_format::format_bytes(&a(0), &a(1), prop.eq_ignore_ascii_case("suf")),
         "strip" => strip_codes_opts(&a(0), &a(1)),
         // $notags(line) -> the line with a leading IRCv3 message-tag block
         // (`@key=val;... `) removed. Tags only ever prefix a line, so drop up to
@@ -3630,10 +3527,40 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
         }
         "feof" => bool_str(rt.files.feof),
         "ferr" => bool_str(rt.files.ferr),
-        "fread" => rt.files.read_line(&a(0)),
+        "fread" => {
+            let selector = a(0);
+            if args.len() == 1 && selector.parse::<usize>() == Ok(0) {
+                return rt.files.count().to_string();
+            }
+            if args.len() == 1 {
+                return rt.files.read_line(&selector);
+            }
+            let destination = a(2);
+            let count = a(1).parse::<usize>().ok().filter(|n| *n > 0);
+            if args.len() != 3 || !destination.starts_with('&') || destination.len() < 2
+                || destination.chars().any(char::is_whitespace) || count.is_none()
+            {
+                rt.files.read_failed(&selector);
+                return String::new();
+            }
+            match rt.files.read_bytes(&selector, count.unwrap()) {
+                Some(bytes) => {
+                    rt.bins.set(&destination, 1, &bytes, true);
+                    bytes.len().to_string()
+                }
+                None => String::new(),
+            }
+        }
         // $freadex(name) — the rest of the file from the current pointer.
         "freadex" => rt.files.read_rest(&a(0)),
-        "fgetc" => rt.files.read_char(&a(0)),
+        "fgetc" => {
+            let selector = a(0);
+            if selector.parse::<usize>() == Ok(0) {
+                rt.files.count().to_string()
+            } else {
+                rt.files.read_char(&selector)
+            }
+        }
         "fopen" => {
             // $fopen(N) -> Nth open handle (0 = count); $fopen(name) -> the name if
             // open; properties .fname/.pos/.eof/.err.
@@ -3668,16 +3595,8 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 "bom" => rt
                     .files
                     .handle(&name)
-                    .and_then(|h| std::fs::read(&h.path).ok())
-                    .map(|bytes| {
-                        match bytes.as_slice() {
-                            [0xff, 0xfe, ..] => "utf16le",
-                            [0xfe, 0xff, ..] => "utf16be",
-                            [0xef, 0xbb, 0xbf, ..] => "utf8",
-                            _ => "ascii",
-                        }
-                        .to_string()
-                    })
+                    .and_then(|h| h.bom())
+                    .map(str::to_string)
                     .unwrap_or_default(),
                 _ => String::new(),
             }
@@ -3852,11 +3771,16 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                 // This alias is being used as an identifier — flag it for
                 // $caller/$isid, keep $show true (identifiers aren't silenced),
                 // expose the `.property` as $prop, and record its return for $result.
+                // mIRC never evaluates the rest of a command it has stopped.
+                if rt.abandoned_at.is_some() {
+                    return String::new();
+                }
                 let saved = rt.caller;
                 let saved_show = rt.show;
                 let saved_prop = rt.vars.insert(PROP_KEY.to_string(), prop.to_string());
                 rt.caller = "identifier";
                 rt.show = true;
+                let halted_before = rt.halted;
                 let result = rt.call_named_alias_in_source(
                     other,
                     &body,
@@ -3864,6 +3788,12 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
                     &source,
                     source_line,
                 );
+                // A halt inside the identifier (`/halt`, an empty `$$`) also
+                // stops the command that called it; what the alias already
+                // printed stays.
+                if rt.halted && !halted_before {
+                    rt.abandon_command();
+                }
                 rt.vars
                     .insert(super::eval::RESULT_KEY.to_string(), result.clone());
                 rt.caller = saved;
@@ -4720,7 +4650,8 @@ fn regsub_replace(
         }
     };
     rt.vars.remove(REGERR_KEY);
-    let text = spec.prepare_text(text);
+    let original_text = text;
+    let text = spec.prepare_text(original_text);
     if let Err(error) = store_regex_results(rt, result_name, &text, &spec) {
         clear_regex_results(rt, result_name);
         rt.vars.insert(REGERR_KEY.to_string(), error);
@@ -4752,6 +4683,11 @@ fn regsub_replace(
         count += 1;
     }
     output.extend_from_slice(&source[last..]);
+    if count == 0 {
+        // /S strips the matching subject, but a no-match substitution keeps
+        // the caller's original formatting (observed in native mIRC).
+        return (original_text.to_string(), 0);
+    }
     (String::from_utf8_lossy(&output).into_owned(), count)
 }
 
@@ -4842,7 +4778,8 @@ pub fn eval_regsubex(rt: &mut Runtime, raw: &[String]) -> String {
         }
     };
     rt.vars.remove(REGERR_KEY);
-    let text = spec.prepare_text(&text);
+    let original_text = text;
+    let text = spec.prepare_text(&original_text);
     let group_count = spec.regex.captures_len().saturating_sub(1);
     if let Err(e) = store_regex_results(rt, &result_name, &text, &spec) {
         clear_regex_results(rt, &result_name);
@@ -4875,6 +4812,9 @@ pub fn eval_regsubex(rt: &mut Runtime, raw: &[String]) -> String {
             })
             .collect();
         matches.push((matched.start(), matched.end(), groups));
+    }
+    if matches.is_empty() {
+        return finish_regex_output(rt, raw, output_index, original_text, 0);
     }
     let source = text.as_bytes();
     let mut out = Vec::with_capacity(source.len());
@@ -4977,6 +4917,135 @@ fn join_toks<S: AsRef<str>>(toks: &[S], sep: char) -> String {
         .map(AsRef::as_ref)
         .collect::<Vec<_>>()
         .join(&sep.to_string())
+}
+
+/// Numeric token sorting accepts a leading number followed by a text label.
+/// The bool distinguishes a wholly numeric token for alpha-then-numeric sorts.
+/// mIRC accepts either E or D for the exponent in these token identifiers.
+fn token_number(text: &str) -> (f64, bool) {
+    let text = text.trim();
+    let bytes = text.as_bytes();
+    let mut end = 0;
+    if matches!(bytes.first(), Some(b'+' | b'-')) {
+        end += 1;
+    }
+    let mut digits = 0;
+    while bytes.get(end).is_some_and(u8::is_ascii_digit) {
+        end += 1;
+        digits += 1;
+    }
+    if bytes.get(end) == Some(&b'.') {
+        end += 1;
+        while bytes.get(end).is_some_and(u8::is_ascii_digit) {
+            end += 1;
+            digits += 1;
+        }
+    }
+    if digits == 0 {
+        return (0.0, false);
+    }
+    if matches!(bytes.get(end), Some(b'e' | b'E' | b'd' | b'D')) {
+        let exponent = end;
+        end += 1;
+        if matches!(bytes.get(end), Some(b'+' | b'-')) {
+            end += 1;
+        }
+        let exponent_digits = end;
+        while bytes.get(end).is_some_and(u8::is_ascii_digit) {
+            end += 1;
+        }
+        if end == exponent_digits {
+            end = exponent;
+        }
+    }
+    let number = text[..end].replace(['d', 'D'], "e");
+    (number.parse().unwrap_or(0.0), end == text.len())
+}
+
+fn token_cmp(
+    left: &str,
+    right: &str,
+    mode: char,
+    case_sensitive: bool,
+    prefixes: &[(char, char)],
+) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let text_order = || {
+        if case_sensitive {
+            left.cmp(right)
+        } else {
+            left.to_ascii_lowercase().cmp(&right.to_ascii_lowercase())
+        }
+    };
+    match mode {
+        'n' => token_number(left)
+            .0
+            .partial_cmp(&token_number(right).0)
+            .unwrap_or(Ordering::Equal),
+        'a' => match (token_number(left), token_number(right)) {
+            ((left, true), (right, true)) => left.partial_cmp(&right).unwrap_or(Ordering::Equal),
+            ((_, true), (_, false)) => Ordering::Greater,
+            ((_, false), (_, true)) => Ordering::Less,
+            _ => text_order(),
+        },
+        'c' => {
+            // Only the first character receives prefix priority. The rest
+            // follows the ordinary text sort, using this connection's PREFIX.
+            let rank = |text: &str| {
+                prefixes
+                    .iter()
+                    .position(|&(_, prefix)| Some(prefix) == text.chars().next())
+                    .unwrap_or(prefixes.len())
+            };
+            rank(left).cmp(&rank(right)).then_with(text_order)
+        }
+        _ => text_order(),
+    }
+}
+
+fn token_extreme(args: &[String], prop: &str, maximum: bool, prefixes: &[(char, char)]) -> String {
+    // Preserve the existing empty-argument result; an empty one-argument list
+    // has no token to return either.
+    if args.is_empty() || args.iter().any(|arg| arg.trim().is_empty()) {
+        return String::new();
+    }
+    // The native two-decimal-argument shortcut selects the second spelling
+    // when values tie, before looking at any property. List sorting instead
+    // preserves the first equivalent token. Its numeric gate excludes E/D.
+    if args.len() == 2
+        && args.iter().all(|arg| {
+            arg == arg.trim() && !arg.contains(['d', 'D', 'e', 'E'])
+        })
+    {
+        let (left, left_numeric) = token_number(&args[0]);
+        let (right, right_numeric) = token_number(&args[1]);
+        if left_numeric && right_numeric {
+            let second = if maximum { left <= right } else { right <= left };
+            return args[usize::from(second)].clone();
+        }
+    }
+    let tokens = if args.len() == 1 {
+        split_toks(&args[0], ' ')
+    } else {
+        args.iter().map(String::as_str).collect()
+    };
+    let (mode, case_sensitive) = match prop.to_ascii_lowercase().as_str() {
+        "text" => ('a', false),
+        "textcs" => ('a', true),
+        "nick" => ('c', false),
+        _ => ('n', false),
+    };
+    let Some(mut selected) = tokens.first().copied() else {
+        return String::new();
+    };
+    for token in tokens.into_iter().skip(1) {
+        let order = token_cmp(token, selected, mode, case_sensitive, prefixes);
+        if (maximum && order.is_gt()) || (!maximum && order.is_lt()) {
+            selected = token;
+        }
+    }
+    // Strict comparisons preserve the first original token when values tie.
+    selected.to_string()
 }
 
 fn bool_str(b: bool) -> String {
@@ -6005,23 +6074,6 @@ fn css_hex_to_mirc_rgb(value: &str) -> u32 {
     red | (green << 8) | (blue << 16)
 }
 
-/// Formats an integer with thousands separators (for `$bytes`).
-fn comma_format(n: i64) -> String {
-    let s = n.unsigned_abs().to_string();
-    let mut out = String::new();
-    for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    if n < 0 {
-        format!("-{out}")
-    } else {
-        out
-    }
-}
-
 /// Monotonic clock origin shared by `$ticks` and `$ticksqpc`.
 fn process_start() -> std::time::Instant {
     use std::sync::OnceLock;
@@ -6396,13 +6448,6 @@ fn rand_range(lo: i64, hi: i64) -> i64 {
     lo + (x % span) as i64
 }
 
-fn num2(a: &str, b: &str, f: fn(f64, f64) -> f64) -> String {
-    match (a.parse::<f64>(), b.parse::<f64>()) {
-        (Ok(x), Ok(y)) => fmt_num(f(x, y)),
-        _ => String::new(),
-    }
-}
-
 /// Key under which `$read` records the matched line number for `$readn`.
 const READN_KEY: &str = "\u{0}readn";
 
@@ -6616,6 +6661,11 @@ fn eval_server(rt: &mut Runtime, args: &[String], prop: &str) -> String {
     // current network as its group, and its address as the value.
     let current = ServerEntry {
         address: rt.server.to_string(),
+        port: if rt.state.server_port == 0 {
+            String::new()
+        } else {
+            rt.state.server_port.to_string()
+        },
         group: rt.network.to_string(),
         nick: rt.my_nick.to_string(),
         ..Default::default()
@@ -7271,7 +7321,17 @@ fn eval_dcc_ident(rt: &Runtime, name: &str, args: &[String], prop: &str) -> Stri
     let Some(query) = args.first() else {
         return String::new();
     };
-    let selected = if let Ok(n) = query.trim().parse::<usize>() {
+    let selected = if query.trim() == "-1" {
+        if rt.event.dcc_id.is_empty() {
+            None
+        } else {
+            rt.event
+                .dcc_snapshot
+                .as_ref()
+                .filter(|item| item.kind == kind && item.id == rt.event.dcc_id)
+                .or_else(|| items.iter().find(|item| item.id == rt.event.dcc_id))
+        }
+    } else if let Ok(n) = query.trim().parse::<usize>() {
         if n == 0 {
             return items.len().to_string();
         }
@@ -7312,8 +7372,9 @@ fn eval_dcc_ident(rt: &Runtime, name: &str, args: &[String], prop: &str) -> Stri
                 ((item.transferred.saturating_mul(100) / item.size).min(100)).to_string()
             }
         }
-        "secs" | "idle" => item.secs.to_string(),
-        "done" => bool_str(item.status == "done"),
+        "secs" => item.secs.to_string(),
+        "idle" => item.idle.to_string(),
+        "done" => bool_str(matches!(item.status.as_str(), "done" | "sent" | "received")),
         "resume" => item.resume.to_string(),
         "cid" => match rt.conns.cid_of(&rt.state.server_id) {
             0 => String::new(),
@@ -7342,6 +7403,83 @@ mod tests {
         assert_eq!(calc("2 + 3 * 4"), Some(14.0));
         assert_eq!(calc("(2 + 3) * 4"), Some(20.0));
         assert_eq!(calc("10 / 4"), Some(2.5));
+    }
+
+    fn compatibility_echo(source: &str) -> Vec<crate::script::eval::Action> {
+        let engine = crate::script::ScriptEngine::new();
+        engine.load(&format!("alias probe {{ echo -a {source} }}"));
+        let ctx = crate::script::RunCtx {
+            server_id: "",
+            my_nick: "me",
+            network: "Net",
+            server: "irc.example.org",
+            data_dir: std::env::temp_dir(),
+            state: std::sync::Arc::new(Default::default()),
+        };
+        engine.run_alias(&ctx, "", "probe", "")
+    }
+
+    #[test]
+    fn numeric_token_compatibility_min_max_lists_and_properties() {
+        use crate::script::eval::Action;
+        assert_eq!(
+            compatibility_echo("$min(8,7,1) $max(1 9 2) $min(11 2 3) $min(c C).text $min(c C).textcs $max(c C).text $min(b a 10 2).text $max(b a 10 2).text $min(+z @z @a).nick $max(@a +z).nick"),
+            vec![Action::Echo {
+                target: "(active)".into(),
+                text: "1 9 2 c C c a 10 @a +z".into(),
+            }]
+        );
+        assert_eq!(
+            compatibility_echo("$min(2,2.0) $max(2,2.0) $min(2 2.0) $max(2 2.0) $min(10,2).nick $min(2,2.0).nick"),
+            vec![Action::Echo {
+                target: "(active)".into(),
+                text: "2.0 2.0 2 2 2 2.0".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn numeric_token_compatibility_sort_numeric_labels_and_reverse_ties() {
+        use crate::script::eval::Action;
+        assert_eq!(
+            compatibility_echo("$sorttok(4 2:foo 2:bar 1:test,32,n) / $sorttok(a A b B,32,r) / $sorttok(2 2.0 1 3,32,nr) / $sorttokcs(b B a A,32,r) / $sorttok(@z +b @a +a,32,c) / $sorttok(101 1d2 99 1E2label,32,n)"),
+            vec![Action::Echo {
+                target: "(active)".into(),
+                text: "1:test 2:foo 2:bar 4 / b B a A / 3 2 2.0 1 / b a B A / @a @z +a +b / 99 1d2 1E2label 101".into(),
+            }]
+        );
+        // Native mIRC chooses n before a before c when flags are combined.
+        assert_eq!(
+            compatibility_echo("$sorttok(b 2 1 a,32,anc)"),
+            vec![Action::Echo {
+                target: "(active)".into(),
+                text: "b a 1 2".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn numeric_token_compatibility_calc_null_and_undefined_are_zero() {
+        use crate::script::eval::Action;
+        assert_eq!(
+            compatibility_echo("$calc($null) $calc(2+(1/0)+2) $calc((-1)^.5) $calc(1/3)"),
+            vec![Action::Echo {
+                target: "(active)".into(),
+                text: "0 0 0 0.333333".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn numeric_token_compatibility_int_d_exponent() {
+        use crate::script::eval::Action;
+        assert_eq!(
+            compatibility_echo("$int(5d6) $int(-1.9D1) $int(1d-2) $int(5e6) $int(1.9)"),
+            vec![Action::Echo {
+                target: "(active)".into(),
+                text: "5000000 -19 0 5000000 1".into(),
+            }]
+        );
     }
 
     #[test]
@@ -7408,10 +7546,11 @@ mod tests {
         let mut users = crate::script::users::UserList::default();
         let mut rt = Runtime {
             script: &script,
-            my_nick: "me",
-            network: "n",
-            server: "s",
+            my_nick: "me".to_string(),
+            network: "n".to_string(),
+            server: "s".to_string(),
             vars: &mut vars,
+            connection_scope: Default::default(),
             local_scopes: Vec::new(),
             hashes: &mut hashes,
             var_expiry: &mut var_expiry,
@@ -7424,8 +7563,12 @@ mod tests {
             actions: vec![],
             pending_pipe_commands: Vec::new(),
             halted: false,
+            abandoned_at: None,
+            calc_args: false,
+            script_error: None,
             steps: 0,
             depth: 0,
+            signal_depth: 0,
             alias_stack: Vec::new(),
             ret: None,
             goto: None,
@@ -7440,6 +7583,8 @@ mod tests {
             dcc: std::sync::Arc::new(crate::script::eval::NoDcc),
             webviews: std::sync::Arc::new(crate::script::eval::NoWebviews),
             input: std::sync::Arc::new(crate::script::eval::NoInput),
+            dialogs: Default::default(),
+            urlgets: Default::default(),
             caller: "command",
             show: true,
         };
@@ -7585,7 +7730,8 @@ mod tests {
         assert!(id("gmt", &[]).parse::<u64>().is_ok());
         assert_eq!(id("noqt", &["\"hello world\""]), "hello world");
         assert_eq!(id("noqt", &["plain"]), "plain");
-        assert_eq!(id("bytes", &["1234567"]), "1,234,567");
+        assert_eq!(id("bytes", &["1234567"]), "1.18");
+        assert_eq!(id("bytes", &["1234567", "b"]), "1,234,567");
         assert!(id("envvar", &["0"])
             .parse::<usize>()
             .map(|c| c > 0)
@@ -7729,10 +7875,11 @@ mod tests {
         let mut users = crate::script::users::UserList::default();
         let mut rt = Runtime {
             script: &script,
-            my_nick: "me",
-            network: "n",
-            server: "s",
+            my_nick: "me".to_string(),
+            network: "n".to_string(),
+            server: "s".to_string(),
             vars: &mut vars,
+            connection_scope: Default::default(),
             local_scopes: Vec::new(),
             hashes: &mut hashes,
             var_expiry: &mut var_expiry,
@@ -7745,8 +7892,12 @@ mod tests {
             actions: vec![],
             pending_pipe_commands: Vec::new(),
             halted: false,
+            abandoned_at: None,
+            calc_args: false,
+            script_error: None,
             steps: 0,
             depth: 0,
+            signal_depth: 0,
             alias_stack: Vec::new(),
             ret: None,
             goto: None,
@@ -7761,6 +7912,8 @@ mod tests {
             dcc: std::sync::Arc::new(crate::script::eval::NoDcc),
             webviews: std::sync::Arc::new(crate::script::eval::NoWebviews),
             input: std::sync::Arc::new(crate::script::eval::NoInput),
+            dialogs: Default::default(),
+            urlgets: Default::default(),
             caller: "command",
             show: true,
         };
@@ -7949,10 +8102,11 @@ mod tests {
         use crate::script::eval::EventVars;
         Runtime {
             script,
-            my_nick: "me",
-            network: "n",
-            server: "s",
+            my_nick: "me".to_string(),
+            network: "n".to_string(),
+            server: "s".to_string(),
             vars,
+            connection_scope: Default::default(),
             local_scopes: Vec::new(),
             hashes,
             var_expiry,
@@ -7965,8 +8119,12 @@ mod tests {
             actions: vec![],
             pending_pipe_commands: Vec::new(),
             halted: false,
+            abandoned_at: None,
+            calc_args: false,
+            script_error: None,
             steps: 0,
             depth: 0,
+            signal_depth: 0,
             alias_stack: Vec::new(),
             ret: None,
             goto: None,
@@ -7981,6 +8139,8 @@ mod tests {
             dcc: std::sync::Arc::new(crate::script::eval::NoDcc),
             webviews: std::sync::Arc::new(crate::script::eval::NoWebviews),
             input: std::sync::Arc::new(crate::script::eval::NoInput),
+            dialogs: Default::default(),
+            urlgets: Default::default(),
             caller: "command",
             show: true,
         }
@@ -8038,7 +8198,7 @@ mod tests {
         assert_eq!(e("sorttok", &["c a b", "32"]), "a b c");
         assert_eq!(e("sorttok", &["3 1 2", "32", "n"]), "1 2 3");
         assert_eq!(e("sorttok", &["a b c", "32", "r"]), "c b a");
-        // channel-prefix order ~ & @ % + then none (stable within a rank).
+        // Channel prefixes sort before ordinary text, then by text within a rank.
         assert_eq!(
             e("sorttok", &["+aa @bb +cc dd @ee", "32", "c"]),
             "@bb @ee +aa +cc dd"

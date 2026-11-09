@@ -7,7 +7,29 @@
 
 pub mod ast;
 pub mod binvar;
+mod byte_format;
+mod connections;
 pub mod eval;
+mod dispatch;
+mod signals;
+pub mod dialogs;
+pub mod urlget;
+#[cfg(test)]
+mod runtime_tests;
+#[cfg(test)]
+mod gap_metadata_tests;
+#[cfg(test)]
+mod echo_tests;
+#[cfg(test)]
+mod file_read_tests;
+#[cfg(test)]
+mod file_lock_tests;
+#[cfg(test)]
+mod migration_value_tests;
+#[cfg(test)]
+mod regex_strip_tests;
+#[cfg(test)]
+mod parse_rules_tests;
 pub mod files;
 pub mod hash;
 pub mod ident;
@@ -35,6 +57,9 @@ static NEXT_EVENT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Connection context supplied by the caller for each run.
 pub struct RunCtx<'a> {
+    /// UI/action owner, including local or disconnected buffers whose protocol
+    /// snapshot has no server ID. Blank falls back to the snapshot's ID.
+    pub server_id: &'a str,
     pub my_nick: &'a str,
     pub network: &'a str,
     pub server: &'a str,
@@ -42,6 +67,16 @@ pub struct RunCtx<'a> {
     pub data_dir: std::path::PathBuf,
     /// Live channel/member snapshot for state-aware identifiers.
     pub state: std::sync::Arc<crate::irc::state::StateSnapshot>,
+}
+
+impl RunCtx<'_> {
+    pub fn server_id(&self) -> &str {
+        if self.server_id.is_empty() {
+            &self.state.server_id
+        } else {
+            self.server_id
+        }
+    }
 }
 
 /// Raw server-line metadata shared by every script event derived from one IRC
@@ -85,10 +120,13 @@ struct Inner {
     dcc: std::sync::Arc<dyn ScriptDcc>,
     webviews: std::sync::Arc<dyn ScriptWebviews>,
     input: std::sync::Arc<dyn ScriptInput>,
+    dialogs: std::sync::Arc<Mutex<dialogs::DialogStore>>,
+    urlgets: std::sync::Arc<urlget::UrlGets>,
     /// The frontend's currently-focused window/buffer name, for `$active`.
     active: String,
     /// Numeric connection-id registry for `$cid`/`$scon`/`$activecid`.
     conns: ConnReg,
+    connection_states: crate::irc::state::StateStore,
     /// Numeric window-id registry for `$wid`/`$activewid`.
     wins: WinReg,
     /// Native windows that currently report focus, for `$appactive`.
@@ -113,11 +151,50 @@ impl Inner {
             dcc: std::sync::Arc::new(NoDcc),
             webviews: std::sync::Arc::new(NoWebviews),
             input: std::sync::Arc::new(NoInput),
+            dialogs: std::sync::Arc::new(Mutex::new(dialogs::DialogStore::default())),
+            urlgets: std::sync::Arc::new(urlget::UrlGets::default()),
             active: String::new(),
             conns: ConnReg::default(),
+            connection_states: crate::irc::state::StateStore::new(),
             wins: WinReg::default(),
             focused_windows: std::collections::HashSet::new(),
         }
+    }
+}
+
+impl Inner {
+    fn connection_view(&self, ctx: &RunCtx<'_>) -> eval::ConnsView {
+        use connections::{ConnectionContext, ConnectionStatus};
+
+        let mut view = self.conns.view();
+        view.source_server_id = ctx.server_id().to_string();
+        for (_, id) in &view.entries {
+            let state = self.connection_states.get(id);
+            let status = ConnectionStatus::from_state(&state);
+            let state = if state.server_id == *id {
+                state
+            } else {
+                let mut snapshot = (*state).clone();
+                snapshot.server_id = id.clone();
+                std::sync::Arc::new(snapshot)
+            };
+            let (network, server) = self.conns.contexts.get(id).cloned().unwrap_or_default();
+            view.contexts.insert(id.clone(), ConnectionContext {
+                my_nick: state.nick.clone(), network, server,
+                state, status,
+                target: "(status)".into(), routed: true,
+            });
+        }
+        // A protocol event can intentionally expose a pending/old nicklist;
+        // its own connection must retain the snapshot supplied for that event.
+        if let Some(current) = view.contexts.get_mut(ctx.server_id()) {
+            current.my_nick = ctx.my_nick.to_string();
+            current.network = ctx.network.to_string();
+            current.server = ctx.server.to_string();
+            current.state = ctx.state.clone();
+            current.status = ConnectionStatus::from_state(&ctx.state);
+        }
+        view
     }
 }
 
@@ -178,6 +255,8 @@ impl ConnReg {
         crate::script::eval::ConnsView {
             entries: self.entries.clone(),
             active_cid,
+            source_server_id: String::new(),
+            contexts: HashMap::new(),
         }
     }
 }
@@ -230,6 +309,40 @@ impl WinReg {
         }
     }
 
+    fn rename(
+        &mut self,
+        server_id: &str,
+        old_name: &str,
+        new_name: &str,
+        names_equal: impl Fn(&str, &str) -> bool,
+    ) -> Option<u32> {
+        let wid = self
+            .entries
+            .iter()
+            .find(|(_, sid, name)| sid == server_id && names_equal(name, old_name))
+            .map(|(wid, _, _)| *wid)?;
+        // The frontend retains the renamed source buffer when its destination
+        // already exists. Drop the replaced registry entries and keep that ID.
+        let replaced: Vec<u32> = self
+            .entries
+            .iter()
+            .filter(|(other, sid, name)| {
+                *other != wid && sid == server_id && names_equal(name, new_name)
+            })
+            .map(|(other, _, _)| *other)
+            .collect();
+        self.entries.retain(|(other, _, _)| !replaced.contains(other));
+        let (_, _, name) = self.entries.iter_mut().find(|(other, _, _)| *other == wid)?;
+        *name = new_name.to_string();
+        if replaced.contains(&self.active_wid) {
+            self.active_wid = wid;
+        }
+        if replaced.contains(&self.last_active_wid) {
+            self.last_active_wid = wid;
+        }
+        Some(wid)
+    }
+
     fn set_active(&mut self, server_id: &str, name: &str) {
         let next = self
             .entries
@@ -251,6 +364,12 @@ impl WinReg {
             active_wid: self.active_wid,
             last_active_wid: self.last_active_wid,
             last_closed: self.last_closed.clone(),
+            active_window: self
+                .entries
+                .iter()
+                .find(|(wid, _, _)| *wid == self.active_wid)
+                .map(|(_, server_id, name)| (server_id.clone(), name.clone())),
+            focus_order: None,
         }
     }
 }
@@ -258,6 +377,7 @@ impl WinReg {
 /// The script engine, stored as Tauri managed state.
 pub struct ScriptEngine {
     inner: Mutex<Inner>,
+    signals: Mutex<signals::SignalQueue>,
 }
 
 impl Default for ScriptEngine {
@@ -267,6 +387,9 @@ impl Default for ScriptEngine {
 }
 
 impl ScriptEngine {
+    pub fn set_connection_states(&self, states: crate::irc::state::StateStore) {
+        self.inner.lock().unwrap().connection_states = states;
+    }
     /// Records editbox activity for `$idle` and `/resetidle`.
     pub fn reset_idle(&self) {
         let now = std::time::SystemTime::now()
@@ -283,6 +406,7 @@ impl ScriptEngine {
     pub fn new() -> Self {
         ScriptEngine {
             inner: Mutex::new(Inner::empty()),
+            signals: Mutex::new(signals::SignalQueue::default()),
         }
     }
 
@@ -388,7 +512,40 @@ impl ScriptEngine {
 
     /// Drops a window's `$wid` when the UI closes it.
     pub fn window_close(&self, server_id: &str, name: &str) {
-        self.inner.lock().unwrap().wins.close(server_id, name);
+        let mut inner = self.inner.lock().unwrap();
+        let focused = inner
+            .wins
+            .entries
+            .iter()
+            .any(|(wid, sid, window)| {
+                *wid == inner.wins.active_wid
+                    && sid == server_id
+                    && window.eq_ignore_ascii_case(name)
+            })
+            || (inner.conns.active == server_id && inner.active.eq_ignore_ascii_case(name));
+        inner.wins.close(server_id, name);
+        if focused {
+            inner.active.clear();
+            inner.conns.active.clear();
+        }
+    }
+
+    /// Updates a displayed buffer name without closing/reopening its window.
+    pub fn window_rename(&self, server_id: &str, old_name: &str, new_name: &str) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        let state = inner.connection_states.get(server_id);
+        let Some(wid) = inner.wins.rename(server_id, old_name, new_name, |left, right| {
+            state.isupport.names_equal(left, right)
+        }) else {
+            return false;
+        };
+        if inner.wins.active_wid == wid
+            || (inner.conns.active == server_id && inner.active.eq_ignore_ascii_case(old_name))
+        {
+            inner.active = new_name.to_string();
+            inner.conns.active = server_id.to_string();
+        }
+        true
     }
 
     /// Records which window is active (for `$activewid`).
@@ -599,7 +756,9 @@ impl ScriptEngine {
     }
 
     fn close_dialog_state(&self, name: &str) {
-        eval::clear_dialog_state(&mut self.inner.lock().unwrap().vars, name);
+        let mut inner = self.inner.lock().unwrap();
+        eval::clear_dialog_state(&mut inner.vars, name);
+        inner.dialogs.lock().unwrap().close(name);
     }
 
     /// Returns the user-defined popup items for a context (nicklist, channel, …),
@@ -641,13 +800,15 @@ impl ScriptEngine {
             menu_context: "window".into(),
             ..Default::default()
         };
+        let conns = g.connection_view(ctx);
         let g = &mut *g;
         let mut rt = Runtime {
             script: &script,
-            my_nick: ctx.my_nick,
-            network: ctx.network,
-            server: ctx.server,
+            my_nick: ctx.my_nick.to_string(),
+            network: ctx.network.to_string(),
+            server: ctx.server.to_string(),
             vars: &mut g.vars,
+            connection_scope: Default::default(),
             local_scopes: Vec::new(),
             hashes: &mut g.hashes,
             var_expiry: &mut g.var_expiry,
@@ -660,15 +821,19 @@ impl ScriptEngine {
             actions: Vec::new(),
             pending_pipe_commands: Vec::new(),
             halted: false,
+            abandoned_at: None,
+            calc_args: false,
+            script_error: None,
             steps: 0,
             depth: 0,
+            signal_depth: 0,
             alias_stack: Vec::new(),
             ret: None,
             goto: None,
             data_dir: ctx.data_dir.clone(),
             state: ctx.state.clone(),
             active: g.active.clone(),
-            conns: g.conns.view(),
+            conns,
             wins: g.wins.view(),
             sockets: g.sockets.clone(),
             timers: g.timers.clone(),
@@ -676,6 +841,8 @@ impl ScriptEngine {
             dcc: g.dcc.clone(),
             webviews: g.webviews.clone(),
             input: g.input.clone(),
+            dialogs: g.dialogs.clone(),
+            urlgets: g.urlgets.clone(),
             caller: "menu",
             show: true,
         };
@@ -704,13 +871,15 @@ impl ScriptEngine {
             script_line: alias.source_line,
             ..Default::default()
         };
+        let conns = g.connection_view(ctx);
         let g = &mut *g;
         let mut rt = Runtime {
             script: &script,
-            my_nick: ctx.my_nick,
-            network: ctx.network,
-            server: ctx.server,
+            my_nick: ctx.my_nick.to_string(),
+            network: ctx.network.to_string(),
+            server: ctx.server.to_string(),
             vars: &mut g.vars,
+            connection_scope: Default::default(),
             local_scopes: Vec::new(),
             hashes: &mut g.hashes,
             var_expiry: &mut g.var_expiry,
@@ -723,15 +892,19 @@ impl ScriptEngine {
             actions: Vec::new(),
             pending_pipe_commands: Vec::new(),
             halted: false,
+            abandoned_at: None,
+            calc_args: false,
+            script_error: None,
             steps: 0,
             depth: 0,
+            signal_depth: 0,
             alias_stack: vec![alias.name.clone()],
             ret: None,
             goto: None,
             data_dir: ctx.data_dir.clone(),
             state: ctx.state.clone(),
             active: g.active.clone(),
-            conns: g.conns.view(),
+            conns,
             wins: g.wins.view(),
             sockets: g.sockets.clone(),
             timers: g.timers.clone(),
@@ -739,6 +912,8 @@ impl ScriptEngine {
             dcc: g.dcc.clone(),
             webviews: g.webviews.clone(),
             input: g.input.clone(),
+            dialogs: g.dialogs.clone(),
+            urlgets: g.urlgets.clone(),
             caller: "command",
             show: true,
         };
@@ -954,8 +1129,50 @@ impl ScriptEngine {
         menu: &str,
         menu_context: &str,
     ) -> Vec<Action> {
+        self.run_command_with_seed(ctx, target, command, params, snicks, source, caller,
+            from_editbox, timer_name, play_target, menu, menu_context, None, false)
+    }
+
+    pub(crate) fn urlgets(&self) -> std::sync::Arc<urlget::UrlGets> {
+        self.inner.lock().unwrap().urlgets.clone()
+    }
+
+    pub(crate) fn run_urlget_callback(
+        &self, ctx: &RunCtx, target: &str, callback: &str, id: u32, source: &str,
+        initial_bin: Option<(&str, &[u8])>,
+    ) -> Vec<Action> {
+        self.run_command_with_seed(ctx, target, &format!("{callback} {id}"), &[], &[],
+            source, "command", false, "", "", "", "", initial_bin, true)
+    }
+
+    fn run_command_with_seed(
+        &self,
+        ctx: &RunCtx,
+        target: &str,
+        command: &str,
+        params: &[String],
+        snicks: &[String],
+        source: &str,
+        caller: &'static str,
+        from_editbox: bool,
+        timer_name: &str,
+        play_target: &str,
+        menu: &str,
+        menu_context: &str,
+        initial_bin: Option<(&str, &[u8])>,
+        callback_only: bool,
+    ) -> Vec<Action> {
         let body = parser::parse_body(command);
         let mut g = self.inner.lock().unwrap();
+        if callback_only {
+            let name = command.split_whitespace().next().unwrap_or("");
+            if g.script.find_active_alias_from(name, &g.vars, source).is_none() {
+                return Vec::new();
+            }
+        }
+        if let Some((name, bytes)) = initial_bin {
+            g.bins.set(name, 1, bytes, true);
+        }
         let script = g.script.clone();
         let chan = context_channel(ctx, target);
         let event = EventVars {
@@ -975,13 +1192,15 @@ impl ScriptEngine {
             pnick: play_target.to_string(),
             ..Default::default()
         };
+        let conns = g.connection_view(ctx);
         let g = &mut *g;
         let mut rt = Runtime {
             script: &script,
-            my_nick: ctx.my_nick,
-            network: ctx.network,
-            server: ctx.server,
+            my_nick: ctx.my_nick.to_string(),
+            network: ctx.network.to_string(),
+            server: ctx.server.to_string(),
             vars: &mut g.vars,
+            connection_scope: Default::default(),
             local_scopes: Vec::new(),
             hashes: &mut g.hashes,
             var_expiry: &mut g.var_expiry,
@@ -994,15 +1213,19 @@ impl ScriptEngine {
             actions: Vec::new(),
             pending_pipe_commands: Vec::new(),
             halted: false,
+            abandoned_at: None,
+            calc_args: false,
+            script_error: None,
             steps: 0,
             depth: 0,
+            signal_depth: 0,
             alias_stack: Vec::new(),
             ret: None,
             goto: None,
             data_dir: ctx.data_dir.clone(),
             state: ctx.state.clone(),
             active: g.active.clone(),
-            conns: g.conns.view(),
+            conns,
             wins: g.wins.view(),
             sockets: g.sockets.clone(),
             timers: g.timers.clone(),
@@ -1010,6 +1233,8 @@ impl ScriptEngine {
             dcc: g.dcc.clone(),
             webviews: g.webviews.clone(),
             input: g.input.clone(),
+            dialogs: g.dialogs.clone(),
+            urlgets: g.urlgets.clone(),
             caller,
             show: true,
         };
@@ -1056,13 +1281,15 @@ impl ScriptEngine {
             mouse_key: key,
             ..Default::default()
         };
+        let conns = g.connection_view(ctx);
         let g = &mut *g;
         let mut rt = Runtime {
             script: &script,
-            my_nick: ctx.my_nick,
-            network: ctx.network,
-            server: ctx.server,
+            my_nick: ctx.my_nick.to_string(),
+            network: ctx.network.to_string(),
+            server: ctx.server.to_string(),
             vars: &mut g.vars,
+            connection_scope: Default::default(),
             local_scopes: Vec::new(),
             hashes: &mut g.hashes,
             var_expiry: &mut g.var_expiry,
@@ -1075,15 +1302,19 @@ impl ScriptEngine {
             actions: Vec::new(),
             pending_pipe_commands: Vec::new(),
             halted: false,
+            abandoned_at: None,
+            calc_args: false,
+            script_error: None,
             steps: 0,
             depth: 0,
+            signal_depth: 0,
             alias_stack: Vec::new(),
             ret: None,
             goto: None,
             data_dir: ctx.data_dir.clone(),
             state: ctx.state.clone(),
             active: g.active.clone(),
-            conns: g.conns.view(),
+            conns,
             wins: g.wins.view(),
             sockets: g.sockets.clone(),
             timers: g.timers.clone(),
@@ -1091,6 +1322,8 @@ impl ScriptEngine {
             dcc: g.dcc.clone(),
             webviews: g.webviews.clone(),
             input: g.input.clone(),
+            dialogs: g.dialogs.clone(),
+            urlgets: g.urlgets.clone(),
             caller: "menu",
             show: true,
         };
@@ -1148,22 +1381,14 @@ impl ScriptEngine {
             event.msg_stamp = raw.msg_stamp.clone();
         }
         let mut g = self.inner.lock().unwrap();
-        let remote_flags = g
-            .vars
-            .get(eval::REMOTE_FLAGS_KEY)
-            .and_then(|value| value.parse::<u8>().ok())
-            .unwrap_or(7);
-        let required_flag = if kind.eq_ignore_ascii_case("RAW") {
-            4
-        } else if kind.eq_ignore_ascii_case("CTCP") || kind.eq_ignore_ascii_case("CTCPREPLY") {
-            1
-        } else {
-            2
-        };
-        if remote_flags & required_flag == 0 {
+        if kind.eq_ignore_ascii_case("DIALOG") {
+            g.dialogs.lock().unwrap().update_event(&event);
+        }
+        if !dispatch::remote_enabled(&g.vars, kind) {
             return (Vec::new(), false, false);
         }
         let script = g.script.clone();
+        let conns = g.connection_view(ctx);
         let g = &mut *g;
         let vars = &mut g.vars;
         let hashes = &mut g.hashes;
@@ -1173,195 +1398,53 @@ impl ScriptEngine {
         let bins = &mut g.bins;
         let windows = &mut g.windows;
         let users = &mut g.users;
-        let mut actions = Vec::new();
-        let mut halted = false;
-        let mut default_halted = false;
-        let mut event_sources = Vec::new();
-        for ev in script.events_of(kind) {
-            if !event.event_source_filter.is_empty()
-                && !ev.source.eq_ignore_ascii_case(&event.event_source_filter)
-            {
-                continue;
-            }
-            if !event_sources
-                .iter()
-                .any(|source: &String| source.eq_ignore_ascii_case(&ev.source))
-            {
-                event_sources.push(ev.source.clone());
-            }
-        }
-        // `^` handlers are the early/default-text pass. mIRC processes them
-        // independently from normal handlers, in script-file load order.
-        for early_pass in [true, false] {
-            if phase.is_some_and(|wanted| wanted != early_pass) {
-                continue;
-            }
-            for source in &event_sources {
-                let mut candidates = Vec::new();
-                let mut highest_numeric: Option<i64> = None;
-                for ev in script
-                    .events_of(kind)
-                    .filter(|ev| ev.source.eq_ignore_ascii_case(source))
-                {
-                    // A disabled `#group` suppresses its event handlers.
-                    if !script.group_enabled(vars, &ev.group) {
-                        continue;
-                    }
-                    let access = event_access(&ev.level);
-                    if access.early != early_pass || (access.skip_if_halted && default_halted) {
-                        continue;
-                    }
-                    let pattern = expand_event_vars(&ev.pattern, vars);
-                    let selector = expand_event_vars(&ev.selector, vars);
-                    let target = expand_event_vars(&ev.target, vars);
-                    if !matches(
-                        &event,
-                        &pattern,
-                        &selector,
-                        &target,
-                        kind,
-                        access.regex_match,
-                        &ctx.state.isupport,
-                    ) {
-                        continue;
-                    }
-                    let is_self = !event.nick.is_empty()
-                        && ctx.state.isupport.names_equal(&event.nick, ctx.my_nick);
-                    if (access.self_only && !is_self) || (access.exclude_self && is_self) {
-                        continue;
-                    }
-                    if access.require_own_op {
-                        let op_prefix = ctx.state.isupport.prefix_for_mode('o').unwrap_or('@');
-                        let own_is_op = ctx
-                            .state
-                            .channels
-                            .iter()
-                            .find(|c| {
-                                let channel = ctx
-                                    .state
-                                    .isupport
-                                    .channel_target(&event.chan)
-                                    .unwrap_or(&event.chan);
-                                ctx.state.isupport.names_equal(&c.name, channel)
-                            })
-                            .and_then(|c| {
-                                c.members.iter().find(|(nick, _)| {
-                                    ctx.state.isupport.names_equal(nick, ctx.my_nick)
-                                })
-                            })
-                            .is_some_and(|(_, prefixes)| prefixes.contains(op_prefix));
-                        if !own_is_op {
-                            continue;
-                        }
-                    }
-                    // Access-level gate: the triggering user must satisfy the
-                    // remaining level. $clevel/$ulevel come from this match.
-                    let mut ev_event = event.clone();
-                    let addr = ctx
-                        .state
-                        .ial
-                        .iter()
-                        .find(|(n, _)| ctx.state.isupport.names_equal(n, &event.nick))
-                        .map(|(_, a)| a.as_str())
-                        .unwrap_or("");
-                    ev_event.match_key = pattern.clone();
-                    let status = ctx
-                        .state
-                        .channels
-                        .iter()
-                        .find(|c| {
-                            let channel = ctx
-                                .state
-                                .isupport
-                                .channel_target(&event.chan)
-                                .unwrap_or(&event.chan);
-                            ctx.state.isupport.names_equal(&c.name, channel)
-                        })
-                        .and_then(|c| {
-                            c.members
-                                .iter()
-                                .find(|(n, _)| ctx.state.isupport.names_equal(n, &event.nick))
-                        })
-                        .map(|(_, p)| p.as_str())
-                        .unwrap_or("");
-                    let ulevels = users.levels_of(&event.nick, addr);
-                    match users::level_matches(&access.level, &ulevels, status) {
-                        Some((clevel, ulevel)) => {
-                            ev_event.clevel = clevel;
-                            ev_event.matched_address = users
-                                .matched_address_for(&event.nick, addr, &ulevel)
-                                .unwrap_or(addr)
-                                .to_string();
-                            ev_event.ulevel = ulevel;
-                        }
-                        None => continue,
-                    }
-                    ev_event.script_source = ev.source.clone();
-                    ev_event.script_line = ev.source_line;
-                    ev_event.default_halted = default_halted;
-                    let rank = event_level_rank(&access.level);
-                    if let Some(rank) = rank {
-                        highest_numeric = Some(highest_numeric.map_or(rank, |old| old.max(rank)));
-                    }
-                    candidates.push((ev, access, ev_event, rank));
-                }
-
-                for (ev, access, ev_event, rank) in candidates {
-                    // Only the highest numeric level matching this event in this
-                    // script file fires. Named levels are exact but unordered.
-                    if rank.is_some() && rank != highest_numeric {
-                        continue;
-                    }
-                    let mut rt = Runtime {
-                        script: &script,
-                        my_nick: ctx.my_nick,
-                        network: ctx.network,
-                        server: ctx.server,
-                        vars: &mut *vars,
-                        local_scopes: Vec::new(),
-                        hashes: &mut *hashes,
-                        var_expiry: &mut *var_expiry,
-                        hash_expiry: &mut *hash_expiry,
-                        files: &mut *files,
-                        bins: &mut *bins,
-                        windows: &mut *windows,
-                        users: &mut *users,
-                        event: ev_event,
-                        actions: Vec::new(),
-                        pending_pipe_commands: Vec::new(),
-                        halted: false,
-                        steps: 0,
-                        depth: 0,
-                        alias_stack: Vec::new(),
-                        ret: None,
-                        goto: None,
-                        data_dir: ctx.data_dir.clone(),
-                        state: ctx.state.clone(),
-                        active: g.active.clone(),
-                        conns: g.conns.view(),
-                        wins: g.wins.view(),
-                        sockets: g.sockets.clone(),
-                        timers: g.timers.clone(),
-                        play: g.play.clone(),
-                        dcc: g.dcc.clone(),
-                        webviews: g.webviews.clone(),
-                        input: g.input.clone(),
-                        caller: "event",
-                        show: true,
-                    };
-                    rt.run(&ev.body);
-                    // `/return` ends the handler but is not `/halt`.
-                    let handler_halted = rt.halted && rt.ret.is_none();
-                    // `/haltdef` always suppresses the event's default display;
-                    // a plain `/halt` only does so in an early (`^`) handler.
-                    let handler_default_halted =
-                        rt.event.default_halted || (access.early && handler_halted);
-                    default_halted |= handler_default_halted;
-                    halted |= handler_halted || handler_default_halted;
-                    actions.extend(rt.actions);
-                }
-            }
-        }
+        let mut rt = Runtime {
+            script: &script,
+            my_nick: ctx.my_nick.to_string(),
+            network: ctx.network.to_string(),
+            server: ctx.server.to_string(),
+            vars: &mut *vars,
+            connection_scope: Default::default(),
+            local_scopes: Vec::new(),
+            hashes: &mut *hashes,
+            var_expiry: &mut *var_expiry,
+            hash_expiry: &mut *hash_expiry,
+            files: &mut *files,
+            bins: &mut *bins,
+            windows: &mut *windows,
+            users: &mut *users,
+            event: event.clone(),
+            actions: Vec::new(),
+            pending_pipe_commands: Vec::new(),
+            halted: false,
+            abandoned_at: None,
+            calc_args: false,
+            script_error: None,
+            steps: 0,
+            depth: 0,
+            signal_depth: 0,
+            alias_stack: Vec::new(),
+            ret: None,
+            goto: None,
+            data_dir: ctx.data_dir.clone(),
+            state: ctx.state.clone(),
+            active: g.active.clone(),
+            conns,
+            wins: g.wins.view(),
+            sockets: g.sockets.clone(),
+            timers: g.timers.clone(),
+            play: g.play.clone(),
+            dcc: g.dcc.clone(),
+            webviews: g.webviews.clone(),
+            input: g.input.clone(),
+            dialogs: g.dialogs.clone(),
+            urlgets: g.urlgets.clone(),
+            caller: "event",
+            show: true,
+        };
+        let (halted, default_halted) = dispatch::dispatch_handlers(&mut rt, kind, &event, phase);
+        let mut actions = std::mem::take(&mut rt.actions);
+        drop(rt);
         // Auto-op / auto-voice: when someone else joins a channel where I hold
         // op (or higher) and they match an enabled list, queue the mode change.
         if kind == "JOIN" && !ctx.state.isupport.names_equal(&event.nick, ctx.my_nick) {
@@ -1537,7 +1620,10 @@ fn eval_popup_labels(rt: &mut Runtime, items: &[PopupItem]) -> Vec<PopupItem> {
         }
         // A leading $style(N) sentinel (mIRC requires it be the first word) sets
         // the item's check/disabled state and is stripped from the visible label.
-        let expanded = rt.expand(&item.label);
+        let Some(expanded) = expand_popup_label(rt, &item.label) else {
+            rt.event.script_source = saved_source;
+            continue;
+        };
         let (checked, disabled, rest) = split_style_marker(&expanded);
         let label = rest.trim().to_string();
         if label.is_empty() {
@@ -1556,6 +1642,18 @@ fn eval_popup_labels(rt: &mut Runtime, items: &[PopupItem]) -> Vec<PopupItem> {
         rt.event.script_source = saved_source;
     }
     out
+}
+
+/// Expands one popup label on its own. mIRC evaluates each item separately: an
+/// empty `$$1` or a halt inside the label hides that item only (`None`), and the
+/// next label starts afresh.
+fn expand_popup_label(rt: &mut Runtime, text: &str) -> Option<String> {
+    let saved_halted = std::mem::replace(&mut rt.halted, false);
+    let saved_abandoned = rt.abandoned_at.take();
+    let value = rt.expand(text);
+    let abandoned = std::mem::replace(&mut rt.abandoned_at, saved_abandoned).is_some();
+    rt.halted = saved_halted;
+    (!abandoned).then_some(value)
 }
 
 /// Splits a leading `$style(N)` sentinel off an expanded popup label, returning
@@ -1610,12 +1708,14 @@ fn expand_submenu(rt: &mut Runtime, arg: &str) -> Vec<PopupItem> {
     let mut out = Vec::new();
 
     rt.event.params = vec!["begin".to_string()];
-    if let Some(it) = make_generated_item(&rt.expand(arg), &source) {
+    if let Some(it) = expand_popup_label(rt, arg).and_then(|text| make_generated_item(&text, &source)) {
         out.push(it);
     }
     for i in 1..=CAP {
         rt.event.params = vec![i.to_string()];
-        let r = rt.expand(arg);
+        let Some(r) = expand_popup_label(rt, arg) else {
+            break;
+        };
         if r.trim().is_empty() {
             break;
         }
@@ -1624,7 +1724,7 @@ fn expand_submenu(rt: &mut Runtime, arg: &str) -> Vec<PopupItem> {
         }
     }
     rt.event.params = vec!["end".to_string()];
-    if let Some(it) = make_generated_item(&rt.expand(arg), &source) {
+    if let Some(it) = expand_popup_label(rt, arg).and_then(|text| make_generated_item(&text, &source)) {
         out.push(it);
     }
 
@@ -2205,6 +2305,7 @@ static FIRING_UNLOAD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicB
 /// no server/window — their commands (timers, hash tables, file I/O) don't need one.
 pub fn fire_lifecycle(app: &AppHandle, engine: &ScriptEngine, kind: &str) {
     let ctx = RunCtx {
+        server_id: "",
         my_nick: "",
         network: "",
         server: "",
@@ -2217,6 +2318,7 @@ pub fn fire_lifecycle(app: &AppHandle, engine: &ScriptEngine, kind: &str) {
 
 fn fire_lifecycle_source(app: &AppHandle, engine: &ScriptEngine, kind: &str, source: &str) {
     let ctx = RunCtx {
+        server_id: "",
         my_nick: "",
         network: "",
         server: "",
@@ -2581,11 +2683,21 @@ pub fn apply_actions(
     server: &str,
     actions: Vec<Action>,
 ) {
-    apply_actions_depth(app, server_id, my_nick, network, server, actions, 0);
+    let mut pending = Vec::new();
+    let mut timer_activations = Vec::new();
+    let mut http_activations = Vec::new();
+    apply_actions_depth(
+        app, server_id, my_nick, network, server, actions, 0, &mut pending,
+        &mut timer_activations,
+        &mut http_activations,
+    );
+    drop(timer_activations);
+    drop(http_activations);
+    signals::enqueue(app, pending);
 }
 
-/// Fires `on LOGON` after the client has sent its registration lines but before
-/// it receives the welcome numeric (`on CONNECT`).
+/// Fires `on LOGON` around the registration sends, before server registration
+/// and the later post-MOTD `on CONNECT` event.
 pub fn fire_logon(
     app: &AppHandle,
     server_id: &str,
@@ -2599,6 +2711,7 @@ pub fn fire_logon(
         return false;
     };
     let ctx = RunCtx {
+        server_id,
         my_nick,
         network,
         server,
@@ -2619,8 +2732,32 @@ pub fn fire_logon(
     default_halted
 }
 
-/// `apply_actions` with a recursion `depth`, so `/signal` (which dispatches more
-/// handlers, possibly emitting more signals) can be capped like mIRC's 24-deep limit.
+/// Runs a deferred `/scon` or `/scid` command and keeps its target connection
+/// context available while the resulting actions are applied.
+fn run_on_connection(
+    engine: &ScriptEngine,
+    server_id: &str,
+    command: &str,
+    data_dir: std::path::PathBuf,
+    state: std::sync::Arc<crate::irc::state::StateSnapshot>,
+    apply: impl FnOnce(&RunCtx<'_>, Vec<Action>),
+) {
+    let (network, server) = engine.connection_context(server_id).unwrap_or_default();
+    let my_nick = state.nick.clone();
+    let ctx = RunCtx {
+        server_id,
+        my_nick: &my_nick,
+        network: &network,
+        server: &server,
+        data_dir,
+        state,
+    };
+    let actions = engine.run_command(&ctx, "", command, &[]);
+    apply(&ctx, actions);
+}
+
+/// Applies nested connection commands while collecting all ordinary signals
+/// for submission after the complete outer action list.
 fn apply_actions_depth(
     app: &AppHandle,
     server_id: &str,
@@ -2629,10 +2766,23 @@ fn apply_actions_depth(
     server: &str,
     actions: Vec<Action>,
     depth: u32,
+    pending: &mut Vec<signals::PendingSignal>,
+    timer_activations: &mut Vec<timer::TimerActivation>,
+    http_activations: &mut Vec<urlget::Activation>,
 ) {
     let manager = app.try_state::<ConnectionManager>();
     for action in actions {
         match action {
+            Action::UrlGet { id } => {
+                if let Some(activation) = urlget::activate(app, server_id, my_nick, network, server, id, None) {
+                    http_activations.push(activation);
+                }
+            }
+            Action::UrlGetControl { id, resume } => {
+                if let Some(activation) = urlget::activate(app, server_id, my_nick, network, server, id, Some(resume)) {
+                    http_activations.push(activation);
+                }
+            }
             Action::Send(line) => {
                 // mIRC addresses DCC chat buffers as `=nick`. Scripted
                 // `/msg =$nick ...` must use the peer socket, never leak a
@@ -2846,38 +2996,21 @@ fn apply_actions_depth(
                 // extracts it from the `on CONNECT` actions; a no-op elsewhere.
             }
             Action::Signal { name, params } => {
-                // Dispatch `on SIGNAL` handlers after the current run (so it's safe
-                // re-entrancy-wise). Capped to mIRC's 24-deep signal recursion.
+                pending.push(signals::PendingSignal {
+                    server_id: server_id.to_string(),
+                    my_nick: my_nick.to_string(),
+                    network: network.to_string(),
+                    server: server.to_string(),
+                    name,
+                    params,
+                });
+            }
+            Action::WithConnection { server_id, my_nick, network, server, actions } => {
                 if depth < 24 {
-                    if let Some(engine) = app.try_state::<ScriptEngine>() {
-                        let ctx = RunCtx {
-                            my_nick,
-                            network,
-                            server,
-                            data_dir: script_data_dir(app),
-                            state: app
-                                .try_state::<crate::irc::state::StateStore>()
-                                .map(|s| s.get(server_id))
-                                .unwrap_or_default(),
-                        };
-                        let event = EventVars {
-                            nick: my_nick.to_string(),
-                            chan: name.clone(),
-                            target: name,
-                            params,
-                            ..Default::default()
-                        };
-                        let more = engine.dispatch_event(&ctx, "SIGNAL", event);
-                        apply_actions_depth(
-                            app,
-                            server_id,
-                            my_nick,
-                            network,
-                            server,
-                            more,
-                            depth + 1,
-                        );
-                    }
+                    apply_actions_depth(
+                        app, &server_id, &my_nick, &network, &server,
+                        actions, depth + 1, pending, timer_activations, http_activations,
+                    );
                 }
             }
             Action::RunOn {
@@ -2885,27 +3018,37 @@ fn apply_actions_depth(
                 command,
             } => {
                 // /scon /scid: run the command in the target connection's context
-                // and route its output there. Depth-capped like /signal.
+                // and route its output there. Bound nested connection commands.
                 if depth < 24 {
                     if let (Some(engine), Some(store)) = (
                         app.try_state::<ScriptEngine>(),
                         app.try_state::<crate::irc::state::StateStore>(),
                     ) {
-                        let state = store.get(&target);
-                        let t_nick = state.nick.clone();
-                        let ctx = RunCtx {
-                            my_nick: &t_nick,
-                            network: "",
-                            server: "",
-                            data_dir: script_data_dir(app),
-                            state,
-                        };
-                        let more = engine.run_command(&ctx, "", &command, &[]);
-                        apply_actions_depth(app, &target, &t_nick, "", "", more, depth + 1);
+                        run_on_connection(
+                            &engine,
+                            &target,
+                            &command,
+                            script_data_dir(app),
+                            store.get(&target),
+                            |ctx, more| {
+                                apply_actions_depth(
+                                    app,
+                                    &target,
+                                    ctx.my_nick,
+                                    ctx.network,
+                                    ctx.server,
+                                    more,
+                                    depth + 1,
+                                    pending,
+                                    timer_activations,
+                                    http_activations,
+                                );
+                            },
+                        );
                     }
                 }
             }
-            Action::WindowOpen { name, kind, title } => {
+            Action::WindowOpen { name, kind, title, editbox, activate } => {
                 let _ = app.emit(
                     IRC_EVENT,
                     UiEvent::WindowOpen {
@@ -2913,6 +3056,8 @@ fn apply_actions_depth(
                         name,
                         kind,
                         title,
+                        editbox,
+                        activate,
                     },
                 );
             }
@@ -3017,6 +3162,7 @@ fn apply_actions_depth(
                     let (network, server) =
                         engine.connection_context(&server_id).unwrap_or_default();
                     let ctx = RunCtx {
+                        server_id: &server_id,
                         my_nick: &my_nick,
                         network: &network,
                         server: &server,
@@ -3191,7 +3337,7 @@ fn apply_actions_depth(
                 source,
             } => {
                 if let Some(m) = app.try_state::<timer::TimerManager>() {
-                    m.start(
+                    if let Some(activation) = m.start(
                         app.clone(),
                         server_id.to_string(),
                         my_nick.to_string(),
@@ -3210,7 +3356,9 @@ fn apply_actions_depth(
                         high_resolution,
                         dynamic,
                         source,
-                    );
+                    ) {
+                        timer_activations.push(activation);
+                    }
                 }
             }
             Action::TimerStop { name } => {
@@ -3526,6 +3674,7 @@ pub fn script_run_alias(
     tauri::async_runtime::spawn_blocking(move || {
         let engine = app.state::<ScriptEngine>();
         let ctx = RunCtx {
+            server_id: &server_id,
             my_nick: &my_nick,
             network: &network,
             server: "",
@@ -3561,6 +3710,7 @@ pub async fn script_popups(
     tauri::async_runtime::spawn_blocking(move || {
         let engine = app.state::<ScriptEngine>();
         let ctx = RunCtx {
+            server_id: &server_id,
             my_nick: &my_nick,
             network: &network,
             server: "",
@@ -3602,6 +3752,7 @@ pub async fn script_run_dialog(
     // the whole UI, including the dialog itself.
     tauri::async_runtime::spawn_blocking(move || {
         let ctx = RunCtx {
+            server_id: &server_id,
             my_nick: &my_nick,
             network: &network,
             server: "",
@@ -3655,6 +3806,7 @@ pub fn script_notify(
             .unwrap_or_default();
         let my_nick = state.nick.clone();
         let ctx = RunCtx {
+            server_id: &server_id,
             my_nick: &my_nick,
             network: &network,
             server: "",
@@ -3766,6 +3918,7 @@ pub fn script_set_active(
         let my_nick = state.nick.clone();
         let (network, server) = engine.connection_context(&server_id).unwrap_or_default();
         let ctx = RunCtx {
+            server_id: &server_id,
             my_nick: &my_nick,
             network: &network,
             server: &server,
@@ -3800,6 +3953,7 @@ pub async fn script_run_tabcomp(
         let my_nick = state.nick.clone();
         let (network, server) = engine.connection_context(&server_id).unwrap_or_default();
         let ctx = RunCtx {
+            server_id: &server_id,
             my_nick: &my_nick,
             network: &network,
             server: &server,
@@ -3850,6 +4004,7 @@ pub async fn script_run_key(
         let my_nick = state.nick.clone();
         let (network, server) = engine.connection_context(&server_id).unwrap_or_default();
         let ctx = RunCtx {
+            server_id: &server_id,
             my_nick: &my_nick,
             network: &network,
             server: &server,
@@ -3901,6 +4056,7 @@ pub async fn script_run_hotlink(
     action: String,
     line: usize,
     position: usize,
+    char_position: Option<usize>,
 ) -> HotlinkOutcome {
     tauri::async_runtime::spawn_blocking(move || {
         if word.is_empty()
@@ -3919,12 +4075,27 @@ pub async fn script_run_hotlink(
         let my_nick = state.nick.clone();
         let (network, server) = engine.connection_context(&server_id).unwrap_or_default();
         let ctx = RunCtx {
+            server_id: &server_id,
             my_nick: &my_nick,
             network: &network,
             server: &server,
             data_dir: script_data_dir(&app),
             state,
         };
+        let char_position = char_position.unwrap_or_else(|| {
+            let mut word = 0usize;
+            let mut previous_space = true;
+            let mut index = 0;
+            for ch in line_text.chars() {
+                if !ch.is_whitespace() && previous_space {
+                    word += 1;
+                    if word == position { return index; }
+                }
+                previous_space = ch.is_whitespace();
+                index += ch.len_utf16();
+            }
+            0
+        });
         let vars = EventVars {
             chan: is_channel(&target)
                 .then_some(target.clone())
@@ -3936,6 +4107,7 @@ pub async fn script_run_hotlink(
             hotlink_line_text: line_text,
             hotlink_line: line,
             hotlink_pos: position,
+            hotlink_char_pos: char_position,
             ..Default::default()
         };
         // Clear any request left by an earlier click before the handler runs,
@@ -3997,6 +4169,7 @@ pub fn script_dispatch_audio_end(app: AppHandle, server_id: String, kind: String
     let my_nick = state.nick.clone();
     let (network, server) = engine.connection_context(&server_id).unwrap_or_default();
     let ctx = RunCtx {
+        server_id: &server_id,
         my_nick: &my_nick,
         network: &network,
         server: &server,
@@ -4033,6 +4206,7 @@ pub fn script_dispatch_dns(app: AppHandle, server_id: String, host: String, ips:
     let my_nick = state.nick.clone();
     let (network, server) = engine.connection_context(&server_id).unwrap_or_default();
     let ctx = RunCtx {
+        server_id: &server_id,
         my_nick: &my_nick,
         network: &network,
         server: &server,
@@ -4075,6 +4249,7 @@ pub async fn script_set_client_window_state(
         let my_nick = state.nick.clone();
         let (network, server) = engine.connection_context(&server_id).unwrap_or_default();
         let ctx = RunCtx {
+            server_id: &server_id,
             my_nick: &my_nick,
             network: &network,
             server: &server,
@@ -4169,6 +4344,17 @@ pub fn script_window_close(app: AppHandle, server_id: String, name: String) {
     fire_window_event(app, server_id, name, "CLOSE");
 }
 
+/// Renames a frontend buffer while preserving its numeric window identity.
+#[tauri::command]
+pub fn script_window_rename(
+    engine: State<'_, ScriptEngine>,
+    server_id: String,
+    old_name: String,
+    new_name: String,
+) {
+    engine.window_rename(&server_id, &old_name, &new_name);
+}
+
 /// Dispatches `on OPEN`/`on CLOSE` for a window. A plain nick is a query window
 /// (empty `$chan` so the `?` target matches, `$nick` = the other party); a
 /// channel / `@window` keeps its name as `$chan` for `#` / `@name` targets. The
@@ -4201,6 +4387,7 @@ fn fire_window_event(app: AppHandle, server_id: String, name: String, kind: &'st
             ..Default::default()
         };
         let ctx = RunCtx {
+            server_id: &server_id,
             my_nick: &my_nick,
             network: "",
             server: "",
@@ -4234,6 +4421,7 @@ pub fn script_run_command(
     tauri::async_runtime::spawn_blocking(move || {
         let engine = app.state::<ScriptEngine>();
         let ctx = RunCtx {
+            server_id: &server_id,
             my_nick: &my_nick,
             network: &network,
             server: "",
@@ -4277,6 +4465,7 @@ pub async fn script_run_input(
         let engine = app.state::<ScriptEngine>();
         engine.reset_idle();
         let ctx = RunCtx {
+            server_id: &server_id,
             my_nick: &my_nick,
             network: &network,
             server: "",
@@ -4331,6 +4520,7 @@ pub fn script_run_popup(
     tauri::async_runtime::spawn_blocking(move || {
         let engine = app.state::<ScriptEngine>();
         let ctx = RunCtx {
+            server_id: &server_id,
             my_nick: &my_nick,
             network: &network,
             server: "",
@@ -4376,6 +4566,7 @@ pub fn script_window_mouse(
     tauri::async_runtime::spawn_blocking(move || {
         let engine = app.state::<ScriptEngine>();
         let ctx = RunCtx {
+            server_id: &server_id,
             my_nick: &my_nick,
             network: &network,
             server: "",
@@ -4697,8 +4888,12 @@ pub fn drive_event_halt_raw(
             }
             return (actions, halted);
         }
-        UiEvent::Disconnected { .. } => ("DISCONNECT", EventVars::default()),
-        UiEvent::Registered { .. } => ("CONNECT", EventVars::default()),
+        UiEvent::Disconnected { reason, .. } => ("DISCONNECT", EventVars {
+            text: reason.clone(),
+            params: reason.split_whitespace().map(str::to_owned).collect(),
+            ..Default::default()
+        }),
+        UiEvent::ConnectReady { .. } => ("CONNECT", EventVars::default()),
         _ => return (Vec::new(), false),
     };
     engine.dispatch_event_default_halt_raw(ctx, kind, vars, raw)
@@ -4856,6 +5051,7 @@ mod tests {
 
     fn ctx<'a>() -> RunCtx<'a> {
         RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "irc.example.org",
@@ -5069,11 +5265,20 @@ mod tests {
     #[test]
     fn require_param_halts_rest_when_missing() {
         let engine = ScriptEngine::new();
-        // $$2 is empty -> the run halts before the second command. The first
-        // still emits (the current command isn't suppressed mid-flight).
-        engine.load("alias t { /msg #d got=$$2 | /msg #d after }");
+        // $$2 is empty -> mIRC 7.79 runs neither the command holding it nor
+        // anything after it (pinned natively with `echo @win got $$2`).
+        engine.load("alias t { /msg #d got $$2 | /msg #d after }");
         let actions = engine.run_alias(&ctx(), "#here", "t", "only");
-        assert_eq!(actions, vec![Action::Send("PRIVMSG #d :got=".into())]);
+        assert_eq!(actions, vec![]);
+        engine.load("alias t { /msg #d got $$1 | /msg #d after }");
+        let actions = engine.run_alias(&ctx(), "#here", "t", "only");
+        assert_eq!(
+            actions,
+            vec![
+                Action::Send("PRIVMSG #d :got only".into()),
+                Action::Send("PRIVMSG #d :after".into()),
+            ]
+        );
     }
 
     #[test]
@@ -5374,13 +5579,13 @@ mod tests {
         let engine = ScriptEngine::new();
         engine.load(
             "#a on\nalias x { echo a }\n#a end\n#b off\nalias y { echo b }\n#b end\n\
-             alias info { echo $group(0) $group(1) $group(#b).status }",
+             alias info { echo -a $group(0) $group(1) $group(#b).status }",
         );
         // $group(0) = 2 groups; $group(1) = #a; $group(#b).status = off.
         assert_eq!(
             engine.run_alias(&ctx(), "#c", "info", ""),
             vec![Action::Echo {
-                target: "#c".into(),
+                target: "(active)".into(),
                 text: "2 #a off".into(),
             }]
         );
@@ -5875,9 +6080,9 @@ mod tests {
 
     #[test]
     fn signal_command_and_on_signal_event() {
-        // /signal emits a Signal action (leading switches skipped, params -> $1-).
+        // Ordinary /signal emits a deferred action; params become $1-.
         let engine = ScriptEngine::new();
-        engine.load("alias s { signal -n myevt hello world }");
+        engine.load("alias s { signal myevt hello world }");
         assert_eq!(
             engine.run_alias(&ctx(), "#c", "s", ""),
             vec![Action::Signal {
@@ -6406,6 +6611,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("jirc-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -6429,6 +6635,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("jirc-write-ops-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -6454,6 +6661,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("jirc-write-kb-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -6555,6 +6763,7 @@ mod tests {
         )
         .unwrap();
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -6587,6 +6796,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("jirc-read-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -6631,6 +6841,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("jirc-ini-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -6664,6 +6875,7 @@ mod tests {
         )
         .unwrap();
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -6734,6 +6946,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("jirc-fio-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -6761,6 +6974,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("jirc-fc-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -6792,6 +7006,7 @@ mod tests {
         std::fs::write(dir.join("data/sub/c.txt"), "z").unwrap();
         std::fs::write(dir.join("data/note.log"), "n").unwrap();
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -6854,8 +7069,15 @@ mod tests {
             "clipboard",
             "cnick",
             "color",
+            "comclose",
+            "comlist",
+            "comopen",
+            "comreg",
             "creq",
+            "dde",
+            "ddeserver",
             "debug",
+            "dll",
             "dlevel",
             "donotdisturb",
             "dqwindow",
@@ -6950,6 +7172,7 @@ mod tests {
         let engine = ScriptEngine::new();
         // Not connected / not away -> both empty.
         let r0 = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "N",
             server: "s",
@@ -6963,6 +7186,7 @@ mod tests {
         );
         // away_time set -> $awaytime returns it verbatim.
         let r1 = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "N",
             server: "s",
@@ -7184,6 +7408,7 @@ mod tests {
             ..Default::default()
         };
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "irc.x",
@@ -7476,6 +7701,7 @@ mod tests {
             ..Default::default()
         };
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "irc.x",
@@ -7575,6 +7801,7 @@ mod tests {
             ..Default::default()
         };
         let ctx2 = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "",
@@ -7614,6 +7841,60 @@ mod tests {
     }
 
     #[test]
+    fn renamed_query_preserves_window_identity_and_active_name() {
+        let engine = ScriptEngine::new();
+        let wid = engine.window_open("one", "Alice");
+        engine.set_active("Alice");
+        engine.set_active_conn("one");
+        engine.set_active_win("one", "Alice");
+        assert!(engine.window_rename("one", "Alice", "Bob"));
+        let inner = engine.inner.lock().unwrap();
+        assert_eq!(inner.wins.entries, [(wid, "one".into(), "Bob".into())]);
+        assert_eq!(inner.wins.active_wid, wid);
+        assert_eq!(inner.active, "Bob");
+        assert_eq!(inner.conns.active, "one");
+        assert!(inner.wins.last_closed.is_none());
+    }
+
+    #[test]
+    fn query_rename_handles_case_and_replaced_destination_without_duplicate_ids() {
+        let engine = ScriptEngine::new();
+        let source = engine.window_open("one", "Alice");
+        assert!(engine.window_rename("one", "Alice", "ALICE"));
+        let replaced = engine.window_open("one", "Bob[");
+        let other_connection = engine.window_open("two", "Bob{");
+        engine.set_active("Bob[");
+        engine.set_active_conn("one");
+        engine.set_active_win("one", "Bob[");
+        assert!(engine.window_rename("one", "ALICE", "Bob{"));
+        let inner = engine.inner.lock().unwrap();
+        assert_eq!(inner.wins.active_wid, source);
+        assert_eq!(inner.active, "Bob{");
+        assert_eq!(inner.wins.entries.len(), 2);
+        assert!(inner.wins.entries.iter().any(|(wid, sid, name)| *wid == source && sid == "one" && name == "Bob{"));
+        assert!(inner.wins.entries.iter().any(|(wid, sid, _)| *wid == other_connection && sid == "two"));
+        assert!(!inner.wins.entries.iter().any(|(wid, _, _)| *wid == replaced));
+    }
+
+    #[test]
+    fn closing_the_focused_window_clears_focus_when_no_fallback_is_reported() {
+        let engine = ScriptEngine::new();
+        engine.window_open("one", "Alice");
+        engine.window_open("two", "Bob");
+        engine.set_active("Alice");
+        engine.set_active_conn("one");
+        engine.set_active_win("one", "Alice");
+        engine.window_close("two", "Bob");
+        assert_eq!(engine.active_connection().as_deref(), Some("one"));
+        engine.window_close("one", "Alice");
+        let inner = engine.inner.lock().unwrap();
+        assert!(inner.active.is_empty());
+        assert!(inner.conns.active.is_empty());
+        assert_eq!(inner.wins.active_wid, 0);
+        assert!(inner.wins.entries.is_empty());
+    }
+
+    #[test]
     fn window_ids() {
         let engine = ScriptEngine::new();
         engine.assign_cid("s1");
@@ -7633,6 +7914,7 @@ mod tests {
             ..Default::default()
         };
         let ctx2 = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "",
@@ -7705,6 +7987,7 @@ mod tests {
             ..Default::default()
         };
         let query_ctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "",
@@ -7732,26 +8015,93 @@ mod tests {
         let engine = ScriptEngine::new();
         engine.assign_cid("s1");
         engine.assign_cid("s2");
-        // /scon N targets the Nth connection; the subcommand is carried raw to it.
-        assert_eq!(
-            engine.run_command(&ctx(), "#c", "/scon 2 /msg #c hi", &[]),
-            vec![Action::RunOn {
-                server_id: "s2".into(),
-                command: "/msg #c hi".into()
-            }]
-        );
-        // /scid targets by cid.
-        assert_eq!(
-            engine.run_command(&ctx(), "#c", "/scid 1 /msg #c yo", &[]),
-            vec![Action::RunOn {
-                server_id: "s1".into(),
-                command: "/msg #c yo".into()
-            }]
-        );
-        // An out-of-range selector produces nothing.
+        for (command, server_id, text) in [
+            ("/scon 2 /msg #c hi", "s2", "PRIVMSG #c :hi"),
+            ("/scid 1 /msg #c yo", "s1", "PRIVMSG #c :yo"),
+        ] {
+            assert_eq!(
+                engine.run_command(&ctx(), "#c", command, &[]),
+                vec![Action::WithConnection {
+                    server_id: server_id.into(),
+                    my_nick: "".into(), network: "".into(), server: "".into(),
+                    actions: vec![Action::Send(text.into())],
+                }],
+            );
+        }
         assert_eq!(
             engine.run_command(&ctx(), "#c", "/scon 9 /msg #c x", &[]),
-            vec![]
+            vec![Action::Echo {
+                target: "(status)".into(),
+                text: "* No such connection number: 9".into(),
+            }],
+        );
+    }
+
+    #[test]
+    fn scon_scid_execution_preserves_target_connection_context() {
+        use crate::irc::state::{StateSnapshot, StateStore};
+        let engine = ScriptEngine::new();
+        engine.assign_cid("source");
+        engine.assign_cid("target");
+        engine.set_connection_context("source", "Source Network", "irc.source.test");
+        engine.set_connection_context("target", "Target Network", "irc.target.test");
+        let store = StateStore::new();
+        engine.set_connection_states(store.clone());
+        store.set("target", StateSnapshot {
+            server_id: "target".into(), nick: "targetnick".into(),
+            ..Default::default()
+        });
+        let caller = RunCtx {
+            server_id: "",
+            my_nick: "sourcenick", network: "Source Network", server: "irc.source.test",
+            state: std::sync::Arc::new(StateSnapshot {
+                server_id: "source".into(), nick: "sourcenick".into(),
+                ..Default::default()
+            }),
+            ..ctx()
+        };
+        for selector in ["scon 2", "scid 2"] {
+            // jIRC evaluates the untouched subcommand once on its destination.
+            let actions = engine.run_command(
+                &caller, "#source",
+                &format!("/{selector} echo -a $network $server $me $cid"), &[],
+            );
+            assert_eq!(actions, vec![Action::WithConnection {
+                server_id: "target".into(), my_nick: "targetnick".into(),
+                network: "Target Network".into(), server: "irc.target.test".into(),
+                actions: vec![Action::Echo {
+                    target: "(active)".into(),
+                    text: "Target Network irc.target.test targetnick 2".into(),
+                }],
+            }]);
+        }
+    }
+
+    #[test]
+    fn scon_scid_execution_without_profile_context_keeps_empty_fallback() {
+        let engine = ScriptEngine::new();
+        engine.assign_cid("target");
+        run_on_connection(
+            &engine,
+            "target",
+            "echo -a <$network> <$server> $me $cid",
+            std::env::temp_dir(),
+            std::sync::Arc::new(crate::irc::state::StateSnapshot {
+                server_id: "target".into(),
+                nick: "targetnick".into(),
+                ..Default::default()
+            }),
+            |target, actions| {
+                assert_eq!(target.network, "");
+                assert_eq!(target.server, "");
+                assert_eq!(
+                    actions,
+                    vec![Action::Echo {
+                        target: "(active)".into(),
+                        text: "<> <> targetnick 1".into(),
+                    }]
+                );
+            },
         );
     }
 
@@ -7862,6 +8212,7 @@ mod tests {
             ..Default::default()
         };
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "irc.x",
@@ -8174,6 +8525,7 @@ mod tests {
             ..Default::default()
         };
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -8219,6 +8571,7 @@ mod tests {
             ),
         ]);
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -8325,6 +8678,7 @@ mod tests {
             ..Default::default()
         };
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -8499,6 +8853,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("jirc-users-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -8540,6 +8895,7 @@ mod tests {
             ..Default::default()
         };
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -8609,6 +8965,7 @@ mod tests {
             ..Default::default()
         };
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -8716,6 +9073,7 @@ mod tests {
     fn mode_identifier_reports_affected_nicks() {
         use crate::irc::state::{ChannelView, StateSnapshot};
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -8785,6 +9143,7 @@ mod tests {
     fn join_and_msg_consume_their_switches() {
         use crate::irc::state::StateSnapshot;
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -9018,9 +9377,9 @@ mod tests {
         // rather than printed.
         assert_eq!(run("echo -c red hello"), Some(("#c".into(), "hello".into())));
 
-        // An explicit target still wins over the switch.
+        // Destination switches bypass explicit-window lookup in mIRC.
         assert_eq!(run("echo #chan hello"), Some(("#chan".into(), "hello".into())));
-        assert_eq!(run("echo -a #chan hello"), Some(("#chan".into(), "hello".into())));
+        assert_eq!(run("echo -a #chan hello"), Some(("(active)".into(), "#chan hello".into())));
 
         // `-q` honours `$show`, which is false when *the alias* was invoked
         // with a `.` prefix — not when the echo itself is. So the same alias is
@@ -9061,15 +9420,15 @@ alias t { .say hidden | say shown }");
 
         // One arithmetic operation is applied by default; `-n` and `-p` keep
         // the value literal.
-        assert_eq!(run("set %a 2 + 3 | echo %a"), vec!["5"]);
-        assert_eq!(run("set -n %a 2 + 3 | echo %a"), vec!["2 + 3"]);
-        assert_eq!(run("set -p %a 2 + 3 | echo %a"), vec!["2 + 3"]);
+        assert_eq!(run("set %a 2 + 3 | echo -a %a"), vec!["5"]);
+        assert_eq!(run("set -n %a 2 + 3 | echo -a %a"), vec!["2 + 3"]);
+        assert_eq!(run("set -p %a 2 + 3 | echo -a %a"), vec!["2 + 3"]);
 
         // `-i` assigns only when there is nothing there yet.
         assert_eq!(run("set %a first | set -i %a second | echo %a"), vec!["first"]);
         assert_eq!(run("set -i %b only | echo %b"), vec!["only"]);
-        // An empty existing value is not a value, so `-i` still assigns.
-        assert_eq!(run("set %a | set -i %a filled | echo %a"), vec!["filled"]);
+        // Initialization tests existence, including an existing empty value.
+        assert_eq!(run("set %a | set -i %a filled | echo -a [ $+ %a $+ ]"), vec!["[]"]);
 
         // `-s` reports the assignment. The exact wording is mIRC's, from the
         // worked example in set.rst: `* Set %var to 3`.
@@ -9088,13 +9447,13 @@ alias t { .say hidden | say shown }");
         assert_eq!(run("set -p %a \"\" | echo [ $+ %a $+ ]"), vec!["[\"\"]"]);
         assert_eq!(run("set %a \"\" | echo [ $+ %a $+ ]"), vec!["[]"]);
         assert_eq!(
-            run("set -p %b test $+ $chr(32) | echo $len(%b)"),
+            run("set -p %b test $+ $chr(32) | echo -a $len(%b)"),
             vec!["5"]
         );
-        assert_eq!(run("set %b test $+ $chr(32) | echo $len(%b)"), vec!["4"]);
+        assert_eq!(run("set %b test $+ $chr(32) | echo -a $len(%b)"), vec!["4"]);
         // "multiple spaces can be set" — only a lone trailing space goes.
         assert_eq!(
-            run("set %c test $+ $chr(32) $+ $chr(32) | echo $len(%c)"),
+            run("set %c test $+ $chr(32) $+ $chr(32) | echo -a $len(%c)"),
             vec!["6"]
         );
         // /var follows the same rules.
@@ -9104,8 +9463,8 @@ alias t { .say hidden | say shown }");
         // `-z` counts down from the assigned value, which reads unchanged until
         // a second has passed (set.rst's example prints 3 before it prints 2),
         // and carries the matching lifetime: `.secs` is the value itself.
-        assert_eq!(run("set -z %a 3 | echo %a"), vec!["3"]);
-        assert_eq!(run("set -z %a 3 | echo $var(%a,1).secs"), vec!["3"]);
+        assert_eq!(run("set -z %a 3 | echo -a %a"), vec!["3"]);
+        assert_eq!(run("set -z %a 3 | echo -a $var(%a,1).secs"), vec!["3"]);
         // `-zs` reports the assignment like plain `-s`. mIRC also echoes each
         // decrement from its per-second tick; the lazy countdown has none.
         assert_eq!(run("set -zs %a 3"), vec!["* Set %a to 3"]);
@@ -9115,7 +9474,7 @@ alias t { .say hidden | say shown }");
         // A value mIRC does not document a countdown for is an ordinary
         // assignment, not a guess at what decrementing it would mean.
         assert_eq!(run("set -z %a later | echo %a"), vec!["later"]);
-        assert_eq!(run("set -z %a -5 | echo %a"), vec!["-5"]);
+        assert_eq!(run("set -z %a -5 | echo -a %a"), vec!["-5"]);
     }
 
     #[test]
@@ -9274,6 +9633,7 @@ alias t { .say hidden | say shown }");
             ..Default::default()
         };
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -9331,6 +9691,7 @@ alias t { .say hidden | say shown }");
             ..Default::default()
         };
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -9381,6 +9742,7 @@ alias t { .say hidden | say shown }");
         };
         let run = |snap: StateSnapshot| {
             let rctx = RunCtx {
+                server_id: "",
                 my_nick: "me",
                 network: "Net",
                 server: "s",
@@ -9481,6 +9843,7 @@ alias t { .say hidden | say shown }");
             ..Default::default()
         };
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -10611,6 +10974,7 @@ alias t { .say hidden | say shown }");
     fn native_i7_updater_commits_and_selects_complete_credentials() {
         fn updater_ctx(data_dir: std::path::PathBuf) -> RunCtx<'static> {
             RunCtx {
+                server_id: "",
                 my_nick: "me",
                 network: "Net",
                 server: "irc.example.org",
@@ -10767,6 +11131,7 @@ alias t { .say hidden | say shown }");
             ..Default::default()
         };
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -10793,7 +11158,7 @@ alias t { .say hidden | say shown }");
         engine.load(
             "dialog g {\n title \"Hi\"\n size -1 -1 360 240\n edit name\n}\n\
              alias o { /dialog g }\n\
-             alias info { /echo $dialog(0) $dialog(g).title $dialog(g).table $dialog(g).w $dialog(g).h }",
+             alias info { /echo -a $dialog(0) $dialog(g).title $dialog(g).table $dialog(g).w $dialog(g).h }",
         );
         let actions = engine.run_alias(&ctx(), "#c", "o", "");
         match &actions[..] {
@@ -10815,7 +11180,7 @@ alias t { .say hidden | say shown }");
         assert_eq!(
             engine.run_alias(&ctx(), "#c", "info", ""),
             vec![Action::Echo {
-                target: "#c".into(),
+                target: "(active)".into(),
                 text: "1 Hi g 360 240".into(),
             }]
         );
@@ -10877,6 +11242,7 @@ alias t { .say hidden | say shown }");
             ..Default::default()
         };
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -10918,6 +11284,7 @@ alias t { .say hidden | say shown }");
             ..Default::default()
         };
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -10946,6 +11313,7 @@ alias t { .say hidden | say shown }");
             ..Default::default()
         };
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -10999,6 +11367,7 @@ alias t { .say hidden | say shown }");
             ..Default::default()
         };
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -11092,6 +11461,7 @@ alias t { .say hidden | say shown }");
             ..Default::default()
         };
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "Me",
             network: "Net",
             server: "s",
@@ -11176,6 +11546,7 @@ alias t { .say hidden | say shown }");
         }
         .with_pending_nicklist_update(updated);
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -11226,6 +11597,7 @@ alias t { .say hidden | say shown }");
             ..Default::default()
         };
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -11295,6 +11667,7 @@ alias t { .say hidden | say shown }");
         let dir = std::env::temp_dir().join(format!("jirc-hprop-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -11930,6 +12303,7 @@ alias t { .say hidden | say shown }");
         let dir = std::env::temp_dir().join(format!("jirc-htest-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -11957,6 +12331,7 @@ alias t { .say hidden | say shown }");
         let dir = std::env::temp_dir().join(format!("jirc-hbin-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -12102,16 +12477,15 @@ alias t { .say hidden | say shown }");
         );
         assert!(!engine.inner.lock().unwrap().vars.contains_key("only"));
 
-        // Ordinary /unset removes the nearest local declaration first. A
-        // wildcard likewise clears the nearest matching frame without deleting
-        // the global value that becomes visible underneath it.
+        // Exact /unset is local-first; a wildcard exhausts current locals and
+        // then globals. Bare /unsetall clears globals but preserves locals.
         assert_eq!(
             engine.run_alias(&ctx(), "#c", "unset_local", ""),
-            vec![Action::Send("PRIVMSG #c :exact=global count=1".into())]
+            vec![Action::Send("PRIVMSG #c :exact= count=0".into())]
         );
         assert_eq!(
             engine.run_alias(&ctx(), "#c", "clear_local", ""),
-            vec![Action::Send("PRIVMSG #c :globals=[] locals=0".into())]
+            vec![Action::Send("PRIVMSG #c :globals=[] locals=1".into())]
         );
         let g = engine.inner.lock().unwrap();
         assert!(!g.vars.contains_key("clear.global"));
@@ -12759,6 +13133,7 @@ alias t { .say hidden | say shown }");
             ..Default::default()
         };
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -12812,6 +13187,7 @@ alias t { .say hidden | say shown }");
         let dir = std::env::temp_dir().join(format!("jirc-filecmd-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -12932,6 +13308,7 @@ alias t { .say hidden | say shown }");
         let dir = std::env::temp_dir().join(format!("jirc-hash-kb-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let rctx = RunCtx {
+            server_id: "",
             my_nick: "me",
             network: "Net",
             server: "s",
@@ -12965,11 +13342,11 @@ alias t { .say hidden | say shown }");
         engine.run_command(&rctx, "#c", "/hadd -mu30 t temp kept", &[]);
         assert_eq!(echo("/echo -a $hget(t,temp)"), "kept");
 
-        // hsave.rst / hload.rst give `-s`'s exact wording.
+        // Native string resources 0xb8f/0xb90 quote both names.
         engine.run_command(&rctx, "#c", "/hadd -m save a 1", &[]);
         assert_eq!(
             echo("/hsave -s save h.txt"),
-            "* Saved hash table save to h.txt"
+            "* Saved hash table 'save' to 'h.txt'"
         );
         assert_eq!(
             echo("/hload -ms fresh h.txt"),
@@ -13683,11 +14060,11 @@ alias t { .say hidden | say shown }");
     fn goto_loops_across_a_block() {
         let engine = ScriptEngine::new();
         engine.load(
-            "alias t { /set %i 0 | :top | /inc %i | /echo %i | if (%i < 3) { /goto top } | /echo done }",
+            "alias t { /set %i 0 | :top | /inc %i | /echo -a %i | if (%i < 3) { /goto top } | /echo -a done }",
         );
         let actions = engine.run_alias(&ctx(), "#c", "t", "");
         let echo = |t: &str| Action::Echo {
-            target: "#c".into(),
+            target: "(active)".into(),
             text: t.into(),
         };
         assert_eq!(actions, vec![echo("1"), echo("2"), echo("3"), echo("done")]);

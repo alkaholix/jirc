@@ -261,6 +261,10 @@ impl UserList {
     /// All access levels a user holds — the union of the levels on every entry
     /// matching their `nick` or resolved `address` (deduped). Used to gate events.
     pub fn levels_of(&self, nick: &str, address: &str) -> Vec<String> {
+        self.levels_of_with_default(nick, address, 1)
+    }
+
+    pub fn levels_of_with_default(&self, nick: &str, address: &str, default: u16) -> Vec<String> {
         let mut entries: Vec<&UserEntry> = Vec::new();
         if !nick.is_empty() {
             entries.extend(self.matching(nick, None));
@@ -287,7 +291,7 @@ impl UserList {
         // mIRC's default access level for an unlisted user is 1. Without this,
         // the canonical `on 1:TEXT:...` form never fires in a fresh jIRC setup.
         if out.is_empty() {
-            out.push("1".into());
+            out.push(default.clamp(1, 999).to_string());
         }
         out
     }

@@ -30,6 +30,7 @@ impl WindowKind {
 #[derive(Debug, Clone)]
 pub struct Window {
     pub kind: WindowKind,
+    pub editbox: bool,
     pub title: String,
     pub lines: Vec<String>,
     /// One-based selected line numbers for listbox windows.
@@ -55,6 +56,7 @@ impl WindowStore {
     pub fn open(&mut self, name: &str, kind: WindowKind, title: &str) {
         self.windows.entry(key(name)).or_insert_with(|| Window {
             kind,
+            editbox: kind == WindowKind::Editbox,
             title: title.to_string(),
             lines: Vec::new(),
             selected: BTreeSet::new(),
@@ -67,6 +69,12 @@ impl WindowStore {
 
     pub fn close(&mut self, name: &str) {
         self.windows.remove(&key(name));
+    }
+
+    pub fn enable_editbox(&mut self, name: &str) {
+        if let Some(window) = self.windows.get_mut(&key(name)) {
+            window.editbox = true;
+        }
     }
 
     pub fn set_title(&mut self, name: &str, title: &str) {

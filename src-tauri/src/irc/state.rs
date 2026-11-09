@@ -511,6 +511,8 @@ pub struct SessionState {
     pub away_msg: String,
     /// Set once RPL_WELCOME is received.
     pub registered: bool,
+    /// Initial MOTD completion has fired CONNECT for this connection attempt.
+    pub connect_ready: bool,
     /// How many alternative nicks we've tried during registration.
     pub nick_attempts: u32,
     /// Internal address list: lowercase nick -> full `nick!user@host`, learned
@@ -1182,9 +1184,9 @@ impl SessionState {
 /// Per-connection state snapshots, keyed by server id. Managed Tauri state so
 /// script commands/timers/sockets can read channel/member info off the engine's
 /// own (non-connection) threads.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct StateStore {
-    map: Mutex<HashMap<String, Arc<StateSnapshot>>>,
+    map: Arc<Mutex<HashMap<String, Arc<StateSnapshot>>>>,
 }
 
 impl StateStore {

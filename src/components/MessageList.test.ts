@@ -26,7 +26,39 @@ describe("hotlink pointer context", () => {
       fullLine: "one two hoverme four",
       line: 5,
       position: 3,
+      charPosition: 8,
     });
+  });
+
+  it("uses the actual repeated occurrence and follows words across formatting spans", () => {
+    document.body.innerHTML = '<div class="msg-row" data-index="0"><span>same one same &lt;@</span><b>Alice</b><span>&gt; tail</span></div>';
+    const node = document.querySelector("b")!.firstChild!;
+    Object.defineProperty(document, "caretRangeFromPoint", {
+      configurable: true,
+      value: () => {
+        const range = document.createRange();
+        range.setStart(node, 2);
+        return range;
+      },
+    });
+    expect(hotlinkAtPoint(10, 10)).toEqual({
+      word: "<@Alice>",
+      fullLine: "same one same <@Alice> tail",
+      line: 1,
+      position: 4,
+      charPosition: 14,
+    });
+
+    const repeated = document.querySelector("span")!.firstChild!;
+    Object.defineProperty(document, "caretRangeFromPoint", {
+      configurable: true,
+      value: () => {
+        const range = document.createRange();
+        range.setStart(repeated, 11);
+        return range;
+      },
+    });
+    expect(hotlinkAtPoint(10, 10)).toMatchObject({ word: "same", position: 3, charPosition: 9 });
   });
 });
 

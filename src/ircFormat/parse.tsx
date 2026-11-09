@@ -1,5 +1,5 @@
 import { ReactNode } from "react";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { api } from "../lib/api";
 import { ircxBody } from "../lib/ircx";
 import { imageEmoji } from "../lib/emoji";
 
@@ -22,7 +22,10 @@ function linkify(text: string, keyBase: number): ReactNode[] {
         href={url}
         onClick={(e) => {
           e.preventDefault();
-          openUrl(url).catch(() => {});
+          // Through the backend command, not the opener plugin directly: it is
+          // where the scheme allowlist lives, so a link can never open a `file:`
+          // or app-protocol URL that the OS would treat as a program to run.
+          api.openUrl(url).catch(() => {});
         }}
       >
         {url}

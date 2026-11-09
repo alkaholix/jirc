@@ -45,6 +45,8 @@ export interface Buffer {
   logging?: boolean;
   /** For a custom `@window` (kind "window"): its display kind (listbox/text/…). */
   windowKind?: string;
+  /** An input box can accompany a picture window as well as a text window. */
+  windowEditbox?: boolean;
   /** Script-controlled display title; the stable buffer name remains unchanged. */
   windowTitle?: string;
   /** One-based selected rows in a custom listbox window. */
@@ -204,6 +206,17 @@ interface State {
 }
 
 export const useStore = create<State>((set, get) => {
+  const connectCycles = new Map<string, {
+    registered: boolean;
+    ready: boolean;
+    rejoin: boolean;
+    timer?: ReturnType<typeof setTimeout>;
+  }>();
+  const clearConnectCycle = (serverId: string) => {
+    const cycle = connectCycles.get(serverId);
+    if (cycle?.timer !== undefined) clearTimeout(cycle.timer);
+    connectCycles.delete(serverId);
+  };
   const mappingFor = (serverId: string): IrcCaseMapping =>
     get().servers[serverId]?.caseMapping ?? "rfc1459";
   const keyFor = (serverId: string, name: string): string =>
@@ -319,36 +332,86 @@ export const useStore = create<State>((set, get) => {
     const statusMsg = get().servers[sid]?.statusMsg ?? "";
     const isChannel = (name: string) => isChannelFor(name, chanTypes);
     const channelTarget = (name: string) => channelTargetFor(name, chanTypes, statusMsg);
+    const appendDefaultLine: State["appendLine"] = (...args) => {
+      if (!ev.suppressDefault) appendLine(...args);
+    };
     const sys = (text: string, kind: LineKind = "system") =>
-      appendLine(sid, STATUS, "status", { kind, text });
+      appendDefaultLine(sid, STATUS, "status", { kind, text });
 
     switch (ev.type) {
       case "connected":
+        clearConnectCycle(sid);
+        connectCycles.set(sid, {
+          registered: false,
+          ready: false,
+          rejoin: !!get().servers[sid]?.registered,
+        });
         sys("Connected.");
         break;
       case "registered": {
         const wasRegistered = !!get().servers[sid]?.registered;
+        const cycle = connectCycles.get(sid);
+        if (cycle) cycle.registered = true;
+        else connectCycles.set(sid, { registered: true, ready: false, rejoin: wasRegistered });
         set((s) =>
           s.servers[sid]
             ? { servers: { ...s.servers, [sid]: { ...s.servers[sid], nick: ev.nick, registered: true, connected: true } } }
             : s
         );
         sys(`Registered as ${ev.nick}.`);
-        // Rejoin channels after a disconnect (reconnect is when we can actually
-        // JOIN). Rejoin the union of the channels we were in when we dropped and
-        // any still-open channel windows, so it works whether or not those
-        // windows were kept open.
-        if (wasRegistered && settings.rejoinOnReconnect) {
-          const open = Object.values(get().buffers)
-            .filter((b) => b.serverId === sid && b.kind === "channel")
-            .map((b) => b.name);
-          const channels = new Set([...(rejoinPending.get(sid) ?? []), ...open]);
-          for (const ch of channels) api.join(sid, ch).catch(() => {});
+        break;
+      }
+      case "connectReady": {
+        const cycle = connectCycles.get(sid);
+        if (!cycle?.registered || cycle.ready || !get().servers[sid]?.connected) break;
+        cycle.ready = true;
+        // Registration is visible at 001, but reconnect joins wait until the
+        // CONNECT handler and perform commands have run after MOTD.
+        const open = Object.values(get().buffers)
+          .filter((b) => b.serverId === sid && b.kind === "channel")
+          .map((b) => b.name);
+        const allChannels = new Map<string, string>();
+        for (const channel of [...(rejoinPending.get(sid) ?? []), ...open]) {
+          const folded = ircCasefold(channel, mappingFor(sid));
+          if (!allChannels.has(folded)) allChannels.set(folded, channel);
         }
+        // Profile joins are already queued by the backend. Compare only the
+        // channel portion of each entry, retaining its optional key there.
+        const profileChannels = new Set(ev.autojoinChannels
+          .flatMap((entry) => entry.trim().split(/\s+/, 1)[0].split(","))
+          .filter(Boolean)
+          .map((channel) => ircCasefold(channel, mappingFor(sid))));
+        const channels = [...allChannels]
+          .filter(([folded]) => !profileChannels.has(folded))
+          .map(([, channel]) => channel);
         rejoinPending.delete(sid);
+        if (!cycle.rejoin || !settings.rejoinOnReconnect || ev.autojoinSkip) break;
+        const join = () => {
+          if (connectCycles.get(sid) !== cycle || !get().servers[sid]?.connected
+            || !useSettings.getState().rejoinOnReconnect) return;
+          rejoinPending.delete(sid);
+          for (const ch of channels) api.join(sid, ch).catch(() => {});
+        };
+        // Browser timers accept at most 2^31-1 ms. Split longer script delays
+        // rather than overflowing them into an immediate join.
+        const schedule = (remainingMs: number) => {
+          const wait = Math.min(remainingMs, 2147483647);
+          cycle.timer = setTimeout(() => {
+            if (connectCycles.get(sid) !== cycle) return;
+            if (remainingMs > wait) schedule(remainingMs - wait);
+            else join();
+          }, wait);
+        };
+        if (ev.autojoinDelaySecs > 0) {
+          // Retain the intended channels if this session drops before its delay.
+          rejoinPending.set(sid, [...allChannels.values()]);
+          schedule(ev.autojoinDelaySecs * 1000);
+        }
+        else join();
         break;
       }
       case "disconnected": {
+        clearConnectCycle(sid);
         set((s) =>
           s.servers[sid] ? { servers: { ...s.servers, [sid]: { ...s.servers[sid], connected: false } } } : s
         );
@@ -358,7 +421,8 @@ export const useStore = create<State>((set, get) => {
         const chans = Object.values(get().buffers)
           .filter((b) => b.serverId === sid && b.kind === "channel")
           .map((b) => b.name);
-        if (chans.length) rejoinPending.set(sid, chans);
+        const pending = new Set([...(rejoinPending.get(sid) ?? []), ...chans]);
+        if (pending.size) rejoinPending.set(sid, [...pending]);
         else rejoinPending.delete(sid);
         // Optionally close channel windows on disconnect.
         if (!settings.keepOpenOnKickQuit) {
@@ -451,12 +515,12 @@ export const useStore = create<State>((set, get) => {
                 ),
               }
         );
-        appendLine(sid, ev.channel, "channel", { kind: "event", text: `→ ${ev.nick} joined ${ircxDisplay(ev.channel)}` });
+        appendDefaultLine(sid, ev.channel, "channel", { kind: "event", text: `→ ${ev.nick} joined ${ircxDisplay(ev.channel)}` });
         break;
       }
       case "part":
         removeMember(sid, ev.channel, ev.nick);
-        appendLine(sid, ev.channel, "channel", {
+        appendDefaultLine(sid, ev.channel, "channel", {
           kind: "event",
           text: `← ${ev.nick} left ${ircxDisplay(ev.channel)}${ev.reason ? ` (${ev.reason})` : ""}`,
         });
@@ -464,7 +528,7 @@ export const useStore = create<State>((set, get) => {
       case "quit":
         for (const channel of ev.channels) {
           removeMember(sid, channel, ev.nick);
-          appendLine(sid, channel, "channel", {
+          appendDefaultLine(sid, channel, "channel", {
             kind: "event",
             text: `← ${ev.nick} quit${ev.reason ? ` (${ev.reason})` : ""}`,
           });
@@ -473,7 +537,7 @@ export const useStore = create<State>((set, get) => {
       case "kick": {
         removeMember(sid, ev.channel, ev.nick);
         const who = ev.isSelf ? "You were" : `${ev.nick} was`;
-        appendLine(sid, ev.channel, "channel", {
+        appendDefaultLine(sid, ev.channel, "channel", {
           kind: ev.isSelf ? "error" : "event",
           text: `${who} kicked from ${ircxDisplay(ev.channel)}${ev.by ? ` by ${ev.by}` : ""}${
             ev.reason ? ` (${ev.reason})` : ""
@@ -490,10 +554,15 @@ export const useStore = create<State>((set, get) => {
         const key = keyFor(sid, ev.name);
         const isNew = !get().buffers[key];
         ensureBuffer(sid, ev.name, "window");
-        patchBuffer(key, (b) => (b.windowKind === ev.kind ? b : { ...b, windowKind: ev.kind }));
+        patchBuffer(key, (b) => ({
+          ...b,
+          windowKind: b.windowKind ?? ev.kind,
+          windowEditbox: ev.editbox ?? b.windowEditbox ?? ev.kind === "editbox",
+          windowTitle: b.windowTitle ?? ev.title,
+        }));
         // Surface a newly-created window (mIRC pops it up); don't steal focus if a
         // script re-issues /window on one that already exists.
-        if (isNew) get().setActive(key);
+        if (isNew || ev.activate) get().setActive(key);
         break;
       }
       case "windowClose":
@@ -665,7 +734,7 @@ export const useStore = create<State>((set, get) => {
       case "topic":
         ensureBuffer(sid, ev.channel, "channel");
         patchBuffer(keyFor(sid, ev.channel), (b) => ({ ...b, topic: ev.topic ?? undefined }));
-        appendLine(sid, ev.channel, "channel", {
+        appendDefaultLine(sid, ev.channel, "channel", {
           kind: "event",
           text: `Topic${ev.setBy ? ` (set by ${ev.setBy})` : ""}: ${ev.topic ?? "(none)"}`,
         });
@@ -676,7 +745,7 @@ export const useStore = create<State>((set, get) => {
         const text = ev.by
           ? `${ev.by} sets mode: ${ev.modes}`
           : `Mode ${ircxDisplay(ev.target)}: ${ev.modes}`;
-        appendLine(sid, inChan ? ev.target : STATUS, inChan ? "channel" : "status", {
+        appendDefaultLine(sid, inChan ? ev.target : STATUS, inChan ? "channel" : "status", {
           kind: "event",
           text,
         });
@@ -689,13 +758,13 @@ export const useStore = create<State>((set, get) => {
         api
           .ircxClaimOwner(sid, network, ev.channel)
           .then((keys) =>
-            appendLine(sid, ev.channel, "channel", {
+            appendDefaultLine(sid, ev.channel, "channel", {
               kind: "system",
               text: `IRCX: claimed owner of ${ircxDisplay(ev.channel)} — OWNERKEY ${keys.ownerkey} · HOSTKEY ${keys.hostkey} (saved)`,
             })
           )
           .catch((e) =>
-            appendLine(sid, ev.channel, "channel", {
+            appendDefaultLine(sid, ev.channel, "channel", {
               kind: "system",
               text: `IRCX owner setup failed: ${e}`,
             })
@@ -711,7 +780,7 @@ export const useStore = create<State>((set, get) => {
         api
           .ircxOwnerProtect(sid, network, ev.channel, ev.by)
           .then(() =>
-            appendLine(sid, ev.channel, "channel", {
+            appendDefaultLine(sid, ev.channel, "channel", {
               kind: "system",
               text: `IRCX protection: ${ev.by} removed your owner — reclaiming, clearing owner access, kicking ${ev.by}`,
             })
@@ -897,7 +966,11 @@ export const useStore = create<State>((set, get) => {
       set({ channelList: { serverId, entries: [], loading: true } }),
     closeChannelList: () => set({ channelList: null }),
 
-    ensureServer: (serverId, name) =>
+    ensureServer: (serverId, name) => {
+      if (!get().servers[serverId]) {
+        clearConnectCycle(serverId);
+        rejoinPending.delete(serverId);
+      }
       set((s) =>
         s.servers[serverId]
           ? s
@@ -921,11 +994,13 @@ export const useStore = create<State>((set, get) => {
                 },
               },
             }
-      ),
+      );
+    },
 
     ensureBuffer,
     closeBuffer: (key) => {
       const b = get().buffers[key];
+      const wasActive = get().active === key;
       if (b) api.scriptWindowClose(b.serverId, b.kind === "status" ? "Status Window" : b.name).catch(() => {});
       set((s) => {
         const { [key]: _, ...rest } = s.buffers;
@@ -933,8 +1008,12 @@ export const useStore = create<State>((set, get) => {
         const active = s.active === key ? order[order.length - 1] ?? null : s.active;
         return { buffers: rest, order, active };
       });
+      const active = get().active;
+      if (wasActive && active) get().setActive(active);
     },
-    renameBuffer: (key, newName) =>
+    renameBuffer: (key, newName) => {
+      const buffer = get().buffers[key];
+      if (!buffer || buffer.name === newName) return;
       set((s) => {
         const buf = s.buffers[key];
         if (!buf) return s;
@@ -946,12 +1025,21 @@ export const useStore = create<State>((set, get) => {
         const { [key]: _drop, ...others } = s.buffers;
         return {
           buffers: { ...others, [newKey]: { ...buf, key: newKey, name: newName } },
-          order: s.order.map((k) => (k === key ? newKey : k)),
+          order: [...new Set(s.order.map((k) => (k === key ? newKey : k)))],
           active: s.active === key ? newKey : s.active,
         };
-      }),
+      });
+      api.scriptWindowRename(buffer.serverId, buffer.name, newName).catch(() => {});
+    },
     closeServer: (serverId) => {
+      clearConnectCycle(serverId);
+      rejoinPending.delete(serverId);
+      const activeBefore = get().active;
+      const closed = Object.values(get().buffers).filter((buffer) => buffer.serverId === serverId);
       api.disconnect(serverId).catch(() => {});
+      for (const buffer of closed) {
+        api.scriptWindowClose(serverId, buffer.kind === "status" ? "Status Window" : buffer.name).catch(() => {});
+      }
       set((s) => {
         const buffers = { ...s.buffers };
         for (const key of Object.keys(buffers)) {
@@ -962,6 +1050,8 @@ export const useStore = create<State>((set, get) => {
         const active = s.active && buffers[s.active] ? s.active : order[order.length - 1] ?? null;
         return { buffers, order, servers, active };
       });
+      const active = get().active;
+      if (active && active !== activeBefore) get().setActive(active);
     },
     setActive: (key) => {
       // Report the focused window to the script engine (for $active). mIRC names

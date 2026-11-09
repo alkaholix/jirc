@@ -9,6 +9,7 @@ import { useAddressBook } from "../state/addressBook";
 vi.mock("./api", () => ({
   api: {
     scriptWindowClose: vi.fn(() => Promise.resolve()),
+    scriptWindowRename: vi.fn(() => Promise.resolve()),
     disconnect: vi.fn(() => Promise.resolve()),
     openHelp: vi.fn(() => Promise.resolve()),
     sendRaw: vi.fn(() => Promise.resolve()),

@@ -2436,6 +2436,7 @@ fn fire_with_error(
         return;
     };
     let ctx = RunCtx {
+        server_id,
         my_nick: nick,
         network,
         server: "",
@@ -2474,6 +2475,7 @@ fn fire_read(
         return;
     };
     let ctx = RunCtx {
+        server_id,
         my_nick: nick,
         network,
         server: "",
