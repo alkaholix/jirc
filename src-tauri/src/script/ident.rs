@@ -8750,9 +8750,12 @@ mod tests {
         assert!(same_sandbox_path(&root, "nested/../file.txt", "file.txt"));
         assert!(same_sandbox_path(&root, "../file.txt", "file.txt"));
         assert!(!same_sandbox_path(&root, "file.txt", "other.txt"));
+        // Letter case follows the file system (decision D-06 is open): Windows
+        // and macOS ignore it by default, Linux doesn't.
+        let ignores_case = root.join("FILE.TXT").exists();
         assert_eq!(
             same_sandbox_path(&root, "FILE.TXT", "file.txt"),
-            cfg!(windows)
+            cfg!(windows) || ignores_case
         );
 
         std::fs::remove_dir_all(root).unwrap();
