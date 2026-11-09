@@ -299,3 +299,47 @@ fn nul_bytes_in_event_text_never_reach_a_command() {
     }
     let _ = std::fs::remove_dir_all(&ctx.data_dir);
 }
+
+/// A finished bracket result joined to a `[ $+ … ]` group contributes its
+/// *value*, and the join is not evaluated again — mIRC's `[ $1 ] [ $+ x ]` is
+/// `abx`, not the raw internal marker that once carried the engine's key
+/// (TODO S-01, verifier round). Values from `analysis/rea-batch3-20261109/`
+/// (`native-leak.txt`); case IDs l01–l10.
+#[test]
+fn a_bracket_result_joined_to_a_group_uses_its_value() {
+    for (body, expected) in [
+        ("tokenize 32 ab | out [ $1 ] [ $+ x ]", "<abx>"), // l01
+        ("out [ $calc(1+1) ] [ $+ z ]", "<2z>"),           // l02
+        ("tokenize 32 ab cd | out [ $1 ] [ $+ $2 ]", "<ab$2>"), // l03
+        ("tokenize 32 ab cd | out [ $1 ] [ $+ $2 ] y", "<ab$2 y>"), // l04
+        ("out $upper(a) [ $+ x ]", "<A>"),                 // l05: not a result — evaluated
+        ("tokenize 32 ab | out [ [ $1 ] ] [ $+ x ]", "<abx>"), // l06
+        ("tokenize 32 ab | out z [ $1 ] [ $+ x ]", "<z abx>"), // l07
+        ("tokenize 32 ab | out [ $1 ] [ $+ x ] [ $+ y ]", "<abxy>"), // l08
+        ("out [ $calc(1+1) ] [ $+ $calc(2+2) ]", "<2$calc(2+2)>"), // l09
+        ("tokenize 32 pwn | out [ $1 ] [ $+ x ]", "<pwnx>"), // l10: pwn never runs
+    ] {
+        assert_eq!(run(body), [expected], "{body}");
+    }
+}
+
+/// No internal envelope marker — and so never the per-process key it carries —
+/// can reach output, through any bracket idiom (TODO S-01, verifier round).
+/// Were the key to leak, data could forge a pipe envelope and split a command.
+#[test]
+fn no_internal_marker_reaches_output() {
+    for body in [
+        "tokenize 32 ab | out [ $1 ] [ $+ x ]",
+        "out [ $calc(1+1) ] [ $+ z ]",
+        "tokenize 32 ab | out [ [ $1 ] ] [ $+ x ]",
+        "tokenize 32 ab | out [ $1 ] [ $+ x ] [ $+ y ]",
+        "out [ $md5(x) ] [ $+ y ]",
+        "tokenize 32 a b c | out [ $1 ] [ $+ $2 ] [ $+ $3 ]",
+    ] {
+        let out = run(body).join("|");
+        assert!(
+            !out.contains('\0') && !out.contains("jirc-") && !out.contains("-evaluated:"),
+            "marker leaked for {body:?}: {out:?}"
+        );
+    }
+}

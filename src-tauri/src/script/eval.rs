@@ -614,7 +614,11 @@ const WSA_INVALID_ARGUMENT: i32 = 10_022;
 //
 // Every prefix carries a key chosen when jIRC starts, so text that arrives as
 // data (an IRC message, a file, a socket read) can never pass for an envelope,
-// even before its NUL bytes are dropped (`c_string`).
+// even before its NUL bytes are dropped (`c_string`). Each type gets its *own*
+// random key, so even if one marker ever reached output, it would not reveal
+// the key of another — in particular, the `evaluated`/`sealed` markers used
+// only inside one evaluation pass never share a secret with the `pipe` marker
+// that separates commands or the `delay` marker that defers execution.
 struct EnvelopePrefixes {
     delay: String,
     pipe: String,
@@ -625,12 +629,12 @@ struct EnvelopePrefixes {
 fn envelope_prefixes() -> &'static EnvelopePrefixes {
     static PREFIXES: std::sync::OnceLock<EnvelopePrefixes> = std::sync::OnceLock::new();
     PREFIXES.get_or_init(|| {
-        let key = uuid::Uuid::new_v4().simple().to_string();
+        let key = || uuid::Uuid::new_v4().simple().to_string();
         EnvelopePrefixes {
-            delay: format!("\0jirc-{key}-unsafe:"),
-            pipe: format!("\0jirc-{key}-read-pipe:"),
-            evaluated: format!("\0jirc-{key}-evaluated:"),
-            sealed: format!("\0jirc-{key}-sealed:"),
+            delay: format!("\0jirc-{}-unsafe:", key()),
+            pipe: format!("\0jirc-{}-read-pipe:", key()),
+            evaluated: format!("\0jirc-{}-evaluated:", key()),
+            sealed: format!("\0jirc-{}-sealed:", key()),
         }
     })
 }
@@ -7329,15 +7333,35 @@ impl<'a> Runtime<'a> {
                 }
                 let rest = words.get(used).map_or(inner.len(), |&index| index);
                 let mut replace_start = span.open;
-                if let Some(previous) = (0..span.open)
+                // The word before the group may itself be a finished bracket
+                // result (`[ $1 ] [ $+ x ]`). mIRC joins its *value*, not its
+                // raw form, and does not evaluate the join again: `[ $1 ] [ $+ x ]`
+                // is `abx`, `[ $calc(1+1) ] [ $+ z ]` is `2z`. So join the
+                // previous token's decoded value and seal the whole word, never
+                // its raw envelope (whose NUL terminator a plain join would move
+                // mid-string, so the token pass would hand the marker — and its
+                // key — straight to output). A previous token that is ordinary
+                // text or an unevaluated identifier is joined as written and
+                // evaluated once, as before (`$upper(a) [ $+ x ]` is `A`,
+                // `% [ $+ $1 ]` the variable `%$1`).
+                let mut previous_is_result = false;
+                if let Some(index) = (0..span.open)
                     .rev()
                     .find(|index| !tokens[*index].is_empty())
                 {
-                    joined.insert_str(0, &tokens[previous]);
-                    replace_start = previous;
+                    let previous = &tokens[index];
+                    previous_is_result = previous.starts_with(evaluated_prefix())
+                        || previous.starts_with(sealed_prefix());
+                    joined.insert_str(0, &plain_group_value(previous));
+                    replace_start = index;
                 }
+                let head = if previous_is_result {
+                    encode_sealed(&joined)
+                } else {
+                    joined
+                };
                 let replacement: Vec<String> =
-                    std::iter::once(joined).chain(inner[rest..].iter().cloned()).collect();
+                    std::iter::once(head).chain(inner[rest..].iter().cloned()).collect();
                 tokens.splice(replace_start..=span.close, replacement);
                 continue;
             }
@@ -8288,11 +8312,8 @@ fn encode_evaluated(value: &str) -> String {
 /// Unwraps a bracket result so an enclosing pair can evaluate it again — which
 /// is exactly what the extra pair means.
 fn decode_evaluated(value: &str) -> String {
-    let Some(rest) = value.strip_prefix(evaluated_prefix()) else {
-        return value.to_string();
-    };
-    match rest.strip_suffix(ENVELOPE_END) {
-        Some(payload) => decode_payload(payload).unwrap_or_else(|| value.to_string()),
+    match strip_marker(value, evaluated_prefix()) {
+        Some(decoded) => decoded,
         None => value.to_string(),
     }
 }
@@ -8366,13 +8387,31 @@ fn plain_group_value(token: &str) -> String {
 }
 
 fn decode_sealed(value: &str) -> String {
-    let Some(rest) = value.strip_prefix(sealed_prefix()) else {
-        return value.to_string();
-    };
-    match rest.strip_suffix(ENVELOPE_END) {
-        Some(payload) => decode_payload(payload).unwrap_or_else(|| value.to_string()),
+    match strip_marker(value, sealed_prefix()) {
+        Some(decoded) => decoded,
         None => value.to_string(),
     }
+}
+
+/// Decodes a value that begins with an internal `evaluated`/`sealed` marker,
+/// returning its payload followed by any text after the marker's terminator.
+/// `None` means `value` does not start with `prefix`.
+///
+/// The terminator is found by its first `\0`, not required at the very end, so
+/// a marker with text glued after it (`<marker>…\0x`) still decodes to its
+/// value plus the trailing text rather than being handed back verbatim — a raw
+/// marker (which carries the per-process key) must never reach output. A marker
+/// with no terminator at all, or one whose payload will not decode, can only be
+/// corruption and yields the empty string, never the raw prefix.
+fn strip_marker(value: &str, prefix: &str) -> Option<String> {
+    let rest = value.strip_prefix(prefix)?;
+    Some(match rest.find(ENVELOPE_END) {
+        Some(end) => {
+            let tail = &rest[end + ENVELOPE_END.len_utf8()..];
+            format!("{}{tail}", decode_payload(&rest[..end]).unwrap_or_default())
+        }
+        None => String::new(),
+    })
 }
 
 fn encode_envelope(prefix: &str, value: &str) -> String {
