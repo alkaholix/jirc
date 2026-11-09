@@ -1829,7 +1829,7 @@ pub fn eval_ident(rt: &mut Runtime, name: &str, args: &[String], prop: &str) -> 
             if name.is_empty() {
                 format!("{}{}", base.display(), std::path::MAIN_SEPARATOR)
             } else {
-                base.join(std::path::Path::new(&name).file_name().unwrap_or_default())
+                base.join(super::eval::script_leaf(&name).unwrap_or_default())
                     .to_string_lossy()
                     .into_owned()
             }
@@ -4043,10 +4043,19 @@ fn same_sandbox_path(sandbox: &std::path::Path, left: &str, right: &str) -> bool
             let root = sandbox
                 .canonicalize()
                 .unwrap_or_else(|_| sandbox.to_path_buf());
-            root.join(path.file_name().unwrap_or_default())
+            // A file that doesn't exist yet keeps its folders in the sandbox.
+            match path.strip_prefix(sandbox) {
+                Ok(inside) => root.join(inside),
+                Err(_) => root.join(path.file_name().unwrap_or_default()),
+            }
         })
     }
 
+    // `x` and `x\` don't name the same thing (native `$samepath(d,d\)` is $false).
+    let folder = |value: &str| value.ends_with(['/', '\\']);
+    if folder(left) != folder(right) {
+        return false;
+    }
     let left = resolved(sandbox, left);
     let right = resolved(sandbox, right);
     if cfg!(windows) {
@@ -5679,8 +5688,11 @@ fn collect_paths(
     }
     output.push(path.to_path_buf());
     if path.is_dir() {
+        // Links are left out, as in `$findfile`: they could lead out of the
+        // sandbox, or round in a loop.
         let mut children = std::fs::read_dir(path)?
             .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_ok_and(|kind| !kind.is_symlink()))
             .map(|entry| entry.path())
             .collect::<Vec<_>>();
         children.sort();
@@ -5701,10 +5713,39 @@ fn extract_zip(
     std::fs::create_dir_all(destination).map_err(|error| error.to_string())?;
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
-        let Some(relative) = entry.enclosed_name() else {
+        let Some(name) = entry.enclosed_name() else {
             return Err("unsafe zip entry".into());
         };
-        let output = destination.join(relative);
+        // Resolve `..` in the name as text first (`missing/../x` is `x`), so
+        // the link check below sees the folders the file really lands in.
+        let mut relative = std::path::PathBuf::new();
+        for part in name.components() {
+            match part {
+                // `:` becomes `_` as in every sandbox path: on Windows
+                // `name:stream` would otherwise skip the link check below.
+                std::path::Component::Normal(part) => {
+                    relative.push(super::eval::plain_part(&part.to_string_lossy()))
+                }
+                std::path::Component::ParentDir => {
+                    relative.pop();
+                }
+                std::path::Component::CurDir => {}
+                _ => return Err("unsafe zip entry".into()),
+            }
+        }
+        if relative.as_os_str().is_empty() {
+            continue;
+        }
+        let output = destination.join(&relative);
+        // An existing link inside the destination must not carry the entry
+        // out of the sandbox.
+        let mut walked = destination.to_path_buf();
+        for part in relative.components() {
+            walked.push(part);
+            if std::fs::symlink_metadata(&walked).is_ok_and(|meta| meta.file_type().is_symlink()) {
+                return Err("unsafe zip entry".into());
+            }
+        }
         if entry.is_dir() {
             std::fs::create_dir_all(&output).map_err(|error| error.to_string())?;
         } else {
@@ -6135,8 +6176,16 @@ fn find_entries(
         return;
     };
     for entry in entries.flatten() {
+        // Links are neither listed nor followed: they could lead out of the
+        // sandbox, or round in a loop.
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_symlink() {
+            continue;
+        }
         let path = entry.path();
-        let is_dir = path.is_dir();
+        let is_dir = kind.is_dir();
         let fname = entry.file_name().to_string_lossy().into_owned();
         if is_dir == want_dirs && wildcard_match(wild, &fname) {
             out.push(path.to_string_lossy().into_owned());
@@ -8695,7 +8744,10 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("file.txt"), "test").unwrap();
 
-        assert!(same_sandbox_path(&root, "file.txt", "nested/file.txt"));
+        // Folders inside the sandbox are kept (TODO X-01, D-04); `..` never
+        // climbs above it.
+        assert!(!same_sandbox_path(&root, "file.txt", "nested/file.txt"));
+        assert!(same_sandbox_path(&root, "nested/../file.txt", "file.txt"));
         assert!(same_sandbox_path(&root, "../file.txt", "file.txt"));
         assert!(!same_sandbox_path(&root, "file.txt", "other.txt"));
         assert_eq!(

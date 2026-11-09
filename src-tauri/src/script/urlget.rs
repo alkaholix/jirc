@@ -502,13 +502,15 @@ pub fn activate(
 }
 
 fn output_path(request: &Request) -> Option<PathBuf> {
-    request.path.as_ref().map(|path| {
-        if request.part {
-            PathBuf::from(format!("{}.part", path.to_string_lossy()))
-        } else {
-            path.clone()
-        }
-    })
+    let path = request.path.as_ref()?;
+    if !request.part {
+        return Some(path.clone());
+    }
+    // The `.part` name is made after the sandbox check, so check it here: a
+    // link there must not be read on resume or written through.
+    let part = PathBuf::from(format!("{}.part", path.to_string_lossy()));
+    let linked = std::fs::symlink_metadata(&part).is_ok_and(|meta| meta.file_type().is_symlink());
+    (!linked).then_some(part)
 }
 
 async fn download(
@@ -716,7 +718,11 @@ async fn finish(
         }
         entry.data.clone()
     };
-    if let Some(path) = output_path(request).filter(|_| ok || !data.is_empty()) {
+    let output = output_path(request);
+    if request.path.is_some() && output.is_none() {
+        ok = false; // the `.part` name was a link: nothing may be written
+    }
+    if let Some(path) = output.filter(|_| ok || !data.is_empty()) {
         let final_path = request.path.clone().unwrap();
         let temporary = PathBuf::from(format!(
             "{}.jirc-{id}-{generation}.tmp",
@@ -729,7 +735,13 @@ async fn finish(
                 if let Some(parent) = path.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
-                std::fs::write(&temporary, bytes)?;
+                // A new file only: never write through something already there.
+                use std::io::Write;
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&temporary)?
+                    .write_all(&bytes)?;
                 Ok((temporary, path, final_path, part))
             },
         )

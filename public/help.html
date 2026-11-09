@@ -1384,9 +1384,14 @@ the original formatting. A successful replacement still uses the stripped text.<
 
 <h2 id="files">Files <span class="pill">sandboxed</span></h2>
 <p>Scripts can read and write small text files. For safety, file access is
-<strong>sandboxed</strong>: only the file <em>name</em> is used, and all files live in a
-dedicated folder (<code>scriptdata</code> next to your scripts). Scripts can't read or
-write anywhere else on your disk.</p>
+<strong>sandboxed</strong>: all files live in a dedicated folder (<code>scriptdata</code>
+next to your scripts), and scripts can't read or write anywhere else on your disk.
+Paths work the same on Windows, macOS and Linux: <code>\</code> and <code>/</code> both
+separate folders, so <code>data\names.txt</code> is the file <code>names.txt</code> in the
+folder <code>data</code> inside <code>scriptdata</code> (make it first with
+<code>/mkdir data</code>; <code>/write</code> into a missing folder is an error, as in
+mIRC). <code>..</code> never leaves <code>scriptdata</code>, and any other full path such as
+<code>C:\anywhere\notes.txt</code> keeps only its file name.</p>
 <table>
   <tr><th>Command / Identifier</th><th>Effect</th></tr>
   <tr><td><code>/write file text</code></td><td>append <em>text</em> as a new line</td></tr>

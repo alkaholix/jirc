@@ -2489,8 +2489,10 @@ impl<'a> Runtime<'a> {
             }
             "rmdir" => {
                 let dir = self.expand(raw_args);
-                if !dir.trim().is_empty() {
-                    let _ = std::fs::remove_dir(sandbox_path(&self.data_dir, dir.trim()));
+                let path = sandbox_path(&self.data_dir, dir.trim());
+                // The sandbox folder itself (`/rmdir $mircdir`) stays.
+                if !dir.trim().is_empty() && path != self.data_dir {
+                    let _ = std::fs::remove_dir(path);
                 }
             }
             "remove" => {
@@ -2517,7 +2519,13 @@ impl<'a> Runtime<'a> {
                     // `-o` permits replacing an existing file; without it mIRC
                     // leaves the target alone. `std::fs::rename` replaces on
                     // both platforms, so the guard has to be explicit.
-                    if !new.exists() || flags.to_ascii_lowercase().contains('o') {
+                    if missing_folder(&new) {
+                        self.raise_script_error(format!(
+                            "/rename: unable to rename '{}' to '{}'",
+                            old.display(),
+                            new.display()
+                        ));
+                    } else if !new.exists() || flags.to_ascii_lowercase().contains('o') {
                         let _ = std::fs::rename(old, new);
                     }
                 }
@@ -2535,7 +2543,17 @@ impl<'a> Runtime<'a> {
                     let src = sandbox_path(&self.data_dir, src.trim());
                     let dst = sandbox_path(&self.data_dir, dst.trim());
                     let exists = dst.exists();
-                    if flags.contains('a') && exists {
+                    if missing_folder(&dst) {
+                        self.raise_script_error(if flags.contains('a') {
+                            format!("/copy: unable to open file '{}'", dst.display())
+                        } else {
+                            format!(
+                                "/copy: unable to copy '{}' to '{}'",
+                                src.display(),
+                                dst.display()
+                            )
+                        });
+                    } else if flags.contains('a') && exists {
                         use std::io::Write;
                         if let (Ok(data), Ok(mut out)) = (
                             std::fs::read(&src),
@@ -4213,7 +4231,9 @@ impl<'a> Runtime<'a> {
         // clear a file (data_storage.rst, "Clearing A File"), so it empties the
         // file rather than leaving a blank line in it.
         if control_switches.contains('c') && text.is_empty() && line_number.is_none() {
-            let _ = std::fs::write(&path, "");
+            if std::fs::write(&path, "").is_err() {
+                self.raise_script_error(format!("/write: unable to open file '{}'", path.display()));
+            }
             return;
         }
 
@@ -4278,7 +4298,10 @@ impl<'a> Runtime<'a> {
         if !no_final_newline && add_final_newline {
             content.push_str("\r\n");
         }
-        let _ = std::fs::write(&path, content);
+        // A folder that doesn't exist is an error, as in mIRC (no folder is made).
+        if std::fs::write(&path, content).is_err() {
+            self.raise_script_error(format!("/write: unable to open file '{}'", path.display()));
+        }
     }
 
     /// `/filter` over sandboxed files and custom `@windows`. This implements
@@ -4522,6 +4545,10 @@ impl<'a> Runtime<'a> {
             prior.push_str(&selected.join("\r\n"));
             if !selected.is_empty() {
                 prior.push_str("\r\n");
+            }
+            if missing_folder(&path) {
+                self.raise_script_error(format!("/filter: unable to open file '{}'", path.display()));
+                return;
             }
             let _ = std::fs::write(path, prior);
         }
@@ -4878,6 +4905,10 @@ impl<'a> Runtime<'a> {
         }
         if chop {
             content.truncate(start + to_write.len());
+        }
+        if missing_folder(&path) {
+            self.raise_script_error(format!("/bwrite: unable to open file '{}'", path.display()));
+            return;
         }
         let _ = std::fs::write(&path, &content);
     }
@@ -6393,6 +6424,10 @@ impl<'a> Runtime<'a> {
             return;
         };
         let path = sandbox_path(&self.data_dir, &file);
+        if missing_folder(&path) {
+            self.raise_script_error(format!("/hsave: unable to open file '{}'", path.display()));
+            return;
+        }
         let saved = if flags.contains('a') {
             use std::io::Write;
             std::fs::OpenOptions::new()
@@ -8395,10 +8430,107 @@ fn find_label(body: &[Stmt], name: &str) -> Option<usize> {
 /// using only the final filename component so scripts can't escape the dir.
 pub fn sandbox_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
     let name = name.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(name);
-    let file = std::path::Path::new(name)
-        .file_name()
-        .unwrap_or_else(|| std::ffi::OsStr::new("script.dat"));
-    dir.join(file)
+    let parts = match sandbox_parts(dir, name) {
+        Some(parts) => parts,
+        // Any other absolute path (`C:\anywhere\x`, `/etc/x`) is confined to
+        // its file name inside the sandbox.
+        None => vec![script_leaf(name).unwrap_or_else(|| "script.dat".to_string())],
+    };
+    let mut path = dir.to_path_buf();
+    for part in &parts {
+        path.push(part);
+        // A link anywhere below the sandbox folder, dangling or not, could
+        // lead out of it: such a path names nothing a script may touch.
+        if std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+            return dir.join(LINKED_PATH);
+        }
+    }
+    path
+}
+
+/// A sandbox path whose folder doesn't exist: mIRC reports the command's
+/// "unable to …" error there and makes no folder.
+fn missing_folder(path: &std::path::Path) -> bool {
+    path.parent().is_some_and(|folder| !folder.exists())
+}
+
+/// What `sandbox_path` returns for a path that goes through a link. The NUL
+/// makes every file operation on it fail on every OS.
+const LINKED_PATH: &str = "linked path\0";
+
+/// The folders and file a script path names inside the sandbox, as mIRC reads
+/// a path relative to `$mircdir`: `data\names.txt` keeps its folder, `\` and `/`
+/// both separate, `.` is skipped and `..` goes up but never above the sandbox.
+/// A path that starts with the sandbox itself (`$mircdir`, a `$findfile`
+/// result) or with jIRC's scripts folder (`$scriptdir`) keeps the part after
+/// it; an empty list then means the sandbox folder. `None` for any other
+/// absolute path, and for a relative one that names no file.
+fn sandbox_parts(dir: &std::path::Path, name: &str) -> Option<Vec<String>> {
+    let bytes = name.as_bytes();
+    let absolute = name.starts_with(['/', '\\'])
+        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':');
+    let rest = if absolute {
+        let scripts = dir.parent().map(|base| base.join("scripts"));
+        [Some(dir.to_path_buf()), scripts]
+            .into_iter()
+            .flatten()
+            .find_map(|root| strip_dir_prefix(&root, name))?
+    } else {
+        name
+    };
+    let mut parts = Vec::new();
+    for part in rest.split(['/', '\\']) {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            part => parts.push(plain_part(part)),
+        }
+    }
+    (absolute || !parts.is_empty()).then_some(parts)
+}
+
+/// One folder or file name as the sandbox uses it: a `:` becomes `_`, so a
+/// part such as `D:x` can't name another drive on Windows (and names the same
+/// file on every OS).
+pub(super) fn plain_part(part: &str) -> String {
+    part.replace(':', "_")
+}
+
+/// `name` with the folder `root` taken off the front, separators compared as
+/// either `\` or `/` (and letter case ignored on Windows).
+fn strip_dir_prefix<'a>(root: &std::path::Path, name: &'a str) -> Option<&'a str> {
+    let normal = |text: &str| text.replace('\\', "/");
+    let root = normal(&root.to_string_lossy());
+    let root = root.trim_end_matches('/');
+    let head = normal(name.get(..root.len())?);
+    let same = if cfg!(windows) {
+        head.eq_ignore_ascii_case(root)
+    } else {
+        head == root
+    };
+    let rest = &name[root.len()..];
+    (same && (rest.is_empty() || rest.starts_with(['/', '\\']))).then_some(rest)
+}
+
+/// The file name a script path names, read the same way on every OS: `\` and
+/// `/` both separate folders and a drive letter (`C:`) is ignored, so a script
+/// written on Windows (`$scriptdir\settings.ini`) finds its file on macOS and
+/// Linux too. `None` when no file name is left (`C:\`, a trailing `..`).
+pub(super) fn script_leaf(name: &str) -> Option<String> {
+    let name = name.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(name);
+    let bytes = name.as_bytes();
+    let name = if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        &name[2..]
+    } else {
+        name
+    };
+    let last = name
+        .split(['/', '\\'])
+        .filter(|part| !part.is_empty() && *part != ".")
+        .last()?;
+    (last != "..").then(|| plain_part(last))
 }
 
 fn is_line_range(value: &str) -> bool {
@@ -9161,7 +9293,7 @@ fn hash_text_format(flags: &str) -> super::hash::TextFormat {
 /// see `script_dispatch_audio_end`. An empty name (a `/splay -p`-style control
 /// operation, which never reaches an end event) keeps the WAVEEND default.
 pub(super) fn sound_end_event(file: &str) -> &'static str {
-    let ext = std::path::Path::new(file)
+    let ext = std::path::Path::new(&script_leaf(file).unwrap_or_default())
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or_default()
@@ -9363,6 +9495,32 @@ fn wm_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TODO X-01: one rule for script file names on Windows, macOS and Linux.
+    #[test]
+    fn script_paths_read_the_same_on_every_os() {
+        for (name, leaf) in [
+            ("C:\\anywhere\\probe.dat", Some("probe.dat")),
+            ("\"C:\\Program Files\\x\\probe.dat\"", Some("probe.dat")),
+            ("\\settings.ini", Some("settings.ini")),
+            ("/home/u/jIRC/scripts\\settings.ini", Some("settings.ini")),
+            ("scripts\\data\\names.txt", Some("names.txt")),
+            ("data/names.txt", Some("names.txt")),
+            ("C:probe.dat", Some("probe.dat")),
+            ("..\\..\\notes.txt", Some("notes.txt")),
+            ("probe.dat", Some("probe.dat")),
+            ("C:\\", None),
+            ("..", None),
+            ("", None),
+        ] {
+            assert_eq!(script_leaf(name).as_deref(), leaf, "{name}");
+        }
+        let dir = std::path::Path::new("base");
+        assert_eq!(sandbox_path(dir, "C:\\x\\probe.dat"), dir.join("probe.dat"));
+        assert_eq!(sandbox_path(dir, "C:\\"), dir.join("script.dat"));
+        assert_eq!(sound_end_event("C:\\music\\song.MID"), "MIDIEND");
+        assert_eq!(sound_end_event("tunes/x.mp3"), "MP3END");
+    }
 
     fn run_ctx<'a>() -> crate::script::RunCtx<'a> {
         crate::script::RunCtx {

@@ -1991,7 +1991,9 @@ impl DccManager {
                 // Script file access follows jIRC's intentional sandbox: a
                 // remote script may send a file from scriptdata, never an
                 // arbitrary host path supplied by untrusted IRC input.
-                let path = data_dir.join(safe_basename(&file));
+                // Same resolution as every script file command: folders
+                // inside scriptdata, never through a link.
+                let path = crate::script::eval::sandbox_path(data_dir, &file);
                 self.send_file(app, server_id.to_string(), nick, path)
             }
             DccCommand::Get { nick } => self.accept_pending(app, server_id, nick.as_deref(), false),

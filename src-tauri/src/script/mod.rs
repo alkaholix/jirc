@@ -30,6 +30,8 @@ mod migration_value_tests;
 mod regex_strip_tests;
 #[cfg(test)]
 mod parse_rules_tests;
+#[cfg(test)]
+mod sandbox_folder_tests;
 pub mod files;
 pub mod hash;
 pub mod ident;
@@ -7693,7 +7695,7 @@ mod tests {
                 "/msg #c $samepath(file.txt,nested/file.txt) $samepath(file.txt,other.txt)",
                 &[]
             ),
-            vec![Action::Send("PRIVMSG #c :$true $false".into())]
+            vec![Action::Send("PRIVMSG #c :$false $false".into())]
         );
     }
 

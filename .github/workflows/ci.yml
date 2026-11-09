@@ -1,0 +1,35 @@
+name: Tests
+
+# Runs the test suites on all three platforms jIRC ships for, so an assumption
+# that only holds on one OS (TODO X-01) shows up before a release.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows-latest, macos-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev
+      - run: npm ci
+      - run: npm test
+      # The Tauri build embeds the built frontend, so it must exist first.
+      - run: npm run build
+      - run: cargo test --manifest-path src-tauri/Cargo.toml -- --skip live

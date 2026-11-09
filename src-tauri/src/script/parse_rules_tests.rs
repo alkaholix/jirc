@@ -654,9 +654,9 @@ fn a_closing_parenthesis_ends_a_name_inside_calc() {
         ("set %a 1 | out $calc(%a + (%a))", "<2>"),                // n06
         ("set %a.b 5 | out $calc((%a.b))", "<5>"),                 // n07
         ("set %a 5 | out $calc( (%a ) ) $calc(-(%a))", "<5 -5>"),  // n09
-        ("out $calc(($ticks - $ticks) / 1000)", "<0>"),            // n10
-        ("set %a 5 | out $calc((%a))) $calc(((%a)))", "<5 5>"),    // n11
-        ("set %v Q | out $upper((%v)) $upper(%v))", "<(%V) Q>"),   // n12
+        ("out $calc(($pi - $pi) / 1000)", "<0>"), // n10 shape (`$ticks` can tick between calls)
+        ("set %a 5 | out $calc((%a))) $calc(((%a)))", "<5 5>"), // n11
+        ("set %v Q | out $upper((%v)) $upper(%v))", "<(%V) Q>"), // n12
     ]);
 }
 
