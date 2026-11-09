@@ -42,11 +42,11 @@ fn file_reads_binary_form_replaces_the_destination_and_retains_raw_bytes() {
           fopen h payload.bin\n\
           bset &out 1 1 2 3 4 5 6\n\
           var %n = $fread(h,3,&out)\n\
-          echo -s first=%n length=$bvar(&out,0) bytes=$bvar(&out,1,3) position=$fopen(h).pos eof=$feof error=$ferr\n\
+          echo -s first= $+ %n length= $+ $bvar(&out,0) bytes= $+ $bvar(&out,1,3) position= $+ $fopen(h).pos eof= $+ $feof error= $+ $ferr\n\
           var %n = $fread(1,4,&out)\n\
-          echo -s partial=%n length=$bvar(&out,0) bytes=$bvar(&out,1,2) position=$fopen(h).pos eof=$feof error=$ferr\n\
+          echo -s partial= $+ %n length= $+ $bvar(&out,0) bytes= $+ $bvar(&out,1,2) position= $+ $fopen(h).pos eof= $+ $feof error= $+ $ferr\n\
           var %n = $fread(1,1,&out)\n\
-          echo -s end=%n length=$bvar(&out,0) position=$fopen(h).pos eof=$feof error=$ferr\n\
+          echo -s end= $+ %n length= $+ $bvar(&out,0) position= $+ $fopen(h).pos eof= $+ $feof error= $+ $ferr\n\
           fclose h\n\
         }",
     );
@@ -75,9 +75,9 @@ fn file_reads_numeric_text_and_character_selectors_match_fopen_enumeration() {
         "alias check {\n\
           fopen z second.txt\n\
           fopen a first.txt\n\
-          echo -s names=$fopen(1)/$fopen(2) counts=$fread(0)/$fgetc(0)\n\
-          echo -s line=$fread(1) character=$fgetc(2)\n\
-          echo -s remaining=$freadex(1) positions=$fopen(a).pos/$fopen(z).pos\n\
+          echo -s names= $+ $fopen(1) $+ / $+ $fopen(2) counts= $+ $fread(0) $+ / $+ $fgetc(0)\n\
+          echo -s line= $+ $fread(1) character= $+ $fgetc(2)\n\
+          echo -s remaining= $+ $freadex(1) positions= $+ $fopen(a).pos $+ / $+ $fopen(z).pos\n\
           fclose *\n\
         }",
     );
@@ -105,15 +105,15 @@ fn file_reads_invalid_binary_arguments_preserve_the_pointer_and_destination() {
           fopen h payload.bin\n\
           bset &out 1 88 89\n\
           noop $fread(h,0,&out)\n\
-          echo -s zero=$ferr position=$fopen(h).pos bytes=$bvar(&out,1,2)\n\
+          echo -s zero= $+ $ferr position= $+ $fopen(h).pos bytes= $+ $bvar(&out,1,2)\n\
           noop $fread(h,2,wrong)\n\
-          echo -s target=$ferr position=$fopen(h).pos bytes=$bvar(&out,1,2)\n\
+          echo -s target= $+ $ferr position= $+ $fopen(h).pos bytes= $+ $bvar(&out,1,2)\n\
           noop $fread(h,33554433,&out)\n\
-          echo -s limit=$ferr position=$fopen(h).pos bytes=$bvar(&out,1,2)\n\
+          echo -s limit= $+ $ferr position= $+ $fopen(h).pos bytes= $+ $bvar(&out,1,2)\n\
           noop $fread(missing,2,&out)\n\
-          echo -s missing=$ferr position=$fopen(h).pos bytes=$bvar(&out,1,2)\n\
+          echo -s missing= $+ $ferr position= $+ $fopen(h).pos bytes= $+ $bvar(&out,1,2)\n\
           noop $fread(h,2,&out)\n\
-          echo -s recovered=$ferr position=$fopen(h).pos bytes=$bvar(&out,1,2)\n\
+          echo -s recovered= $+ $ferr position= $+ $fopen(h).pos bytes= $+ $bvar(&out,1,2)\n\
           fclose h\n\
         }",
     );

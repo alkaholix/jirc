@@ -1711,7 +1711,7 @@ mod tests {
                msg #c wrong-goto\n\
                :done\n\
                if $false msg #c wrong-pipe | msg #c sibling\n\
-               msg #c calls=%calls\n\
+               msg #c calls= $+ %calls\n\
              }\n\
              alias probe { inc %calls | return $replace($1,$chr(32),-) }",
         );

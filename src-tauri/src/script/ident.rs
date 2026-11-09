@@ -4832,66 +4832,100 @@ pub fn eval_regsubex(rt: &mut Runtime, raw: &[String]) -> String {
     finish_regex_output(rt, raw, output_index, result, matches.len())
 }
 
-/// Encodes a captured group value so it survives being substituted into the
-/// regsubex subtext and re-evaluated. mSL-structural characters — `( ) [ ] { }
-/// $ % , &` — would otherwise re-parse (e.g. a captured `(` makes `$asc(\1)`
-/// become `$asc(()`, which mis-matches parens and corrupts/drops the byte).
-/// Each is replaced by the `$chr(N)` that evaluates back to it, so the value is
-/// preserved exactly while the surrounding subtext still parses. mIRC binds `\1`
-/// as a value rather than re-tokenizing it, so this matches its behaviour.
-fn subtext_literal(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '(' | ')' | '[' | ']' | '{' | '}' | '$' | '%' | ',' | '&' => {
-                out.push_str(&format!("$chr({})", c as u32));
-            }
-            _ => out.push(c),
-        }
-    }
-    out
-}
-
-/// Substitutes the `$regsubex` subtext markers for one match.
+/// Substitutes the `$regsubex` subtext markers for one match. mIRC treats a
+/// `\N` as a token of its own: `\1$chr(45)` is the capture followed by `-`,
+/// and a capture is never evaluated as script. So each marker becomes a sealed
+/// token joined with `$+` to whatever touches it. Inside a word that is literal
+/// anyway (it doesn't start with `$`, `%` or `#`), the capture is plain text.
 fn regsubex_fill(subtext: &str, groups: &[String], match_num: usize, group_count: usize) -> String {
     let chars: Vec<char> = subtext.chars().collect();
     let mut out = String::new();
+    // One entry per open parenthesis: true for an identifier's `name(`, false
+    // for a grouping `(` such as the one in `$calc(97+ (\n % 6))`.
+    let mut parens: Vec<bool> = Vec::new();
+    let mut word_first: Option<char> = None;
     let mut i = 0;
     while i < chars.len() {
         if chars[i] == '\\' && i + 1 < chars.len() {
-            let c = chars[i + 1];
-            i += 2;
-            match c {
-                't' => out.push_str(&subtext_literal(groups.first().map_or("", |s| s))),
-                'n' => out.push_str(&match_num.to_string()),
-                'a' => out.push_str(&subtext_literal(
-                    &groups.iter().skip(1).cloned().collect::<Vec<_>>().join(" "),
-                )),
-                'A' => out.push_str(&subtext_literal(
-                    &groups.iter().skip(1).cloned().collect::<String>(),
-                )),
-                '0'..='9' => {
-                    let idx = c as usize - '0' as usize;
-                    if idx == 0 {
-                        out.push_str(&group_count.to_string());
-                    } else {
-                        out.push_str(&subtext_literal(groups.get(idx).map_or("", |s| s)));
-                    }
+            let value = match chars[i + 1] {
+                't' => Some(groups.first().cloned().unwrap_or_default()),
+                'n' => Some(match_num.to_string()),
+                'a' => Some(groups.iter().skip(1).cloned().collect::<Vec<_>>().join(" ")),
+                'A' => Some(groups.iter().skip(1).cloned().collect::<String>()),
+                '0' => Some(group_count.to_string()),
+                c @ '1'..='9' => Some(groups.get(c as usize - '0' as usize).cloned().unwrap_or_default()),
+                _ => None,
+            };
+            if let Some(value) = value {
+                i += 2;
+                let in_call = parens.last() == Some(&true);
+                let literal_word =
+                    !parens.is_empty() && !matches!(word_first, Some('$' | '%' | '#'));
+                // Always sealed: a capture is data, and its own `(`, `)` or
+                // spaces must not change where words end. In literal text the
+                // seal is opened as plain text once the line is expanded.
+                if literal_word {
+                    out.push_str(&super::eval::encode_sealed(&value));
+                    continue;
                 }
-                '\\' => out.push('\\'),
-                // An unrecognised escape keeps its backslash — mIRC leaves `\*`
-                // etc. literal, which scripts rely on (e.g. `\* iswm \1` uses the
-                // wildcard "\*" to tell an escape sequence from a plain char when
-                // converting text to bytes for HMAC).
-                other => {
-                    out.push('\\');
-                    out.push(other);
+                // Join unless a space, a bracket, or an identifier's own `(` `,`
+                // `)` already separates the token (`[\1]` must not become an
+                // evaluation bracket).
+                let separated_before = match out.chars().last() {
+                    None | Some(' ' | '[') => true,
+                    Some('(' | ',') => in_call,
+                    _ => false,
+                };
+                if !separated_before {
+                    out.push_str(" $+ ");
+                }
+                out.push_str(&super::eval::encode_sealed(&value));
+                let separated_after = match chars.get(i) {
+                    None | Some(' ' | ']') => true,
+                    Some(')' | ',') => in_call,
+                    _ => false,
+                };
+                if !separated_after {
+                    out.push_str(" $+ ");
+                }
+                if parens.is_empty() {
+                    word_first = None;
+                }
+                continue;
+            }
+            // `\\` is a backslash. An unrecognised escape keeps its backslash —
+            // mIRC leaves `\*` etc. literal, which scripts rely on (e.g.
+            // `\* iswm \1` tells an escape sequence from a plain char when
+            // converting text to bytes for HMAC).
+            out.push('\\');
+            if chars[i + 1] != '\\' {
+                out.push(chars[i + 1]);
+            }
+            i += 2;
+            continue;
+        }
+        let c = chars[i];
+        match c {
+            '(' => {
+                // `name(`, `$+(` and the `$(…)` short form of `$eval`.
+                let call = chars[..i]
+                    .last()
+                    .is_some_and(|p| p.is_alphanumeric() || matches!(p, '_' | '+' | '$'));
+                if call || !parens.is_empty() {
+                    parens.push(call);
                 }
             }
-        } else {
-            out.push(chars[i]);
-            i += 1;
+            ')' => {
+                parens.pop();
+            }
+            ' ' if parens.is_empty() => word_first = None,
+            _ => {}
         }
+        if c != ' ' && word_first.is_none() {
+            word_first = Some(c);
+        }
+        out.push(c);
+        i += 1;
     }
     out
 }
@@ -7565,6 +7599,9 @@ mod tests {
             halted: false,
             abandoned_at: None,
             calc_args: false,
+            star_token: None,
+            star_done: 0,
+            star_tape: None,
             script_error: None,
             steps: 0,
             depth: 0,
@@ -7894,6 +7931,9 @@ mod tests {
             halted: false,
             abandoned_at: None,
             calc_args: false,
+            star_token: None,
+            star_done: 0,
+            star_tape: None,
             script_error: None,
             steps: 0,
             depth: 0,
@@ -8121,6 +8161,9 @@ mod tests {
             halted: false,
             abandoned_at: None,
             calc_args: false,
+            star_token: None,
+            star_done: 0,
+            star_tape: None,
             script_error: None,
             steps: 0,
             depth: 0,

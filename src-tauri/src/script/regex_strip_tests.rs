@@ -64,10 +64,10 @@ fn strip_match_still_uses_stripped_text_and_can_replace_with_empty() {
     assert_eq!(
         run(r"alias check {
             var %source = $chr(3) $+ 04test
-            echo -s result=[$regsubex(%source,/(test)/S,x)]
-            echo -s result=[$regsubex(%source,/(test)/S,)]
+            echo -s result= $+ [ $+ $regsubex(%source,/(test)/S,x) $+ ]
+            echo -s result= $+ [ $+ $regsubex(%source,/(test)/S,) $+ ]
             var %n = $regsub(named,%source,/(test)/S,,%dest)
-            echo -s %n length=$len(%dest)
+            echo -s %n length= $+ $len(%dest)
         }"),
         ["result=[x]", "result=[]", "1 length=0"]
     );
@@ -85,7 +85,7 @@ fn strip_no_match_clears_captures_without_running_subtext() {
             var %source = $chr(3) $+ 04test
             noop $regex(named,abc,/(b)/)
             noop $regsubex(named,%source,/(z)/gS,$replacement)
-            echo -s calls=%replacements captures=$regml(named,0)
+            echo -s calls= $+ %replacements captures= $+ $regml(named,0)
         }"),
         ["calls=0 captures=0"]
     );

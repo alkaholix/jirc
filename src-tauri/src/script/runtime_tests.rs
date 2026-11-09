@@ -27,7 +27,7 @@ fn echoes(actions: Vec<Action>) -> Vec<String> {
 #[test]
 fn required_identifier_arguments_enter_error_label_and_reset() {
     let engine = ScriptEngine::new();
-    engine.load("alias probe { echo -a before | echo -a $mid(1) | echo -a AFTER | return | :error | echo -a caught=$error | reseterror | echo -a reset=$error }");
+    engine.load("alias probe { echo -a before | echo -a $mid(1) | echo -a AFTER | return | :error | echo -a caught= $+ $error | reseterror | echo -a reset= $+ $error }");
     let output = echoes(engine.run_alias(&context(), "#c", "probe", ""));
     assert_eq!(output[0], "before");
     assert!(
@@ -71,7 +71,7 @@ fn error_escapes_nested_blocks_without_executing_later_statements() {
 #[test]
 fn a_failed_assignment_preserves_the_previous_variable_value() {
     let engine = ScriptEngine::new();
-    engine.load("alias probe { var %keep = old | set %keep $mid(x) | return | :error | echo -a keep=%keep | reseterror }");
+    engine.load("alias probe { var %keep = old | set %keep $mid(x) | return | :error | echo -a keep= $+ %keep | reseterror }");
     assert_eq!(
         echoes(engine.run_alias(&context(), "#c", "probe", "")),
         ["keep=old"]
@@ -94,7 +94,7 @@ fn a_failed_file_expression_does_not_write_a_partial_line() {
 #[test]
 fn failed_statement_abandons_queued_http_registration() {
     let engine = ScriptEngine::new();
-    engine.load("alias probe { echo -a $urlget(http://127.0.0.1:9/x,gb,&out,done) $mid(x) | return | :error | echo -a remaining=$urlget(0) | reseterror }");
+    engine.load("alias probe { echo -a $urlget(http://127.0.0.1:9/x,gb,&out,done) $mid(x) | return | :error | echo -a remaining= $+ $urlget(0) | reseterror }");
     let actions = engine.run_alias(&context(), "#c", "probe", "");
     assert!(actions
         .iter()
@@ -105,7 +105,7 @@ fn failed_statement_abandons_queued_http_registration() {
 #[test]
 fn default_level_is_clamped_and_used_for_unlisted_event_senders() {
     let engine = ScriptEngine::new();
-    engine.load("on 5:TEXT:probe:#:{ echo -a level=$ulevel }");
+    engine.load("on 5:TEXT:probe:#:{ echo -a level= $+ $ulevel }");
     engine.run_command(&context(), "#c", "dlevel 5", &[]);
     let actions = engine.dispatch_event(
         &context(),
@@ -140,7 +140,7 @@ fn normal_halt_marks_later_files_without_hiding_default_display() {
         ("b.mrc".into(), "on &*:START:{ echo -a WRONG }".into()),
         (
             "c.mrc".into(),
-            "on *:START:{ echo -a halted=$halted }".into(),
+            "on *:START:{ echo -a halted= $+ $halted }".into(),
         ),
     ]);
     let (actions, halted, default_halted) =

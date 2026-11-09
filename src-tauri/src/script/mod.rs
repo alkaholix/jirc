@@ -823,6 +823,9 @@ impl ScriptEngine {
             halted: false,
             abandoned_at: None,
             calc_args: false,
+            star_token: None,
+            star_done: 0,
+            star_tape: None,
             script_error: None,
             steps: 0,
             depth: 0,
@@ -894,6 +897,9 @@ impl ScriptEngine {
             halted: false,
             abandoned_at: None,
             calc_args: false,
+            star_token: None,
+            star_done: 0,
+            star_tape: None,
             script_error: None,
             steps: 0,
             depth: 0,
@@ -1215,6 +1221,9 @@ impl ScriptEngine {
             halted: false,
             abandoned_at: None,
             calc_args: false,
+            star_token: None,
+            star_done: 0,
+            star_tape: None,
             script_error: None,
             steps: 0,
             depth: 0,
@@ -1304,6 +1313,9 @@ impl ScriptEngine {
             halted: false,
             abandoned_at: None,
             calc_args: false,
+            star_token: None,
+            star_done: 0,
+            star_tape: None,
             script_error: None,
             steps: 0,
             depth: 0,
@@ -1419,6 +1431,9 @@ impl ScriptEngine {
             halted: false,
             abandoned_at: None,
             calc_args: false,
+            star_token: None,
+            star_done: 0,
+            star_tape: None,
             script_error: None,
             steps: 0,
             depth: 0,
@@ -5198,7 +5213,7 @@ mod tests {
     #[test]
     fn alias_param_ranges_and_require() {
         let engine = ScriptEngine::new();
-        engine.load("alias t { /msg #d [$2-4] [$2-] [$3] [$1-] [$0] [$$2] }");
+        engine.load("alias t { /msg #d [ $+ $2-4 $+ ] [ $+ $2- $+ ] [ $+ $3 $+ ] [ $+ $1- $+ ] [ $+ $0 $+ ] [ $+ $$2 $+ ] }");
         let actions = engine.run_alias(&ctx(), "#here", "t", "a b c d e");
         assert_eq!(
             actions,
@@ -5216,7 +5231,7 @@ mod tests {
             alias outer { rekey i7.room %#room - }
             alias -l rekey {
               var %sock = $1, %chan = $2, %flags = $3, %kicknick = $4
-              /msg #d count=$0 fourth=[$4] local=[%kicknick]
+              /msg #d count= $+ $0 fourth= $+ [ $+ $4 $+ ] local= $+ [ $+ %kicknick $+ ]
             }
             "#,
         );
@@ -6501,7 +6516,7 @@ mod tests {
     fn raw_context_exposes_tags_stamp_and_halt_suppression() {
         let engine = ScriptEngine::new();
         engine.load(
-            "on *:TEXT:*:#:{ echo -a raw=$rawmsg bytes=$rawbytes tags=$msgtags count=$msgtags(0) tag=$msgtags(2).tag key=$msgtags(2).key full=$msgtags(label) stamp=$msgstamp }\n\
+            "on *:TEXT:*:#:{ echo -a raw= $+ $rawmsg bytes= $+ $rawbytes tags= $+ $msgtags count= $+ $msgtags(0) tag= $+ $msgtags(2).tag key= $+ $msgtags(2).key full= $+ $msgtags(label) stamp= $+ $msgstamp }\n\
              on *:RAW:PRIVMSG:{ halt }",
         );
         let line = "@time=2026-07-15T01:02:03.000Z;label=hello\\sworld :bob!u@h PRIVMSG #c :hi";
@@ -6822,7 +6837,7 @@ mod tests {
             vec![Action::Send("PRIVMSG #c :red @ 3".into())]
         );
         // no match -> $readn is 0.
-        engine.load("alias t3 { var %x $read(data.txt, w, *grape*) | /msg #c found=$readn }");
+        engine.load("alias t3 { var %x $read(data.txt, w, *grape*) | /msg #c found= $+ $readn }");
         assert_eq!(
             engine.run_alias(&rctx, "#c", "t3", ""),
             vec![Action::Send("PRIVMSG #c :found=0".into())]
@@ -7658,7 +7673,7 @@ mod tests {
     fn process_identifiers_expand_without_platform_specific_state() {
         let engine = ScriptEngine::new();
         let actions =
-            engine.run_command(&ctx(), "#c", "/msg #c portable=$portable cmd=$cmdline", &[]);
+            engine.run_command(&ctx(), "#c", "/msg #c portable= $+ $portable cmd= $+ $cmdline", &[]);
         let [Action::Send(line)] = actions.as_slice() else {
             panic!("expected one outgoing message");
         };
@@ -7756,7 +7771,7 @@ mod tests {
     fn caller_and_isid() {
         let engine = ScriptEngine::new();
         engine.load(
-            "alias c { return $caller }\nalias i { return $isid }\nalias top { /msg #c $caller/$c | /msg #c $isid/$i }",
+            "alias c { return $caller }\nalias i { return $isid }\nalias top { /msg #c $caller $+ / $+ $c | /msg #c $isid $+ / $+ $i }",
         );
         // `top` runs as a command; `$c`/`$i` are invoked as identifiers.
         assert_eq!(
@@ -7789,7 +7804,7 @@ mod tests {
             engine.run_command(
                 &ctx(),
                 "#c",
-                "/msg #c n=$scon(0) first=$scon(1) act=$activecid",
+                "/msg #c n= $+ $scon(0) first= $+ $scon(1) act= $+ $activecid",
                 &[]
             ),
             vec![Action::Send("PRIVMSG #c :n=2 first=1 act=2".into())]
@@ -7809,7 +7824,7 @@ mod tests {
             state: std::sync::Arc::new(snap),
         };
         assert_eq!(
-            engine.run_command(&ctx2, "#c", "/msg #c cid=$cid", &[]),
+            engine.run_command(&ctx2, "#c", "/msg #c cid= $+ $cid", &[]),
             vec![Action::Send("PRIVMSG #c :cid=2".into())]
         );
 
@@ -7817,7 +7832,7 @@ mod tests {
         engine.forget_cid("s1");
         assert_eq!(engine.cid_for("s1"), 0);
         assert_eq!(
-            engine.run_command(&ctx(), "#c", "/msg #c n=$scon(0)", &[]),
+            engine.run_command(&ctx(), "#c", "/msg #c n= $+ $scon(0)", &[]),
             vec![Action::Send("PRIVMSG #c :n=1".into())]
         );
     }
@@ -7833,7 +7848,7 @@ mod tests {
             engine.run_command(
                 &ctx(),
                 "#c",
-                "/msg #c c=$scid(0) a=$scid(-1) v=$scid(2) x=$scid(9)",
+                "/msg #c c= $+ $scid(0) a= $+ $scid(-1) v= $+ $scid(2) x= $+ $scid(9)",
                 &[]
             ),
             vec![Action::Send("PRIVMSG #c :c=2 a=2 v=2 x=".into())]
@@ -7907,7 +7922,7 @@ mod tests {
 
         // $activewid = the active window; $wid (in an event for #a) = that window.
         engine.load(
-            "on *:TEXT:*:#:{ /msg $chan wid=$wid active=$activewid last=$lactive/$lactivewid/$lactivecid }",
+            "on *:TEXT:*:#:{ /msg $chan wid= $+ $wid active= $+ $activewid last= $+ $lactive $+ / $+ $lactivewid $+ / $+ $lactivecid }",
         );
         let snap = crate::irc::state::StateSnapshot {
             server_id: "s1".into(),
@@ -7943,7 +7958,7 @@ mod tests {
             engine.run_command(
                 &ctx2,
                 "#c",
-                "/msg #c last=$lactive/$lactivewid/$lactivecid",
+                "/msg #c last= $+ $lactive $+ / $+ $lactivewid $+ / $+ $lactivecid",
                 &[]
             ),
             vec![Action::Send("PRIVMSG #c :last=//".into())]
@@ -7952,7 +7967,7 @@ mod tests {
             engine.run_command(
                 &ctx2,
                 "#c",
-                "/msg #c left=$leftwin/$leftwinwid/$leftwincid",
+                "/msg #c left= $+ $leftwin $+ / $+ $leftwinwid $+ / $+ $leftwincid",
                 &[]
             ),
             vec![Action::Send("PRIVMSG #c :left=#a/1/1".into())]
@@ -8084,7 +8099,7 @@ mod tests {
         run_on_connection(
             &engine,
             "target",
-            "echo -a <$network> <$server> $me $cid",
+            "echo -a < $+ $network $+ > < $+ $server $+ > $me $cid",
             std::env::temp_dir(),
             std::sync::Arc::new(crate::irc::state::StateSnapshot {
                 server_id: "target".into(),
@@ -8276,7 +8291,7 @@ mod tests {
                var -n %e 9 - 4\n\
                var %f a + b\n\
                set %g 3 * 4\n\
-               /msg #c %a/%b/%c/%d/%e/%f/%g\n\
+               /msg #c %a $+ / $+ %b $+ / $+ %c $+ / $+ %d $+ / $+ %e $+ / $+ %f $+ / $+ %g\n\
              }",
         );
         // +, ^, % compute; `1 + 1 + 1` (not 3 tokens), `-n`, and non-numeric stay
@@ -8307,12 +8322,12 @@ mod tests {
         let engine = ScriptEngine::new();
         engine.load(
             "alias inner { return payload }\n\
-             alias verbose { /msg #c show=$show }\n\
+             alias verbose { /msg #c show= $+ $show }\n\
              alias t {\n\
                verbose\n\
                .verbose\n\
                inner\n\
-               /msg #c result=$result\n\
+               /msg #c result= $+ $result\n\
              }",
         );
         // `verbose` (no dot) -> $show true; `.verbose` -> $show false; after the
@@ -8396,7 +8411,7 @@ mod tests {
         std::fs::write(base.join(&endings), "first\rsecond\0\rthird").unwrap();
         let engine = ScriptEngine::new();
         engine.load(&format!(
-            "alias t {{ msg #c random=$read({header},n) miss=[ $+ $read({header},n,99) $+ ] readn=$readn regex=$read({regex},rt,/^beta$/i) unicode=$read({unicode},st,k) cr=$read({endings},t,2) nul=[ $+ $read({endings},t,3) $+ ] }}"
+            "alias t {{ msg #c random= $+ $read({header},n) miss=[ $+ $read({header},n,99) $+ ] readn= $+ $readn regex= $+ $read({regex},rt,/^beta$/i) unicode= $+ $read({unicode},st,k) cr= $+ $read({endings},t,2) nul=[ $+ $read({endings},t,3) $+ ] }}"
         ));
         assert_eq!(
             engine.run_alias(&ctx(), "#c", "t", ""),
@@ -8606,8 +8621,8 @@ mod tests {
         engine.load_sources(&[
             (
                 "one.mrc".into(),
-                "on 1:TEXT:*:#:msg #c normal-one-$halted\n\
-                 on ^1:TEXT:*:#:{ msg #c before-$halted | haltdef | msg #c after-$halted }"
+                "on 1:TEXT:*:#:msg #c normal-one- $+ $halted\n\
+                 on ^1:TEXT:*:#:{ msg #c before- $+ $halted | haltdef | msg #c after- $+ $halted }"
                     .into(),
             ),
             (
@@ -8663,10 +8678,10 @@ mod tests {
 
         let engine = ScriptEngine::new();
         engine.load(
-            "on 1:JOIN:#:{ /msg #c any-$nick }
-             on !1:JOIN:#:{ /msg #c other-$nick }
-             on me:*:JOIN:#:{ /msg #c self-$nick }
-             on @1:JOIN:#:{ /msg #c ownop-$nick }",
+            "on 1:JOIN:#:{ /msg #c any- $+ $nick }
+             on !1:JOIN:#:{ /msg #c other- $+ $nick }
+             on me:*:JOIN:#:{ /msg #c self- $+ $nick }
+             on @1:JOIN:#:{ /msg #c ownop- $+ $nick }",
         );
         let snap = StateSnapshot {
             channels: vec![ChannelView {
@@ -8732,7 +8747,7 @@ mod tests {
     #[test]
     fn event_matchtext_variables_and_channel_lists_are_evaluated() {
         let engine = ScriptEngine::new();
-        engine.load("on *:TEXT:%match:%where,#two:{ /msg #audit matched-$chan }");
+        engine.load("on *:TEXT:%match:%where,#two:{ /msg #audit matched- $+ $chan }");
         engine.run_command(&ctx(), "", "/set %match *help*", &[]);
         engine.run_command(&ctx(), "", "/set %where #one", &[]);
         let text = |chan: &str, body: &str| EventVars {
@@ -8832,7 +8847,7 @@ mod tests {
             ]
         );
         // A multi-word quoted prompt message stays intact (no trailing tokens).
-        e.load("alias p { /msg #c pass=$?=\"Enter Password\" }");
+        e.load("alias p { /msg #c pass= $+ $?=\"Enter Password\" }");
         assert_eq!(
             e.run_alias(&ctx(), "#c", "p", ""),
             vec![Action::Send("PRIVMSG #c :pass=banana".into())]
@@ -9089,7 +9104,7 @@ mod tests {
         // Drive `on RAWMODE`, whose $1- is the whole change.
         let run = |modes: &str, expr: &str| {
             let engine = ScriptEngine::new();
-            engine.load(&format!("on *:RAWMODE:#:{{ /msg #c [{expr}] }}"));
+            engine.load(&format!("on *:RAWMODE:#:{{ /msg #c [ $+ {expr} $+ ] }}"));
             engine
                 .dispatch_event(
                     &rctx,
@@ -9537,7 +9552,7 @@ alias t { .say hidden | say shown }");
         let run = |answer: InputAnswer, expr: &str| {
             let engine = ScriptEngine::new();
             engine.set_input(std::sync::Arc::new(Fixed(answer)));
-            engine.load(&format!("alias t {{ /msg #c [{expr}] }}"));
+            engine.load(&format!("alias t {{ /msg #c [ $+ {expr} $+ ] }}"));
             match engine.run_alias(&ctx(), "#c", "t", "").into_iter().next() {
                 Some(Action::Send(line)) => line
                     .split_once(" :[")
@@ -9934,7 +9949,7 @@ alias t { .say hidden | say shown }");
         engine.load(
             "alias t1 { /msg #c $iif(hello,$v1,none) }\n\
              alias t2 { /msg #c $iif($null,$v1,none) }\n\
-             alias t3 { /msg #c $iif(3 == 3,$v1-$v2,no) }\n\
+             alias t3 { /msg #c $iif(3 == 3,$v1 $+ - $+ $v2,no) }\n\
              alias t4 { if (foo isin foobar) { /msg #c $v1 in $v2 } }",
         );
         // The classic idiom: $iif(value, $v1, default) yields the value when truthy…
@@ -9965,11 +9980,11 @@ alias t { .say hidden | say shown }");
         let engine = ScriptEngine::new();
         engine.set_active("#focused");
         assert_eq!(
-            engine.run_command(&ctx(), "#c", "/msg #c here=$active", &[]),
+            engine.run_command(&ctx(), "#c", "/msg #c here= $+ $active", &[]),
             vec![Action::Send("PRIVMSG #c :here=#focused".into())]
         );
         // Also visible inside an event handler, not just typed commands.
-        engine.load("on *:TEXT:*:#:{ /msg $chan active=$active }");
+        engine.load("on *:TEXT:*:#:{ /msg $chan active= $+ $active }");
         engine.set_active("#lobby");
         let ev = UiEvent::Message {
             server_id: "s".into(),
@@ -9986,7 +10001,7 @@ alias t { .say hidden | say shown }");
         // $null (empty) until the UI reports one.
         let fresh = ScriptEngine::new();
         assert_eq!(
-            fresh.run_command(&ctx(), "#c", "/msg #c here=$active", &[]),
+            fresh.run_command(&ctx(), "#c", "/msg #c here= $+ $active", &[]),
             vec![Action::Send("PRIVMSG #c :here=".into())]
         );
     }
@@ -10013,7 +10028,7 @@ alias t { .say hidden | say shown }");
         );
         // A plain run (no popup selection, e.g. a timer) leaves the selection empty.
         assert_eq!(
-            engine.run_command(&ctx(), "#c", "/msg #c count=$snick(#c,0)", &[]),
+            engine.run_command(&ctx(), "#c", "/msg #c count= $+ $snick(#c,0)", &[]),
             vec![Action::Send("PRIVMSG #c :count=0".into())]
         );
     }
@@ -10451,7 +10466,7 @@ alias t { .say hidden | say shown }");
                 bread mirc_fwrite.bin 0 2 &fhread
                 bset &find 1 88 87 65 86 89
                 bset &nul 1 65 0 66
-                msg #c at1=$bvar(&at1,1) whole=$bvar(&whole,1,3).text fh=$bvar(&fhread,1,2) find=$bfind(&find,1,87 65 86) nul=[ $+ $bvar(&nul,1,3).text $+ ]
+                msg #c at1= $+ $bvar(&at1,1) whole= $+ $bvar(&whole,1,3).text fh= $+ $bvar(&fhread,1,2) find= $+ $bfind(&find,1,87 65 86) nul=[ $+ $bvar(&nul,1,3).text $+ ]
             }
             alias after { msg #c [ $+ $bvar(&whole,0) $+ ] }",
         );
@@ -10937,7 +10952,7 @@ alias t { .say hidden | say shown }");
         let engine = ScriptEngine::new();
         engine.set_webviews(std::sync::Arc::new(FakeWebviews));
         engine.load(
-            "alias t { echo -s count=$webview(0) name=$webview(@AUTH) status=$webview(@auth).status profile=$webview(@auth).profile url=$webview(@auth).url }",
+            "alias t { echo -s count= $+ $webview(0) name= $+ $webview(@AUTH) status= $+ $webview(@auth).status profile= $+ $webview(@auth).profile url= $+ $webview(@auth).url }",
         );
         assert_eq!(
             engine.run_alias(&ctx(), "", "t", ""),
@@ -10953,7 +10968,7 @@ alias t { .say hidden | say shown }");
     #[test]
     fn webview_event_matches_name_and_preserves_cookie_value() {
         let engine = ScriptEngine::new();
-        engine.load("on *:WEBVIEW:@auth:{ echo -s event=$1 name=$2 value=$3- target=$target }");
+        engine.load("on *:WEBVIEW:@auth:{ echo -s event= $+ $1 name= $+ $2 value= $+ $3- target= $+ $target }");
         let vars = EventVars {
             chan: "@auth".into(),
             target: "@auth".into(),
@@ -11140,7 +11155,7 @@ alias t { .say hidden | say shown }");
         };
         let engine = ScriptEngine::new();
         engine.load(
-            "alias t { /echo chans=$chan(0) first=$chan(1) users=$nick(#a, 0) u2=$nick(#a, 2) com=$comchan(bob, 0) on=$onchan(#b) }",
+            "alias t { /echo chans= $+ $chan(0) first= $+ $chan(1) users= $+ $nick(#a, 0) u2= $+ $nick(#a, 2) com= $+ $comchan(bob, 0) on= $+ $onchan(#b) }",
         );
         let actions = engine.run_alias(&rctx, "#a", "t", "");
         assert_eq!(
@@ -11251,7 +11266,7 @@ alias t { .say hidden | say shown }");
         };
         let engine = ScriptEngine::new();
         engine.load(
-            "alias t { /echo a=$address(bob) m2=$mask(bob!~bob@host.example.com, 2) m3=$address(bob, 3) c=$ial(*!*@*.example.com, 0) n=$ial(*!*@*.example.com, 1) }",
+            "alias t { /echo a= $+ $address(bob) m2= $+ $mask(bob!~bob@host.example.com, 2) m3= $+ $address(bob, 3) c= $+ $ial(*!*@*.example.com, 0) n= $+ $ial(*!*@*.example.com, 1) }",
         );
         let actions = engine.run_alias(&rctx, "#c", "t", "");
         assert_eq!(
@@ -11292,7 +11307,7 @@ alias t { .say hidden | say shown }");
             state: std::sync::Arc::new(snap),
         };
         let engine = ScriptEngine::new();
-        engine.load("alias t { echo enabled=$ial account=$ial(Bob).account away=$ial(Bob).away mark=$ial(Bob).mark count=$ialmark(Bob,0) name=$ialmark(Bob,2).name note=$ialmark(Bob,note) }");
+        engine.load("alias t { echo enabled= $+ $ial account= $+ $ial(Bob).account away= $+ $ial(Bob).away mark= $+ $ial(Bob).mark count= $+ $ialmark(Bob,0) name= $+ $ialmark(Bob,2).name note= $+ $ialmark(Bob,note) }");
         assert_eq!(
             engine.run_alias(&rctx, "#c", "t", ""),
             vec![Action::Echo {
@@ -11324,7 +11339,7 @@ alias t { .say hidden | say shown }");
         // Bare $address/$site/$fulladdress/$wildsite resolve the triggering user
         // from the IAL; the whitespace constants expand to real control chars.
         engine.load(
-            "on *:TEXT:*:#:{ /echo a=$address s=$site f=$fulladdress w=$wildsite t=[$tab]c=[$cr]l=[$lf]nl=[$crlf] }",
+            "on *:TEXT:*:#:{ /echo a= $+ $address s= $+ $site f= $+ $fulladdress w= $+ $wildsite t=[ $+ $tab $+ ]c=[ $+ $cr $+ ]l=[ $+ $lf $+ ]nl=[ $+ $crlf $+ ] }",
         );
         let vars = EventVars {
             nick: "bob".into(),
@@ -11471,9 +11486,9 @@ alias t { .say hidden | say shown }");
         let engine = ScriptEngine::new();
         engine.load(
             "alias inspect {
-               echo chan=$chan(@#ROOM~) topic=$chan(@#ROOM~).topic mode=$chan(@#ROOM~).mode key=$chan(@#ROOM~).key limit=$chan(@#ROOM~).limit status=$chan(@#ROOM~).status
-               echo nick=$nick(@#ROOM~,USER~) pnick=$nick(@#ROOM~,USER~).pnick prefix=$nick(@#ROOM~,USER~).prefix nmode=$nick(@#ROOM~,USER~).mode away=$nick(@#ROOM~,USER~).away account=$nick(@#ROOM~,USER~).account ops=$nick(@#ROOM~,0,O) regs=$nick(@#ROOM~,0,r)
-               echo addr=$address(USER~) ial=$ial(USER~) ialchan=$ialchan(USER~,@#ROOM~,1).pnick
+               echo chan= $+ $chan(@#ROOM~) topic= $+ $chan(@#ROOM~).topic mode= $+ $chan(@#ROOM~).mode key= $+ $chan(@#ROOM~).key limit= $+ $chan(@#ROOM~).limit status= $+ $chan(@#ROOM~).status
+               echo nick= $+ $nick(@#ROOM~,USER~) pnick= $+ $nick(@#ROOM~,USER~).pnick prefix= $+ $nick(@#ROOM~,USER~).prefix nmode= $+ $nick(@#ROOM~,USER~).mode away= $+ $nick(@#ROOM~,USER~).away account= $+ $nick(@#ROOM~,USER~).account ops= $+ $nick(@#ROOM~,0,O) regs= $+ $nick(@#ROOM~,0,r)
+               echo addr= $+ $address(USER~) ial= $+ $ial(USER~) ialchan= $+ $ialchan(USER~,@#ROOM~,1).pnick
                if (USER~ isop @#ROOM~) echo state-op
                if ($nick(@#ROOM~,USER~).idle isnum 10-20) echo idle-ok
              }
@@ -11556,9 +11571,9 @@ alias t { .say hidden | say shown }");
         let engine = ScriptEngine::new();
         engine.load(
             "on *:PART:#:{
-               echo before=$nick(#c,0):$ial(Bob)
+               echo before= $+ $nick(#c,0) $+ : $+ $ial(Bob)
                updatenl
-               echo after=$nick(#c,0):$ial(Bob)
+               echo after= $+ $nick(#c,0) $+ : $+ $ial(Bob)
              }",
         );
         let event = EventVars {
@@ -11678,7 +11693,7 @@ alias t { .say hidden | say shown }");
         // .item / .data iterate the table in sorted-key order; $hget(h,0).item is
         // the count. Exercises the `.property` suffix parser end-to-end.
         engine.load(
-            "alias t { hmake h | hadd h apple red | hadd h banana yellow | /echo n=$hget(h,0).item i1=$hget(h,1).item d1=$hget(h,1).data i2=$hget(h,2).item }",
+            "alias t { hmake h | hadd h apple red | hadd h banana yellow | /echo n= $+ $hget(h,0).item i1= $+ $hget(h,1).item d1= $+ $hget(h,1).data i2= $+ $hget(h,2).item }",
         );
         let actions = engine.run_alias(&rctx, "#c", "t", "");
         assert_eq!(
@@ -11698,9 +11713,9 @@ alias t { .say hidden | say shown }");
                 var %suffix = %#The\bLobby
                 hadd -m h state. $+ %suffix ready
                 hinc h count. $+ %suffix 2
-                echo before=$hget(h,state. $+ %suffix) count=$hget(h,count. $+ %suffix)
+                echo before= $+ $hget(h,state. $+ %suffix) count= $+ $hget(h,count. $+ %suffix)
                 hdel h state. $+ %suffix
-                echo after=$hget(h,state. $+ %suffix)
+                echo after= $+ $hget(h,state. $+ %suffix)
             }",
         );
         assert_eq!(
@@ -11880,7 +11895,7 @@ alias t { .say hidden | say shown }");
         // /socklisten binds (port readable inline, like mIRC); /sockmark stores a
         // mark; $sock(name) is the existence check.
         engine.load(
-            "alias t { socklisten relay | sockmark relay hi there | sockaccept conn | /echo port=$sock(relay).port mark=$sock(relay).mark st=$sock(relay).status ex=$sock(relay) no=$sock(nope) }",
+            "alias t { socklisten relay | sockmark relay hi there | sockaccept conn | /echo port= $+ $sock(relay).port mark= $+ $sock(relay).mark st= $+ $sock(relay).status ex= $+ $sock(relay) no= $+ $sock(nope) }",
         );
         let actions = engine.run_alias(&ctx(), "#c", "t", "");
         let echoed: Vec<&str> = actions
@@ -11928,7 +11943,7 @@ alias t { .say hidden | say shown }");
         let fake = std::sync::Arc::new(FakeSockets::default());
         engine.set_sockets(fake);
         engine.load(
-            "alias t { sockopen pending example.test 80 | sockmark pending hello | /echo -a ex=$sock(pending) mark=$sock(pending).mark }",
+            "alias t { sockopen pending example.test 80 | sockmark pending hello | /echo -a ex= $+ $sock(pending) mark= $+ $sock(pending).mark }",
         );
 
         assert_eq!(
@@ -11991,7 +12006,7 @@ alias t { .say hidden | say shown }");
         let fake = std::sync::Arc::new(FakeSockets::default());
         engine.set_sockets(fake);
         engine.load(
-            "alias t { socklisten i7.zeta | socklisten b7.other | socklisten i7.alpha | /echo count=$sock(I7.*,0) default=$sock(i7.*) first=$sock(i7.*,1) second=$sock(i7.*,2) missing=[$sock(i7.*,3)] status=$sock(i7.*).status }",
+            "alias t { socklisten i7.zeta | socklisten b7.other | socklisten i7.alpha | /echo count= $+ $sock(I7.*,0) default= $+ $sock(i7.*) first= $+ $sock(i7.*,1) second= $+ $sock(i7.*,2) missing=[ $+ $sock(i7.*,3) $+ ] status= $+ $sock(i7.*).status }",
         );
         let actions = engine.run_alias(&ctx(), "#c", "t", "");
         let echoed: Vec<&str> = actions
@@ -12013,7 +12028,7 @@ alias t { .say hidden | say shown }");
         let fake = std::sync::Arc::new(FakeSockets::default());
         engine.set_sockets(fake);
         engine.load(
-            "alias t { sockwrite -z relay nope | /echo -a first=$sockerr | sockmark relay ok | /echo -a second=$sockerr }",
+            "alias t { sockwrite -z relay nope | /echo -a first= $+ $sockerr | sockmark relay ok | /echo -a second= $+ $sockerr }",
         );
 
         assert_eq!(
@@ -12077,7 +12092,7 @@ alias t { .say hidden | say shown }");
         });
         engine.set_sockets(fake);
         engine.load(
-            "alias send { var %opts = -b | var %bytes = 3 | sockwrite %opts relay %bytes abcdef | /echo -a sq=$sock(relay).sq err=$sockerr }",
+            "alias send { var %opts = -b | var %bytes = 3 | sockwrite %opts relay %bytes abcdef | /echo -a sq= $+ $sock(relay).sq err= $+ $sockerr }",
         );
 
         assert_eq!(
@@ -12100,7 +12115,7 @@ alias t { .say hidden | say shown }");
         });
         engine.set_sockets(fake.clone());
         engine
-            .load("alias send { sockwrite relay abc | /echo -a sq=$sock(relay).sq err=$sockerr }");
+            .load("alias send { sockwrite relay abc | /echo -a sq= $+ $sock(relay).sq err= $+ $sockerr }");
         assert_eq!(
             engine.run_alias(&ctx(), "", "send", ""),
             vec![Action::Echo {
@@ -12143,7 +12158,7 @@ alias t { .say hidden | say shown }");
             ],
         });
         engine.set_sockets(fake);
-        engine.load("alias send { sockwrite relay.* abc | /echo -a err=$sockerr }");
+        engine.load("alias send { sockwrite relay.* abc | /echo -a err= $+ $sockerr }");
 
         assert_eq!(
             engine.run_alias(&ctx(), "", "send", ""),
@@ -12174,7 +12189,7 @@ alias t { .say hidden | say shown }");
         *fake.read_error.lock().unwrap() = Some(CONNECTION_RESET);
         engine.set_sockets(fake);
         engine.load(
-            "alias read { set %dest keep | sockread %dest | /echo -a dest=%dest br=$sockbr err=$sockerr }",
+            "alias read { set %dest keep | sockread %dest | /echo -a dest= $+ %dest br= $+ $sockbr err= $+ $sockerr }",
         );
 
         assert_eq!(
@@ -12405,7 +12420,7 @@ alias t { .say hidden | say shown }");
             "alias t {\n\
                var %a = hello, %b = $calc(2 + 3), %c\n\
                set %d world\n\
-               /msg #c a=$+(%a) b=$+(%b) c=[ $+ %c $+ ] d=$+(%d)\n\
+               /msg #c a= $+ $+(%a) b= $+ $+(%b) c=[ $+ %c $+ ] d= $+ $+(%d)\n\
              }",
         );
         assert_eq!(
@@ -12414,7 +12429,7 @@ alias t { .say hidden | say shown }");
         );
 
         // /tokenize rebinds $1.. from the given text
-        engine.load("alias t { tokenize 32 $2- | /msg #c first=$1 last=$3 }");
+        engine.load("alias t { tokenize 32 $2- | /msg #c first= $+ $1 last= $+ $3 }");
         assert_eq!(
             engine.run_alias(&ctx(), "#c", "t", "cmd x y z"),
             vec![Action::Send("PRIVMSG #c :first=x last=z".into())]
@@ -12434,11 +12449,11 @@ alias t { .say hidden | say shown }");
     fn routine_local_vars_shadow_nested_aliases_and_do_not_leak() {
         let engine = ScriptEngine::new();
         engine.load(
-            "alias inner { var %value = inner | /msg #c inner=%value local=$var(%value,1).local }\n\
-             alias outer { set %value global | var %value = outer | /msg #c before=%value local=$var(%value,1).local | inner | /msg #c after=%value }\n\
+            "alias inner { var %value = inner | /msg #c inner= $+ %value local= $+ $var(%value,1).local }\n\
+             alias outer { set %value global | var %value = outer | /msg #c before= $+ %value local= $+ $var(%value,1).local | inner | /msg #c after= $+ %value }\n\
              alias leak { var %only = temporary | inc %only | /msg #c %only }\n\
-             alias unset_local { set %unset.global global | var %unset.global = local | var %unset.a = a | var %unset.b = b | unset %unset.global | unset %unset.* | /msg #c exact=%unset.global count=$var(%unset.*,0) }\n\
-             alias clear_local { set %clear.global global | var %clear.local = local | unsetall | /msg #c globals=[ $+ %clear.global $+ ] locals=$var(%clear.local,0) }",
+             alias unset_local { set %unset.global global | var %unset.global = local | var %unset.a = a | var %unset.b = b | unset %unset.global | unset %unset $+ .* | /msg #c exact= $+ %unset.global count= $+ $var(%unset $+ .*,0) }\n\
+             alias clear_local { set %clear.global global | var %clear.local = local | unsetall | /msg #c globals=[ $+ %clear.global $+ ] locals= $+ $var(%clear.local,0) }",
         );
 
         assert_eq!(
@@ -12455,7 +12470,7 @@ alias t { .say hidden | say shown }");
             engine.run_command(
                 &ctx(),
                 "#c",
-                "/echo -a value=%value local=$var(%value,1).local",
+                "/echo -a value= $+ %value local= $+ $var(%value,1).local",
                 &[],
             ),
             vec![Action::Echo {
@@ -12725,7 +12740,7 @@ alias t { .say hidden | say shown }");
                set %i7f.b 2\n\
                set %keep 3\n\
                unset %i7f.*\n\
-               /msg #c a=[ $+ %i7f.a $+ ] keep=$+(%keep)\n\
+               /msg #c a=[ $+ %i7f.a $+ ] keep= $+ $+(%keep)\n\
              }",
         );
         assert_eq!(
@@ -12827,7 +12842,7 @@ alias t { .say hidden | say shown }");
             ..ctx()
         };
         let engine = ScriptEngine::new();
-        engine.load("on *:TEXT:*:*:/echo -a nonstd=$nonstdmsg");
+        engine.load("on *:TEXT:*:*:/echo -a nonstd= $+ $nonstdmsg");
         let fire = |target: &str| {
             let event = UiEvent::Message {
                 server_id: "s".into(),
@@ -13675,7 +13690,7 @@ alias t { .say hidden | say shown }");
         let engine = ScriptEngine::new();
         engine.load(
             "on *:OP:#:{ /msg $chan $nick opped $opnick }\n\
-             on *:BAN:#:{ /msg $chan banned bnick=$bnick mask=$banmask }",
+             on *:BAN:#:{ /msg $chan banned bnick= $+ $bnick mask= $+ $banmask }",
         );
         let ev = UiEvent::Mode {
             server_id: "s".into(),
@@ -14327,11 +14342,11 @@ alias t { .say hidden | say shown }");
         engine.load_sources(&[
             (
                 "one.mrc".into(),
-                "alias -l item { msg #c one-$pnick-$1- }".into(),
+                "alias -l item { msg #c one- $+ $pnick $+ - $+ $1- }".into(),
             ),
             (
                 "two.mrc".into(),
-                "alias -l item { msg #c two-$pnick-$1- }".into(),
+                "alias -l item { msg #c two- $+ $pnick $+ - $+ $1- }".into(),
             ),
         ]);
         assert_eq!(
@@ -14387,11 +14402,11 @@ menu nicklist {
     fn portable_event_tail_exposes_application_char_hotlink_logon_and_serv_context() {
         let engine = ScriptEngine::new();
         engine.load(
-            "on *:APPACTIVE:echo -a app-$appactive\n\
-             on *:CHAR:@keys:65:echo -a char-$keyval-$keychar-$keyrpt\n\
+            "on *:APPACTIVE:echo -a app- $+ $appactive\n\
+             on *:CHAR:@keys:65:echo -a char- $+ $keyval $+ - $+ $keychar $+ - $+ $keyrpt\n\
              on *:HOTLINK:*foo*:@:echo -a hot $1 $hotlink(event) $hotlink(word).pos $hotlink(line).pos\n\
-             on *:LOGON:Net:echo -a logon-$network-$server\n\
-             on *:SERV:dir*:echo -a serv-$nick-$cd-$1-",
+             on *:LOGON:Net:echo -a logon- $+ $network $+ - $+ $server\n\
+             on *:SERV:dir*:echo -a serv- $+ $nick $+ - $+ $cd $+ - $+ $1-",
         );
 
         assert_eq!(
@@ -14512,9 +14527,9 @@ menu nicklist {
     fn server_modes_and_missing_remote_sounds_fire_specific_events() {
         let engine = ScriptEngine::new();
         engine.load(
-            "on *:SERVERMODE:#:echo -a servermode-$nick-$chan-$1-\n\
-             on *:SERVEROP:#:echo -a serverop-$nick-$opnick\n\
-             on *:NOSOUND:echo -a nosound-$nick-$filename",
+            "on *:SERVERMODE:#:echo -a servermode- $+ $nick $+ - $+ $chan $+ - $+ $1-\n\
+             on *:SERVEROP:#:echo -a serverop- $+ $nick $+ - $+ $opnick\n\
+             on *:NOSOUND:echo -a nosound- $+ $nick $+ - $+ $filename",
         );
         let mode = UiEvent::Mode {
             server_id: "s".into(),

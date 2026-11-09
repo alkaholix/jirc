@@ -212,6 +212,10 @@ impl Runtime<'_> {
         let saved_pipes = std::mem::take(&mut self.pending_pipe_commands);
         let saved_alias_stack = std::mem::take(&mut self.alias_stack);
         let saved_error = self.script_error.take();
+        // Each handler is its own scope for `$*`.
+        let saved_star_token = self.star_token.take();
+        let saved_star_done = std::mem::replace(&mut self.star_done, 0);
+        let saved_star_tape = self.star_tape.take();
 
         // Keep steps/depth and shared stores on this runtime. A signal handler
         // can change globals before its caller evaluates the next expression.
@@ -232,6 +236,9 @@ impl Runtime<'_> {
         self.pending_pipe_commands = saved_pipes;
         self.alias_stack = saved_alias_stack;
         self.script_error = saved_error;
+        self.star_token = saved_star_token;
+        self.star_done = saved_star_done;
+        self.star_tape = saved_star_tape;
         self.leave_connection_routine(connection);
         (halted, default_halted)
     }
@@ -272,8 +279,8 @@ mod tests {
     fn immediate_signal_changes_later_expressions_and_output_order() {
         let engine = ScriptEngine::new();
         engine.load(
-            "alias entry { set %state before | echo -a before | signal -n change payload | echo -a after=%state }\n\
-             on *:SIGNAL:change:{ echo -a inside=$1 | set %state changed }",
+            "alias entry { set %state before | echo -a before | signal -n change payload | echo -a after= $+ %state }\n\
+             on *:SIGNAL:change:{ echo -a inside= $+ $1 | set %state changed }",
         );
         assert_eq!(
             echo_text(engine.run_alias(&context(), "#room", "entry", "")),
@@ -291,7 +298,7 @@ mod tests {
                  on *:TEXT:go*:#:{\n\
                    var %private = caller-local\n\
                    signal -n inspect child payload\n\
-                   echo -a caller=$1- local=%private who=$where child=%childsource source=$script event=$event nick=$nick chan=$chan target=$target raw=[$rawmsg] bytes=[$rawbytes] numeric=$numeric tags=$msgtags(0) id=$eventid signal=[$signal] caller=$caller\n\
+                   echo -a caller= $+ $1- local= $+ %private who= $+ $where child= $+ %childsource source= $+ $script event= $+ $event nick= $+ $nick chan= $+ $chan target= $+ $target raw=[ $+ $rawmsg $+ ] bytes=[ $+ $rawbytes $+ ] numeric= $+ $numeric tags= $+ $msgtags(0) id= $+ $eventid signal=[ $+ $signal $+ ] caller= $+ $caller\n\
                  }"
                     .into(),
             ),
@@ -299,7 +306,7 @@ mod tests {
                 "handler.mrc".into(),
                 "alias -l where { return handler }\n\
                  on *:SIGNAL:inspect:{\n\
-                   echo -a child=$1- local=[%private] who=$where source=$script event=$event nick=$nick chan=$chan target=$target raw=[$rawmsg] bytes=[$rawbytes] numeric=[$numeric] tags=$msgtags(0) id=$iif($eventid == caller-id,inherited,fresh) signal=$signal caller=$caller\n\
+                   echo -a child= $+ $1- local=[ $+ %private $+ ] who= $+ $where source= $+ $script event= $+ $event nick= $+ $nick chan= $+ $chan target= $+ $target raw=[ $+ $rawmsg $+ ] bytes=[ $+ $rawbytes $+ ] numeric=[ $+ $numeric $+ ] tags= $+ $msgtags(0) id= $+ $iif($eventid == caller-id,inherited,fresh) signal= $+ $signal caller= $+ $caller\n\
                    var %private = handler-local\n\
                    set %childsource $where\n\
                  }"
@@ -341,7 +348,7 @@ mod tests {
             engine.load_sources(&[
                 (
                     "caller.mrc".into(),
-                    "alias entry { echo -a before | signal -n stop | echo -a after-$halted }"
+                    "alias entry { echo -a before | signal -n stop | echo -a after- $+ $halted }"
                         .into(),
                 ),
                 (
@@ -350,7 +357,7 @@ mod tests {
                 ),
                 (
                     "second.mrc".into(),
-                    "on *:SIGNAL:stop:echo -a second-$halted".into(),
+                    "on *:SIGNAL:stop:echo -a second- $+ $halted".into(),
                 ),
             ]);
             let mut expected = vec!["before".to_string(), "first".to_string()];
@@ -405,7 +412,7 @@ mod tests {
     fn immediate_signal_limits_nested_signals_to_twenty_four() {
         let engine = ScriptEngine::new();
         engine.load(
-            "alias entry { set %hits 0 | signal -n recurse | echo -a first=%hits | signal -n recurse | echo -a second=%hits }\n\
+            "alias entry { set %hits 0 | signal -n recurse | echo -a first= $+ %hits | signal -n recurse | echo -a second= $+ %hits }\n\
              on *:SIGNAL:recurse:{ inc %hits | signal -n recurse }",
         );
         assert_eq!(
@@ -423,9 +430,9 @@ mod tests {
                set -u0 %temporary alive\n\
                hadd -mu0 transient key alive\n\
                signal -n inspect\n\
-               echo -a caller=%temporary hash=$hget(transient,key) bytes=$bvar(&caller,1,2)\n\
+               echo -a caller= $+ %temporary hash= $+ $hget(transient,key) bytes= $+ $bvar(&caller,1,2)\n\
              }\n\
-             on *:SIGNAL:inspect:{ echo -a handler=%temporary hash=$hget(transient,key) bytes=$bvar(&caller,1,2) }",
+             on *:SIGNAL:inspect:{ echo -a handler= $+ %temporary hash= $+ $hget(transient,key) bytes= $+ $bvar(&caller,1,2) }",
         );
         assert_eq!(
             echo_text(engine.run_alias(&context(), "#room", "entry", "")),

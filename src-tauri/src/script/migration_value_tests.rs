@@ -12,7 +12,7 @@ fn evaluate(expression: &str) -> String {
     let actions = ScriptEngine::new().run_command(
         &context,
         "(status)",
-        &format!("echo -s output=[{expression}]"),
+        &format!("echo -s output= $+ [ $+ {expression} $+ ]"),
         &[],
     );
     let [Action::Echo { text, .. }] = actions.as_slice() else {
@@ -96,9 +96,9 @@ fn quote_helpers_integrate_with_sandboxed_file_and_ini_commands() {
       fclose h\n\
       writeini -n $qt(settings.ini) state item value\n\
       writeini -n $qt(settings with spaces.ini) state item spaced\n\
-      echo -s plain=$readini($qt(settings.ini),n,state,item) spaced=$readini($qt(settings with spaces.ini),n,state,item)\n\
+      echo -s plain= $+ $readini($qt(settings.ini),n,state,item) spaced= $+ $readini($qt(settings with spaces.ini),n,state,item)\n\
       remini $qt(settings with spaces.ini) state item\n\
-      echo -s removed=[$readini($qt(settings with spaces.ini),n,state,item)]\n\
+      echo -s removed= $+ [ $+ $readini($qt(settings with spaces.ini),n,state,item) $+ ]\n\
     }");
     let actions = engine.run_alias(&context, "(status)", "check", "");
     let values: Vec<_> = actions

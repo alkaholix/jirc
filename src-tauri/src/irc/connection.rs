@@ -3131,7 +3131,7 @@ mod tests {
         let actions = run_perform_commands(
             &engine,
             &ctx,
-            &["mode $me +i".into(), "msg NickServ network=$network".into()],
+            &["mode $me +i".into(), "msg NickServ network= $+ $network".into()],
         );
         assert_eq!(
             actions,

@@ -6,5 +6,5 @@ alias compat_daily {
     inc %total $gettok($1-,%i,32)
     inc %i
   }
-  msg #compat total=%total first=$gettok($1-,1,32) parms=$parms
+  msg #compat total= $+ %total first= $+ $gettok($1-,1,32) parms= $+ $parms
 }

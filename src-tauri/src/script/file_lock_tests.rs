@@ -36,7 +36,7 @@ fn fopen_exclusive_switch_persists_between_runs_and_excludes_other_engine_writes
           fopen -ox held payload.bin\n\
           fwrite held ABCDEF\n\
           fseek held 0\n\
-          echo -s owner=$fopen(held) error=$ferr bom=$fopen(held).bom\n\
+          echo -s owner= $+ $fopen(held) error= $+ $ferr bom= $+ $fopen(held).bom\n\
         }\n\
         alias release { fclose held }",
     );
@@ -48,17 +48,17 @@ fn fopen_exclusive_switch_persists_between_runs_and_excludes_other_engine_writes
     reader.load(
         "alias check {\n\
           fopen other payload.bin\n\
-          echo -s reader=$fopen(other) read=$fread(other) error=$ferr\n\
+          echo -s reader= $+ $fopen(other) read= $+ $fread(other) error= $+ $ferr\n\
           fwrite other corrupt\n\
-          echo -s write_error=$ferr position=$fopen(other).pos\n\
+          echo -s write_error= $+ $ferr position= $+ $fopen(other).pos\n\
           fopen -o denied payload.bin\n\
-          echo -s overwrite_error=$ferr denied=[$fopen(denied)] count=$fopen(0)\n\
+          echo -s overwrite_error= $+ $ferr denied=[ $+ $fopen(denied) $+ ] count= $+ $fopen(0)\n\
           fclose *\n\
         }\n\
         alias writeafter {\n\
           fopen -ox new payload.bin\n\
           fwrite new released\n\
-          echo -s released_error=$ferr\n\
+          echo -s released_error= $+ $ferr\n\
           fclose new\n\
         }",
     );

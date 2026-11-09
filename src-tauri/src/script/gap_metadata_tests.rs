@@ -42,7 +42,7 @@ fn current_server_port_matches_the_current_context_port() {
 #[test]
 fn disconnect_reason_reaches_script_parameters() {
     let engine = ScriptEngine::new();
-    engine.load("on *:DISCONNECT:{ echo -a reason=$1- }");
+    engine.load("on *:DISCONNECT:{ echo -a reason= $+ $1- }");
     let event = crate::irc::event::UiEvent::Disconnected {
         server_id: "s".into(),
         reason: "Closing Link: maintenance".into(),
@@ -126,7 +126,7 @@ fn picture_and_editbox_flags_coexist_and_activation_preserves_picture_kind() {
 }
 
 fn dialogs(engine: &ScriptEngine) {
-    engine.load("dialog table {\n title \"Test\"\n size -1 -1 240 180\n edit \"Old\", 10, 1 1 100 20\n text \"Caption\", 11, 1 25 100 20\n list 20, 1 50 100 60, multsel\n combo 21, 1 115 100 30, drop\n}\nalias prepare { dialog -m A table | dialog -m B table | did -ra A 10 Alpha | did -ra B 10 Beta }\non *:DIALOG:A:sclick:10:{ echo -a other=$did(B,10) | did -ra A 10 Fresh | echo -a now=$did(A,10) }");
+    engine.load("dialog table {\n title \"Test\"\n size -1 -1 240 180\n edit \"Old\", 10, 1 1 100 20\n text \"Caption\", 11, 1 25 100 20\n list 20, 1 50 100 60, multsel\n combo 21, 1 115 100 30, drop\n}\nalias prepare { dialog -m A table | dialog -m B table | did -ra A 10 Alpha | did -ra B 10 Beta }\non *:DIALOG:A:sclick:10:{ echo -a other= $+ $did(B,10) | did -ra A 10 Fresh | echo -a now= $+ $did(A,10) }");
     engine.run_alias(&context(), "#c", "prepare", "");
 }
 
@@ -193,7 +193,7 @@ fn late_dialog_creation_snapshot_does_not_restore_defaults_over_script_values() 
 fn dialog_add_reset_selection_and_multiselection_are_synchronous() {
     let engine = ScriptEngine::new();
     dialogs(&engine);
-    let command = "did -a A 10 Tail | did -ra A 11 Replaced | did -a A 20 one | did -a A 20 two | did -a A 20 three | did -c A 20 1 | did -ck A 20 3 | did -a A 21 one | did -a A 21 two | did -c A 21 2 | echo -a $did(A,10) / $did(A,11) / $did(A,20,0).sel / $did(A,20,1).sel / $did(A,20,2).sel / $did(A,21).seltext | did -ra A 20 single | echo -a lines=$did(A,20).lines";
+    let command = "did -a A 10 Tail | did -ra A 11 Replaced | did -a A 20 one | did -a A 20 two | did -a A 20 three | did -c A 20 1 | did -ck A 20 3 | did -a A 21 one | did -a A 21 two | did -c A 21 2 | echo -a $did(A,10) / $did(A,11) / $did(A,20,0).sel / $did(A,20,1).sel / $did(A,20,2).sel / $did(A,21).seltext | did -ra A 20 single | echo -a lines= $+ $did(A,20).lines";
     assert_eq!(
         echoes(engine.run_command(&context(), "#c", command, &[])),
         ["AlphaTail / Replaced / 2 / 1 / 3 / two", "lines=1"]

@@ -1295,6 +1295,15 @@ pub struct Runtime<'a> {
     /// glued after an identifier call there (`$calc($len(ab)*2)` is 4), while
     /// everywhere else it drops it (`$len($upper(ab)cd)` is 2).
     pub(crate) calc_args: bool,
+    /// The token `$*` stands for while its command repeats (one run per
+    /// token). Set only for the command's own top-level expansion.
+    pub(crate) star_token: Option<String>,
+    /// How many of `$1-`'s tokens `$*` has already run for in this alias
+    /// frame or event; a later `$*` starts after them.
+    pub(crate) star_done: usize,
+    /// Set while a command that holds `$*` runs (including commands it runs,
+    /// such as `/scon`'s); `$*` evaluates to its marker only then.
+    pub(crate) star_tape: Option<StarTape>,
     pub(crate) script_error: Option<ScriptError>,
     pub steps: u32,
     pub depth: u32,
@@ -1637,12 +1646,14 @@ impl<'a> Runtime<'a> {
 
     /// Runs one `$hfind(..., command)` callback with the matched item exposed as
     /// `$1-`. `/halt` stops the search without leaking a halted state into the
-    /// surrounding alias/event.
+    /// surrounding alias/event. The command is evaluated once, when it runs
+    /// (mIRC prints an item named `$x` as `$x`); expanding it first and then
+    /// running the result would evaluate items and `$regsubex` captures as
+    /// script.
     pub(super) fn run_hfind_callback(&mut self, command: &str, item: &str) -> bool {
         let saved_params = std::mem::replace(&mut self.event.params, vec![item.to_string()]);
         let saved_halted = self.halted;
         self.halted = false;
-        let command = self.expand(command);
         let body = super::parser::parse_body(command.trim());
         self.run(&body);
         let stopped = self.halted;
@@ -1687,25 +1698,73 @@ impl<'a> Runtime<'a> {
         self.bins.clear();
     }
 
+    fn exec_command(&mut self, name: &str, args: &str) {
+        let actions_before = self.actions.len();
+        let outer_abandoned = self.abandoned_at.take();
+        self.dispatch(name, args);
+        if self.error_pending() {
+            self.discard_failed_actions(actions_before);
+        } else if let Some(at) = self.abandoned_at {
+            // mIRC halts without running the command: drop what it
+            // produced, keep what identifier aliases echoed before.
+            self.discard_failed_actions(at.max(actions_before));
+            self.pending_pipe_commands.clear();
+            // `$*` with no token left skips its command without halting.
+            if !self.star_tape.as_ref().is_some_and(|tape| tape.skip) {
+                self.halted = true;
+            }
+        } else {
+            self.run_pending_pipe_commands();
+        }
+        self.abandoned_at = outer_abandoned;
+    }
+
+    /// A command holding `$*`. mIRC evaluates the line once; if that evaluated
+    /// `$*` (outside a condition), the command runs once per token of `$1-`
+    /// this scope has not used yet, each run with the next token in place of
+    /// a word that starts with the marker. No token left skips the command.
+    fn exec_star_command(&mut self, name: &str, args: &str) {
+        let mut index = self.star_done;
+        let first = self.event.params.get(index).cloned();
+        self.star_tape = Some(StarTape {
+            has_token: first.is_some(),
+            ..StarTape::default()
+        });
+        let outer_token = std::mem::replace(&mut self.star_token, first);
+        self.exec_command(name, args);
+        let ran = self
+            .star_tape
+            .as_ref()
+            .is_some_and(|tape| tape.evaluated && tape.has_token);
+        if ran {
+            // `$1-` is read afresh for each run: a `tokenize` in the line
+            // changes the tokens still to come.
+            loop {
+                index += 1;
+                if self.halted || self.error_pending() || self.goto.is_some() {
+                    break;
+                }
+                let Some(token) = self.event.params.get(index).cloned() else {
+                    break;
+                };
+                if let Some(tape) = self.star_tape.as_mut() {
+                    tape.replay = Some(0);
+                }
+                self.star_token = Some(token);
+                self.exec_command(name, args);
+            }
+            self.star_done = self.star_done.max(index);
+        }
+        self.star_tape = None;
+        self.star_token = outer_token;
+    }
+
     fn exec(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Command { name, args, .. } => {
-                let actions_before = self.actions.len();
-                let outer_abandoned = self.abandoned_at.take();
-                self.dispatch(name, args);
-                if self.error_pending() {
-                    self.discard_failed_actions(actions_before);
-                } else if let Some(at) = self.abandoned_at {
-                    // mIRC halts without running the command: drop what it
-                    // produced, keep what identifier aliases echoed before.
-                    self.discard_failed_actions(at.max(actions_before));
-                    self.pending_pipe_commands.clear();
-                    self.halted = true;
-                } else {
-                    self.run_pending_pipe_commands();
-                }
-                self.abandoned_at = outer_abandoned;
+            Stmt::Command { name, args, .. } if self.star_tape.is_none() && args.contains("$*") => {
+                self.exec_star_command(name, args)
             }
+            Stmt::Command { name, args, .. } => self.exec_command(name, args),
             Stmt::If {
                 branches,
                 else_body,
@@ -3412,6 +3471,9 @@ impl<'a> Runtime<'a> {
         let saved_source = std::mem::replace(&mut self.event.script_source, source.to_string());
         let saved_line = std::mem::replace(&mut self.event.script_line, source_line);
         let saved_halted = std::mem::replace(&mut self.halted, false);
+        let saved_star_token = self.star_token.take();
+        let saved_star_done = std::mem::replace(&mut self.star_done, 0);
+        let saved_star_tape = self.star_tape.take();
         let saved_ret = self.ret.take();
         let saved_goto = self.goto.take(); // goto is routine-local
                                            // A pipe produced while expanding the alias invocation belongs after
@@ -3437,6 +3499,9 @@ impl<'a> Runtime<'a> {
         self.event.script_source = saved_source;
         self.event.script_line = saved_line;
         self.ret = saved_ret;
+        self.star_token = saved_star_token;
+        self.star_done = saved_star_done;
+        self.star_tape = saved_star_tape;
         // Restore the caller's halt state, but let a non-return /halt bubble up.
         self.halted = saved_halted || (halted_in_alias && !returned && !self.error_pending());
         self.leave_connection_routine(connection);
@@ -3475,10 +3540,17 @@ impl<'a> Runtime<'a> {
     /// Splits `raw_args` into (expanded target, expanded remaining text).
     fn split_target(&mut self, raw_args: &str) -> (String, String) {
         let raw = raw_args.trim();
-        match raw.split_once(char::is_whitespace) {
-            Some((t, rest)) => (self.expand(t), self.expand(rest.trim())),
-            None => (self.expand(raw), String::new()),
-        }
+        let (target, text) = match raw.split_once(char::is_whitespace) {
+            Some((t, rest)) => (t, Some(rest.trim())),
+            None => (raw, None),
+        };
+        // `=$nick` (a DCC chat target) keeps evaluating the nick, as jIRC always
+        // has. Unverified natively — it needs a live DCC chat (TODO K-03).
+        let target = match target.strip_prefix("=$") {
+            Some(_) => format!("={}", self.expand(&target[1..])),
+            None => self.expand(target),
+        };
+        (target, text.map(|text| self.expand(text)).unwrap_or_default())
     }
 
     /// `/echo [colour] [switches] [window] <text>`.
@@ -7000,7 +7072,7 @@ impl<'a> Runtime<'a> {
 
     /// Expands `%vars`, `$identifiers`, params, and the `$+` join operator.
     pub fn expand(&mut self, text: &str) -> String {
-        let expanded = self.expand_inner(text);
+        let expanded = self.expand_inner(text, false);
         let mut segments = split_command_pipes(&expanded).into_iter();
         let first = decode_delayed(&segments.next().unwrap_or_default());
         self.pending_pipe_commands
@@ -7012,13 +7084,70 @@ impl<'a> Runtime<'a> {
     /// `$unsafe()` data remains encoded through the deferred parser and is
     /// decoded by the later normal expansion.
     pub fn expand_deferred(&mut self, text: &str) -> String {
-        self.expand_inner(text)
+        self.expand_inner(text, false)
     }
 
-    fn expand_inner(&mut self, text: &str) -> String {
+    /// Expands an `if`/`while`/`$iif` condition. mIRC reads grouping
+    /// parentheses and `!` negations before it evaluates the operands, so a
+    /// word such as `(!$1` or `%v)` is evaluated as `$1` / `%v`.
+    fn expand_cond(&mut self, text: &str) -> String {
+        let expanded = self.expand_inner(text, true);
+        let mut segments = split_command_pipes(&expanded).into_iter();
+        let first = decode_delayed(&segments.next().unwrap_or_default());
+        self.pending_pipe_commands
+            .extend(segments.map(|command| decode_delayed(&command)));
+        first
+    }
+
+    fn expand_inner(&mut self, text: &str, cond: bool) -> String {
         if self.error_pending() {
             return String::new();
         }
+        // A command repeating for `$*` was evaluated once: its later runs get
+        // the words its first run produced (outermost expansions only).
+        let mut outermost = false;
+        let mut replayed = None;
+        if let Some(tape) = self.star_tape.as_mut() {
+            tape.depth += 1;
+            tape.cond += usize::from(cond);
+            outermost = tape.depth == 1;
+            if let (true, Some(at)) = (outermost, tape.replay) {
+                replayed = tape.words.get(at).cloned();
+                tape.replay = Some(at + 1);
+            }
+        }
+        let parts = match replayed {
+            Some(words) => Some(words),
+            None => self.expand_words(text, cond),
+        };
+        if let Some(tape) = self.star_tape.as_mut() {
+            tape.depth -= 1;
+            tape.cond -= usize::from(cond);
+            if outermost && tape.replay.is_none() {
+                if let Some(words) = &parts {
+                    tape.words.push(words.clone());
+                }
+            }
+        }
+        let Some(mut parts) = parts else {
+            return String::new();
+        };
+        // `$*` left its marker in the command; a word that starts with it
+        // becomes the current token (mIRC never evaluates the token itself).
+        // Only the command's own words: a `[ $* ]` group inside them hands its
+        // marker back first.
+        if let (true, Some(token)) = (outermost, self.star_token.as_deref()) {
+            for part in &mut parts {
+                if part.starts_with(STAR_MARKER) {
+                    *part = token.to_string();
+                }
+            }
+        }
+        parts.join(" ")
+    }
+
+    /// The words `text` expands to (`$+` joins applied), or `None` on error.
+    fn expand_words(&mut self, text: &str, cond: bool) -> Option<Vec<String>> {
         let mut parts: Vec<String> = Vec::new();
         let mut join_next = false;
         // Split on spaces, but keep `$ident(a b c)` whole (spaces inside the
@@ -7032,9 +7161,9 @@ impl<'a> Runtime<'a> {
                 i += 1;
                 continue;
             }
-            let v = self.eval_token(tok);
+            let v = if cond { self.eval_cond_word(tok) } else { self.eval_token(tok) };
             if self.error_pending() {
-                return String::new();
+                return None;
             }
             if join_next {
                 if let Some(last) = parts.last_mut() {
@@ -7048,7 +7177,14 @@ impl<'a> Runtime<'a> {
             }
             i += 1;
         }
-        parts.join(" ")
+        // A `$regsubex` capture left inside literal text (`x$upper(\1)` is not
+        // evaluated) is plain text from here on.
+        for part in &mut parts {
+            if part.contains(SEALED_PREFIX) {
+                *part = decode_sealed_within(part);
+            }
+        }
+        Some(parts)
     }
 
     /// Pre-evaluates mIRC `[ ... ]` groups from the innermost group outward.
@@ -7092,7 +7228,7 @@ impl<'a> Runtime<'a> {
                 && !inner.iter().any(|t| t == "$+"))
                 || inner.iter().any(|t| t.starts_with(SEALED_PREFIX));
             let content: Vec<String> = inner.iter().map(|t| decode_evaluated(t)).collect();
-            let mut value = self.expand_inner(&content.join(" "));
+            let mut value = self.expand_inner(&content.join(" "), false);
             let mut replace_start = span.open;
             let mut replace_end = span.close;
 
@@ -7151,48 +7287,189 @@ impl<'a> Runtime<'a> {
             return self.event.chan.clone();
         }
         let chars: Vec<char> = tok.chars().collect();
+        if self.calc_args {
+            return self.eval_calc_word(&chars);
+        }
+        // mIRC evaluates `%var` and `$ident` only at the start of a word:
+        // `a$1b`, `x%y` and `($1)` stay literal.
+        match chars.first() {
+            Some('%') => self.word_var(&chars[1..]),
+            Some('$') => self.eval_dollar_word(&chars, 1).0,
+            // `#$1` names a channel: the parameter gets a `#` unless it already
+            // is one. Any other `#$ident` just drops the `#`.
+            Some('#') if chars.get(1) == Some(&'$') => {
+                let (value, kind) = self.eval_dollar_word(&chars, 2);
+                if kind == DollarKind::Param
+                    && !value.is_empty()
+                    && !self.state.isupport.is_channel(&value)
+                {
+                    format!("#{value}")
+                } else {
+                    value
+                }
+            }
+            _ => tok.to_string(),
+        }
+    }
+
+    /// The value of the variable a word-start `%` names. The name is the whole
+    /// rest of the word (`%v,` and `%v.` are variables of their own).
+    fn word_var(&mut self, name: &[char]) -> String {
+        if name.is_empty() {
+            return "%".to_string();
+        }
+        // jIRC extension for IRCX, which mIRC lacks: `%#room` / `%&room` are
+        // channel names and stay literal (mIRC would read a variable).
+        if matches!(name[0], '#' | '&') {
+            return std::iter::once('%').chain(name.iter().copied()).collect();
+        }
+        let name: String = name.iter().collect();
+        self.var_value(&name).cloned().unwrap_or_default()
+    }
+
+    /// Evaluates a word whose `$` sits at `chars[start - 1]` and applies what
+    /// mIRC does with the rest of the word: dropped after a `$name(...)` call,
+    /// kept after a parameter (`$1x` is `Xx`), and for a bare `$name` any extra
+    /// text makes the whole word an unknown identifier (`$nick's` is empty).
+    fn eval_dollar_word(&mut self, chars: &[char], start: usize) -> (String, DollarKind) {
+        let kind = dollar_kind(chars, start);
+        if kind == DollarKind::Named && !bare_name_fills_word(chars, start) {
+            if chars.get(start) == Some(&'$') {
+                self.require_halt();
+            }
+            return (String::new(), kind);
+        }
+        let mut i = start;
+        let value = self.eval_dollar(chars, &mut i);
+        if kind == DollarKind::Call {
+            return (value, kind);
+        }
+        let rest: String = chars.get(i..).unwrap_or_default().iter().collect();
+        // An empty `$N` takes the text glued to it along (`$5test` with no
+        // `$5` is empty, while `$1test` is `Xtest`).
+        if kind == DollarKind::Param && value.is_empty() {
+            return (String::new(), kind);
+        }
+        (value + &rest, kind)
+    }
+
+    /// A word inside `$calc(...)`'s arguments. There `%` and `$` are evaluated
+    /// anywhere in the word, not only at its start: `10%3` reads the variable
+    /// `%3`, `3%c` with `%c` = `*2` is 6. A value glued to text in front of it
+    /// stays a word of its own (`2%a` reads as `2 5`). A variable takes the
+    /// rest of the word as its name, up to a `)`. After a `$N` parameter the
+    /// text up to the next `)` is kept as written, apart from a variable
+    /// straight after an operator (`$calc($1*$1)` is 0, `$calc($1*%a)` 15,
+    /// `$calc($1%a)` 0, `$calc(($2)$1)` reads `$1`).
+    fn eval_calc_word(&mut self, chars: &[char]) -> String {
+        // Inside `$calc`, a `)` also ends a name: `(%a + %b) / 2` works, while
+        // `%a+1` is still the variable `a+1`.
+        let name_end = |from: usize| {
+            chars[from..]
+                .iter()
+                .position(|&c| c == ')')
+                .map_or(chars.len(), |at| from + at)
+        };
+        let glue = |out: &mut String, value: &str| {
+            let joined = out.is_empty()
+                || value.is_empty()
+                || out.ends_with(['+', '-', '*', '/', '^', '(', ' ']);
+            if !joined {
+                out.push(' ');
+            }
+            out.push_str(value);
+        };
+        const OPERATORS: [char; 6] = ['+', '-', '*', '/', '^', '('];
         let mut out = String::new();
+        // In the text after a `$N`, until the next `)`.
+        let mut param_tail = false;
+        // The last character written was an operator of the expression (not
+        // the `-` of a `$1-` range).
+        let mut after_operator = false;
         let mut i = 0;
         while i < chars.len() {
             match chars[i] {
-                '%' => {
-                    i += 1;
-                    let name = read_var_name(&chars, &mut i);
-                    if !name.is_empty() {
-                        out.push_str(self.var_value(&name).map(|s| s.as_str()).unwrap_or(""));
-                    } else {
-                        out.push('%');
-                    }
+                '%' if (!param_tail || after_operator) && name_end(i + 1) > i + 1 => {
+                    let end = name_end(i + 1);
+                    let value = self.word_var(&chars[i + 1..end]);
+                    glue(&mut out, &value);
+                    i = end;
+                    after_operator = false;
                 }
-                '$' => {
-                    let word_start = i == 0;
-                    i += 1;
-                    let call = word_start && !self.calc_args && dollar_call_has_parens(&chars, i);
-                    out.push_str(&self.eval_dollar(&chars, &mut i));
-                    if call {
-                        // mIRC ends the word at a `$name(...)` call that starts
-                        // it: anything glued after the call (an optional
-                        // `.property` aside) is dropped, so `$calc(1+1))` is
-                        // `2` and `$upper(ab)x` is `AB`. `$calc`'s arguments
-                        // are the exception (see `calc_args`).
-                        break;
+                '$' if !param_tail => {
+                    let kind = dollar_kind(chars, i + 1);
+                    if kind == DollarKind::Named {
+                        let end = name_end(i + 1);
+                        if !bare_name_fills_word(&chars[..end], i + 1) {
+                            i = end; // an unknown name such as `pi+1` is empty
+                            continue;
+                        }
+                    }
+                    let mut j = i + 1;
+                    let value = self.eval_dollar(chars, &mut j);
+                    glue(&mut out, &value);
+                    i = j;
+                    after_operator = false;
+                    if kind == DollarKind::Param {
+                        param_tail = true;
                     }
                 }
                 c => {
                     out.push(c);
                     i += 1;
+                    after_operator = OPERATORS.contains(&c);
+                    if c == ')' {
+                        param_tail = false;
+                    }
                 }
             }
         }
         out
     }
 
+    /// A word of an `if`/`while`/`$iif` condition: grouping parentheses and
+    /// `!` negations around the operand are kept for the condition parser,
+    /// and the operand itself is evaluated as a word (`(!$1` → `(!` + `$1`).
+    fn eval_cond_word(&mut self, tok: &str) -> String {
+        let chars: Vec<char> = tok.chars().collect();
+        let mut start = 0;
+        while let Some(&c) = chars.get(start) {
+            let negation = c == '!'
+                && matches!(chars.get(start + 1), Some('$' | '%' | '(' | '!'));
+            if c == '(' || negation {
+                start += 1;
+            } else {
+                break;
+            }
+        }
+        let mut end = chars.len();
+        let opens = chars[start..].iter().filter(|&&c| c == '(').count();
+        let mut extra = chars[start..]
+            .iter()
+            .filter(|&&c| c == ')')
+            .count()
+            .saturating_sub(opens);
+        while extra > 0 && end > start && chars[end - 1] == ')' {
+            end -= 1;
+            extra -= 1;
+        }
+        let core: String = chars[start..end].iter().collect();
+        let value = self.eval_token(&core);
+        let prefix: String = chars[..start].iter().collect();
+        let suffix: String = chars[end..].iter().collect();
+        format!("{prefix}{value}{suffix}")
+    }
+
     fn eval_dollar(&mut self, chars: &[char], i: &mut usize) -> String {
         // Each identifier starts with the normal word rules for its own
         // arguments; only `$calc` turns `calc_args` on, for its argument list.
         let outer_calc = std::mem::replace(&mut self.calc_args, false);
+        // Only the command's own words swap in a `$*` token; inside an
+        // identifier's arguments the marker stays as it is.
+        let outer_star = self.star_token.take();
         let value = self.eval_dollar_value(chars, i);
         self.calc_args = outer_calc;
+        self.star_token = outer_star;
         value
     }
 
@@ -7206,6 +7483,26 @@ impl<'a> Runtime<'a> {
                 return split_args(&inner).iter().map(|a| self.expand(a)).collect();
             }
             return "+".to_string();
+        }
+        // `$*` — stands for the current token of a repeating command; it is
+        // replaced only once the command's words are complete (`STAR_MARKER`).
+        if chars.get(*i) == Some(&'*') {
+            *i += 1;
+            let Some(tape) = self.star_tape.as_mut() else {
+                return String::new();
+            };
+            // Inside a condition (`$iif($* == a,…)`) it doesn't repeat the
+            // command; anywhere else, even `$len($*)`, it does.
+            if tape.cond == 0 {
+                tape.evaluated = true;
+                if !tape.has_token && !tape.skip {
+                    tape.skip = true;
+                    if self.abandoned_at.is_none() {
+                        self.abandoned_at = Some(self.actions.len());
+                    }
+                }
+            }
+            return STAR_MARKER.to_string();
         }
         // `$!name` — delayed evaluation: return the literal `$name` (evaluated zero
         // times; any `(args)`/`.prop` after it fall through as literal text). Bare
@@ -7226,6 +7523,11 @@ impl<'a> Runtime<'a> {
         // `$$N` / `$$?` / `$$ident` — a require prefix: like the value without
         // it, but the script halts when it is empty. Only when a digit, `?` or
         // a letter follows (a literal `$$` elsewhere is left untouched).
+        // `$$*` is `$*` (its marker is never empty).
+        if chars.get(*i) == Some(&'$') && chars.get(*i + 1) == Some(&'*') {
+            *i += 1;
+            return self.eval_dollar_value(chars, i);
+        }
         let require = chars.get(*i) == Some(&'$')
             && matches!(chars.get(*i + 1), Some(c) if c.is_ascii_digit() || *c == '?' || c.is_alphabetic());
         if require {
@@ -7437,7 +7739,7 @@ impl<'a> Runtime<'a> {
     // ---- conditions ----
 
     fn eval_cond(&mut self, cond: &str) -> bool {
-        let expanded = self.expand(cond);
+        let expanded = self.expand_cond(cond);
         self.record_v(&expanded);
         // Clone the Arc (cheap) so the leaf resolver can read channel state
         // without borrowing `self` across the evaluation.
@@ -7732,6 +8034,70 @@ fn split_first_word(text: &str) -> (&str, &str) {
 
 /// Whether the `$` just consumed (cursor `i` after it) starts a parenthesised
 /// call: `$name(`, `$$name(`, `$+(` or the `$(…)` short form of `$eval`.
+/// What follows a word-start `$`; it decides what happens to the rest of the word.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum DollarKind {
+    /// `$name(...)` or `$(...)`.
+    Call,
+    /// `$N`, `$N-`, `$N-M`, `$$N`.
+    Param,
+    /// A bare `$name`.
+    Named,
+    /// `$!…`, `$*`, `$?…`, `$+` and anything else.
+    Other,
+}
+
+fn dollar_kind(chars: &[char], i: usize) -> DollarKind {
+    if dollar_call_has_parens(chars, i) {
+        return DollarKind::Call;
+    }
+    let j = if chars.get(i) == Some(&'$') { i + 1 } else { i };
+    match chars.get(j) {
+        Some(c) if c.is_ascii_digit() => DollarKind::Param,
+        Some(c) if c.is_alphanumeric() || *c == '_' => DollarKind::Named,
+        _ => DollarKind::Other,
+    }
+}
+
+/// Whether a bare `$name` (or `$$name`) at `chars[i]` is the whole word. A
+/// `.property` is part of it only for `$mouse`, the one bare identifier mIRC
+/// gives properties.
+fn bare_name_fills_word(chars: &[char], i: usize) -> bool {
+    let mut j = if chars.get(i) == Some(&'$') { i + 1 } else { i };
+    let name = read_name(chars, &mut j);
+    if j == chars.len() {
+        return true;
+    }
+    if name.eq_ignore_ascii_case("mouse") && chars.get(j) == Some(&'.') {
+        let mut k = j + 1;
+        let _ = read_name(chars, &mut k);
+        return k == chars.len();
+    }
+    false
+}
+
+/// The text `$*` evaluates to until its command's words are complete (mIRC
+/// uses the same marker, which is why `$mid($*,2)` gives `~$*`).
+pub(crate) const STAR_MARKER: &str = "`~$*";
+
+/// State of a command that holds `$*` (see `exec_star_command`).
+#[derive(Debug, Default)]
+pub(crate) struct StarTape {
+    /// A token of `$1-` was left for this command.
+    has_token: bool,
+    /// `$*` was evaluated outside a condition: the command repeats.
+    evaluated: bool,
+    /// `$*` was evaluated with no token left: the command is skipped.
+    skip: bool,
+    /// The words of the line's outermost expansions, marker included.
+    words: Vec<Vec<String>>,
+    /// On the runs after the first, the next recorded expansion to reuse.
+    replay: Option<usize>,
+    /// Nesting of `expand_inner`, and of condition expansions within it.
+    depth: usize,
+    cond: usize,
+}
+
 fn dollar_call_has_parens(chars: &[char], i: usize) -> bool {
     let mut j = i;
     if chars.get(j) == Some(&'$') {
@@ -7746,26 +8112,6 @@ fn dollar_call_has_parens(chars: &[char], i: usize) -> bool {
         }
     }
     chars.get(j) == Some(&'(')
-}
-
-/// Reads a `%variable` name. Unlike identifier names, mIRC variable names may
-/// contain dots (e.g. `%i7f.chan`, `%a.b.c`), so `.` is part of the name — but
-/// a trailing dot is treated as punctuation (e.g. "joined %chan.").
-fn read_var_name(chars: &[char], i: &mut usize) -> String {
-    let mut name = String::new();
-    while let Some(&c) = chars.get(*i) {
-        if c.is_alphanumeric() || c == '_' || c == '.' {
-            name.push(c);
-            *i += 1;
-        } else {
-            break;
-        }
-    }
-    while name.ends_with('.') {
-        name.pop();
-        *i -= 1;
-    }
-    name
 }
 
 /// Reads a balanced `(...)`; cursor must be on `(`. Returns inner text.
@@ -7838,8 +8184,31 @@ fn decode_evaluated(value: &str) -> String {
 /// Seals a bracket result that a space has made final: the token pass must not
 /// evaluate it, and neither may an enclosing bracket pair, because mIRC ignores
 /// extra pairs once the segment contains an unjoined space.
-fn encode_sealed(value: &str) -> String {
+pub(crate) fn encode_sealed(value: &str) -> String {
     encode_envelope(SEALED_PREFIX, value)
+}
+
+/// Replaces every sealed value inside `text` with its plain text.
+fn decode_sealed_within(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(SEALED_PREFIX) {
+        out.push_str(&rest[..at]);
+        let after = &rest[at..];
+        match after[SEALED_PREFIX.len()..].find(ENVELOPE_END) {
+            Some(end) => {
+                let envelope = &after[..SEALED_PREFIX.len() + end + ENVELOPE_END.len_utf8()];
+                out.push_str(&decode_sealed(envelope));
+                rest = &after[envelope.len()..];
+            }
+            None => {
+                out.push_str(after);
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 fn decode_sealed(value: &str) -> String {
@@ -8115,13 +8484,12 @@ fn split_top_level(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut depth = 0i32;
-    // Spaces inside a `"…"` don't split, so a quoted message stays one token
-    // (`$?="Enter Password"`, `/timer name`). This is output-neutral for plain
-    // text: tokens are re-joined with spaces, so the quotes render the same.
+    // Spaces inside the quoted prompt of `$?="Enter Password"` don't split it.
+    // mIRC has no other quoting: `" $+ $1 $+ "` is three words joined.
     let mut in_quote = false;
     for c in text.chars() {
         match c {
-            '"' => {
+            '"' if in_quote || cur.starts_with("$?") || cur.starts_with("$$?") => {
                 in_quote = !in_quote;
                 cur.push(c);
             }
@@ -9192,9 +9560,9 @@ mod tests {
                %created = 2 + 3\n\
                set %stem [ $+ .leaf ] via-bracket\n\
                %stem [ $+ .other ] = 4 + 2\n\
-               msg #c inside=%same only=%only fromvar=%fromvar created=%created leaf=%stem.leaf other=%stem.other\n\
+               msg #c inside= $+ %same only= $+ %only fromvar= $+ %fromvar created= $+ %created leaf= $+ %stem.leaf other= $+ %stem.other\n\
              }\n\
-             alias report msg #c same=%same only=[ $+ %only $+ ] fromvar=%fromvar created=%created leaf=%stem.leaf other=%stem.other",
+             alias report msg #c same= $+ %same only=[ $+ %only $+ ] fromvar= $+ %fromvar created= $+ %created leaf= $+ %stem.leaf other= $+ %stem.other",
         );
 
         assert_eq!(
@@ -9245,16 +9613,16 @@ mod tests {
                set %value 10\n\
                var %value = 20, %secret = caller-only\n\
                inner\n\
-               msg #c outer=%value secret=%secret\n\
+               msg #c outer= $+ %value secret= $+ %secret\n\
              }\n\
              alias inner {\n\
-               msg #c inner=%value secret=[ $+ %secret $+ ] locals=$var(%secret,0) local=$var(%value,1).local\n\
+               msg #c inner= $+ %value secret=[ $+ %secret $+ ] locals= $+ $var(%secret,0) local= $+ $var(%value,1).local\n\
                inc %value\n\
                unset %secret\n\
              }\n\
-             alias report msg #c global=%value\n\
-             alias clear_outer { var %retained = caller | clear_inner | msg #c retained=%retained }\n\
-             alias clear_inner { var %own = inner | unsetall | msg #c own=%own | unsetall -l }",
+             alias report msg #c global= $+ %value\n\
+             alias clear_outer { var %retained = caller | clear_inner | msg #c retained= $+ %retained }\n\
+             alias clear_inner { var %own = inner | unsetall | msg #c own= $+ %own | unsetall -l }",
         );
         assert_eq!(
             engine.run_alias(&run_ctx(), "#c", "outer", ""),
@@ -9284,24 +9652,24 @@ mod tests {
                set %value global\n\
                var %value = local\n\
                unset -g %value\n\
-               msg #c local=%value\n\
+               msg #c local= $+ %value\n\
                set -g %value restored\n\
                unset -l %value\n\
-               msg #c global=%value local=$var(%value,1).local\n\
+               msg #c global= $+ %value local= $+ $var(%value,1).local\n\
                unset -l %value\n\
-               msg #c preserved=%value\n\
+               msg #c preserved= $+ %value\n\
                var %only = local-only\n\
                unset -g %only\n\
-               msg #c only=%only\n\
+               msg #c only= $+ %only\n\
                set %pair.a ga\n\
                set %pair.b gb\n\
                var %pair.a = la, %pair.b = lb\n\
                unset -g %pair.*\n\
-               msg #c locals=%pair.a %pair.b\n\
+               msg #c locals= $+ %pair.a %pair.b\n\
                set -g %pair.a restored-a\n\
                set -g %pair.b restored-b\n\
                unset -l %pair.*\n\
-               msg #c globals=%pair.a %pair.b\n\
+               msg #c globals= $+ %pair.a %pair.b\n\
              }",
         );
         assert_eq!(
@@ -9325,12 +9693,12 @@ mod tests {
                set %exact global\n\
                var %exact = local\n\
                unset %exact\n\
-               msg #c exact=%exact local=$var(%exact,1).local\n\
+               msg #c exact= $+ %exact local= $+ $var(%exact,1).local\n\
                set %group.shared global\n\
                set -u60 %group.globalonly global\n\
                var %group.shared = local, %group.localonly = local\n\
                unset %group.*\n\
-               msg #c wildcard=$var(%group.*,0) secs=$var(%group.globalonly,1).secs\n\
+               msg #c wildcard= $+ $var(%group $+ .*,0) secs= $+ $var(%group.globalonly,1).secs\n\
              }",
         );
         assert_eq!(
@@ -9351,9 +9719,9 @@ mod tests {
                var -i %value = second, %new = initialized\n\
                set -g %value original-global\n\
                var -gi %value = replacement-global, %newglobal = created-global\n\
-               msg #c local=%value new=%new\n\
+               msg #c local= $+ %value new= $+ %new\n\
              }\n\
-             alias report msg #c global=%value new=%newglobal",
+             alias report msg #c global= $+ %value new= $+ %newglobal",
         );
         assert_eq!(
             engine.run_alias(&run_ctx(), "#c", "t", ""),
@@ -9382,9 +9750,9 @@ mod tests {
                set -g %setshadow global\n\
                set -li %setshadow local\n\
                set -gi %setshadow must-not-replace-global\n\
-               msg #c shadow=%shadow fromlocal=%fromlocal blank=[ $+ %blank $+ ] setshadow=%setshadow\n\
+               msg #c shadow= $+ %shadow fromlocal= $+ %fromlocal blank=[ $+ %blank $+ ] setshadow= $+ %setshadow\n\
              }\n\
-             alias report msg #c shadow=%shadow fromlocal=%fromlocal empty=[ $+ %empty $+ ] setshadow=%setshadow",
+             alias report msg #c shadow= $+ %shadow fromlocal= $+ %fromlocal empty=[ $+ %empty $+ ] setshadow= $+ %setshadow",
         );
         assert_eq!(
             engine.run_alias(&run_ctx(), "#c", "t", ""),
@@ -9410,21 +9778,21 @@ mod tests {
              alias t {\n\
                set %calls 0\n\
                set -gl %value $nextvalue\n\
-               msg #c set=%value/$globalvalue calls=%calls\n\
+               msg #c set= $+ %value $+ / $+ $globalvalue calls= $+ %calls\n\
                var -gl %value = $nextvalue\n\
-               msg #c var=%value/$globalvalue calls=%calls\n\
+               msg #c var= $+ %value $+ / $+ $globalvalue calls= $+ %calls\n\
                unset -gl %value\n\
-               msg #c removed=$var(%value,0)\n\
+               msg #c removed= $+ $var(%value,0)\n\
                set -g %init global\n\
                var -gli %init = local\n\
-               msg #c init=%init/$globalinit\n\
+               msg #c init= $+ %init $+ / $+ $globalinit\n\
                unset -g %init\n\
                set -gli %init new-global\n\
-               msg #c reinit=%init/$globalinit\n\
+               msg #c reinit= $+ %init $+ / $+ $globalinit\n\
                set -gl %pair.a a\n\
                var -gl %pair.b = b\n\
                unset -gl %pair.*\n\
-               msg #c wildcard=$var(%pair.*,0)\n\
+               msg #c wildcard= $+ $var(%pair $+ .*,0)\n\
              }",
         );
         assert_eq!(
@@ -9448,13 +9816,13 @@ mod tests {
              alias t {\n\
                set -gl %value initial\n\
                unsetall -l\n\
-               msg #c local-cleared=%value local=$var(%value,1).local\n\
+               msg #c local-cleared= $+ %value local= $+ $var(%value,1).local\n\
                var %value = local\n\
                unsetall\n\
-               msg #c global-cleared=%value global=[ $+ $globalvalue $+ ]\n\
+               msg #c global-cleared= $+ %value global=[ $+ $globalvalue $+ ]\n\
                set -g %value global\n\
                unsetall -gl\n\
-               msg #c both=$var(%value,0)\n\
+               msg #c both= $+ $var(%value,0)\n\
              }",
         );
         assert_eq!(
@@ -9476,11 +9844,11 @@ mod tests {
                set -gu60 %deadline 10\n\
                var %deadline = local\n\
                set -giu1 %deadline ignored\n\
-               msg #c skipped=$iif($globalsecs > 1,kept,lost)\n\
+               msg #c skipped= $+ $iif($globalsecs > 1,kept,lost)\n\
                unsetall -l\n\
-               msg #c local-cleared=$iif($globalsecs > 1,kept,lost)\n\
+               msg #c local-cleared= $+ $iif($globalsecs > 1,kept,lost)\n\
                unset -gl %deadline\n\
-               msg #c removed=$globalsecs\n\
+               msg #c removed= $+ $globalsecs\n\
              }",
         );
         assert_eq!(

@@ -116,12 +116,12 @@ fn connection_selection_routes_evaluated_output_and_restores_original() {
     let (engine, context) = fixture();
     engine.load(
         "alias entry {\n\
-           echo -a before=$cid/$network/$server/$me/$target/$status\n\
+           echo -a before= $+ $cid $+ / $+ $network $+ / $+ $server $+ / $+ $me $+ / $+ $target $+ / $+ $status\n\
            scid 3\n\
-           echo -a selected=$cid/$network/$server/$me/$target/$status\n\
-           msg #room selected=$cid/$network/$me\n\
+           echo -a selected= $+ $cid $+ / $+ $network $+ / $+ $server $+ / $+ $me $+ / $+ $target $+ / $+ $status\n\
+           msg #room selected= $+ $cid $+ / $+ $network $+ / $+ $me\n\
            scon 1\n\
-           echo -a restored=$cid/$network/$me/$target\n\
+           echo -a restored= $+ $cid $+ / $+ $network $+ / $+ $me $+ / $+ $target\n\
          }",
     );
     assert_eq!(
@@ -143,7 +143,7 @@ fn connection_selection_routes_evaluated_output_and_restores_original() {
         ],
     );
     assert_eq!(
-        flatten(engine.run_command(&context, "#fresh", "echo -a next=$cid/$target", &[])),
+        flatten(engine.run_command(&context, "#fresh", "echo -a next= $+ $cid $+ / $+ $target", &[])),
         vec![(route("alpha"), echo("next=1/#fresh"))],
     );
 }
@@ -155,14 +155,14 @@ fn connection_nested_alias_and_signal_restore_context_and_reset_origin() {
         "alias entry {\n\
            scid 3\n\
            child\n\
-           echo -a after-child=$cid/$network\n\
+           echo -a after-child= $+ $cid $+ / $+ $network\n\
            signal -n switch payload\n\
-           echo -a after-signal=$cid/$network\n\
+           echo -a after-signal= $+ $cid $+ / $+ $network\n\
            scid -r\n\
-           echo -a origin=$cid/$network/$target\n\
+           echo -a origin= $+ $cid $+ / $+ $network $+ / $+ $target\n\
          }\n\
-         alias child { scid -r | echo -a child-entry=$cid | scid 4 | echo -a child=$cid/$status }\n\
-         on *:SIGNAL:switch:{ scid -r | echo -a signal-entry=$cid/$1 | scid 4 | echo -a signal=$cid/$status }",
+         alias child { scid -r | echo -a child-entry= $+ $cid | scid 4 | echo -a child= $+ $cid $+ / $+ $status }\n\
+         on *:SIGNAL:switch:{ scid -r | echo -a signal-entry= $+ $cid $+ / $+ $1 | scid 4 | echo -a signal= $+ $cid $+ / $+ $status }",
     );
     assert_eq!(
         flatten(engine.run_alias(&context, "#room", "entry", "")),
@@ -185,10 +185,10 @@ fn connection_reset_command_uses_first_origin_and_preserves_selected_context() {
         "alias entry {\n\
            scid 3\n\
            scid 4\n\
-           scon -r echo -a scoped=$cid/$network/$me\n\
-           echo -a selected=$cid/$network\n\
+           scon -r echo -a scoped= $+ $cid $+ / $+ $network $+ / $+ $me\n\
+           echo -a selected= $+ $cid $+ / $+ $network\n\
            scid -r\n\
-           echo -a restored=$cid/$network\n\
+           echo -a restored= $+ $cid $+ / $+ $network\n\
          }",
     );
     assert_eq!(
@@ -221,7 +221,7 @@ fn connection_type_filters_union_status_bits_in_stable_cid_order() {
         let actual = flatten(engine.run_command(
             &context,
             "#room",
-            &format!("scon -at{mask} echo -a $cid/$status"),
+            &format!("scon -at{mask} echo -a $cid $+ / $+ $status"),
             &[],
         ));
         let expected: Vec<_> = expected_ids
@@ -257,7 +257,7 @@ fn connection_type_filters_union_status_bits_in_stable_cid_order() {
 fn connection_type_filter_also_applies_to_one_command_destination() {
     let (engine, context) = fixture();
     assert_eq!(
-        flatten(engine.run_command(&context, "#room", "scid -t4 4 echo -a selected=$cid", &[])),
+        flatten(engine.run_command(&context, "#room", "scid -t4 4 echo -a selected= $+ $cid", &[])),
         vec![(route("gamma"), echo("selected=4"))],
     );
     assert!(engine
@@ -265,7 +265,7 @@ fn connection_type_filter_also_applies_to_one_command_destination() {
         .is_empty());
     // With no command, the type mask does not prevent a context selection.
     assert_eq!(
-        flatten(engine.run_command(&context, "#room", "scid -t4 3 | echo -a selected=$cid", &[])),
+        flatten(engine.run_command(&context, "#room", "scid -t4 3 | echo -a selected= $+ $cid", &[])),
         vec![(route("beta"), echo("selected=3"))],
     );
 }
@@ -300,7 +300,7 @@ fn connection_selectors_distinguish_positions_cids_and_nonpositive_values() {
             flatten(engine.run_command(
                 &context,
                 "#room",
-                &format!("{name} invalid echo -a unreachable | echo -a after=$cid"),
+                &format!("{name} invalid echo -a unreachable | echo -a after= $+ $cid"),
                 &[]
             )),
             vec![(route("alpha"), echo("after=1"))],
@@ -322,8 +322,8 @@ fn connection_feedback_uses_cids_obeys_quiet_and_keeps_errors_unconditional() {
            .scid -s\n\
            .scid -s 99\n\
            .scon -s 99\n\
-           scid -s 3 echo -a command=$cid\n\
-           echo -a after=$cid\n\
+           scid -s 3 echo -a command= $+ $cid\n\
+           echo -a after= $+ $cid\n\
          }",
     );
     assert_eq!(
@@ -354,11 +354,11 @@ fn connection_commands_evaluate_once_on_target_and_keep_inline_routine_state() {
             var %counter = 1\n\
             set %shared before\n\
             set %evaluations 0\n\
-            scid 3 echo -a network=$network nick=$me probe=$probe\n\
-            scid 3 echo -a params=$1/$2 source=$script private=$tag\n\
+            scid 3 echo -a network= $+ $network nick= $+ $me probe= $+ $probe\n\
+            scid 3 echo -a params= $+ $1 $+ / $+ $2 source= $+ $script private= $+ $tag\n\
             scid 3 inc %counter\n\
             scid 3 set %shared changed\n\
-            echo -a counter=%counter shared=%shared caller=$network params=$1/$2 evaluations=%evaluations\n\
+            echo -a counter= $+ %counter shared= $+ %shared caller= $+ $network params= $+ $1 $+ / $+ $2 evaluations= $+ %evaluations\n\
           }"
             .into(),
         ),
@@ -385,7 +385,7 @@ fn connection_commands_evaluate_once_on_target_and_keep_inline_routine_state() {
         ],
     );
     assert_eq!(
-        flatten(engine.run_command(&context, "#room", "echo -a shared=%shared", &[])),
+        flatten(engine.run_command(&context, "#room", "echo -a shared= $+ %shared", &[])),
         vec![(route("alpha"), echo("shared=changed"))],
     );
 }

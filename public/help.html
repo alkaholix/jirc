@@ -472,7 +472,7 @@ Settings → Appearance → Reset pane layout to restore the defaults.</p>
 <p>Paste this into a script file and save. Then type <code>/hello</code> in any
 channel, and watch what happens when someone joins.</p>
 <pre><code><span class="c">; my first script</span>
-<span class="k">alias</span> hello { <span class="k">/msg</span> <span class="i">$chan</span> Hello from a script, <span class="i">$me</span><span class="i">$+</span>! }
+<span class="k">alias</span> hello { <span class="k">/msg</span> <span class="i">$chan</span> Hello from a script, <span class="i">$me</span> <span class="i">$+</span> ! }
 
 <span class="k">on</span> *:JOIN:#:{ <span class="k">/msg</span> <span class="i">$chan</span> Welcome <span class="i">$nick</span> to <span class="i">$chan</span> }
 </code></pre>
@@ -486,6 +486,10 @@ you'll see the output yourself.</p>
   <li>Blocks are wrapped in <code>{ }</code>.</li>
   <li><code>$identifiers</code> return values; <code>%variables</code> are yours to set.</li>
   <li><code>$+</code> joins two pieces together with no space: <code>$me $+ !</code> &rarr; <code>YourNick!</code></li>
+  <li>As in mIRC, <code>$identifiers</code> and <code>%variables</code> are only evaluated at the
+    <strong>start of a word</strong>: <code>nick=$me</code> stays as written, so write
+    <code>nick= $+ $me</code>. A variable's name runs to the end of its word, so
+    <code>%chan.</code> is a different variable from <code>%chan</code>; write <code>%chan $+ .</code></li>
 </ul>
 <pre><code><span class="c">; two statements on one line</span>
 <span class="k">alias</span> greet { <span class="k">/echo</span> hi | <span class="k">/echo</span> there }
